@@ -12,6 +12,7 @@ train_yolo/
   requirements.txt         # Python 依赖
   tests/
     test_prepare_dataset.py
+    test_download_kaggle.py
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
@@ -58,7 +59,12 @@ python download_kaggle.py antoreepjana/animals-detection-images-dataset --output
 python download_kaggle.py "https://www.kaggle.com/datasets/antoreepjana/animals-detection-images-dataset" --version 1 --output datasets/animals_v1
 python download_kaggle.py OWNER/DATASET --file data.csv --output datasets/single_file
 python download_kaggle.py OWNER/DATASET --login
+python download_kaggle.py OWNER/DATASET --output datasets/my_dataset --retries 5 --retry-delay 10 --max-retry-delay 60
 ```
+
+下载默认在超时、连接中断、HTTP 408/429/5xx 后额外重试 3 次（最多 4 次调用），等待 5、10、20 秒；`--retry-delay` 设置初始等待，`--max-retry-delay` 限制等待上限。`--retries 0` 关闭重试。认证失败、资源不存在、证书错误或本地文件错误直接退出，Ctrl+C 可中止。KaggleHub 内部也可能重试，因此总耗时和底层请求数可能更多。
+
+指定 `--output` 时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载（不保证断点续传）；未指定输出目录时沿用其缓存机制。重试不会重新触发 `--login`。脚本仍会在开始前拒绝非空输出目录，除非显式指定 `--force`。
 
 默认下载整个数据集，`--file` 可限定到数据集内的单个文件或目录。输出目录非空时默认拒绝，显式 `--force` 可强制下载并允许覆盖已有文件。使用专属目录，避免混入其他数据集；切换版本应选择新目录。访问私有或需同意条款的数据时，可用 `--login` 交互认证，并先在 Kaggle 页面接受相应条款。脚本不保存或打印凭据。此脚本面向 Kaggle Datasets，竞赛下载请使用 kagglehub 的 `competition_download`。
 
