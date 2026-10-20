@@ -13,6 +13,7 @@ train_yolo/
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
+  prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
   requirements.txt         # Python 依赖
   tests/
@@ -21,8 +22,10 @@ train_yolo/
     test_kaggle_resume.py
     test_download_lila.py
     test_lila_selection.py
+    test_prepare_lila.py
   docs/lila.md             # LILA 多源下载说明
   docs/lila_annotation_audit.md # 五数据集实际标注审计
+  docs/lila_yolo.md         # LILA 类别转换及防泄漏划分
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```

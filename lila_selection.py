@@ -17,7 +17,7 @@ import zipfile
 
 EMPTY_NAMES = {'empty', 'blank', 'background', 'no animal', 'no animals', 'none'}
 EXCLUDED_NAMES = {'human', 'humans', 'person', 'people', 'homo sapiens', 'ignore',
-                  'vehicle', 'vehicles', 'unlabeled', 'unlabelled'}
+                  'vehicle', 'vehicles', 'car', 'cars', 'blurred', 'problem', 'unlabeled', 'unlabelled'}
 
 
 def normalized_name(value):

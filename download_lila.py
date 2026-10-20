@@ -280,7 +280,9 @@ def build_plan(rows, provider, output, kind='all', prefix='', bbox_url=None):
             if not url:
                 if kind != 'all' or item == 'images':
                     raise ValueError(f'{row["short_name"]}: no {item} URL for {provider}')
-                print(f'[{row["short_name"]}] No {item} URL in catalog; skipping', flush=True)
+                detail = ('no separate bbox file; boxes may be embedded in metadata (checked during selection)'
+                          if item == 'bbox' else f'no separate {item} file')
+                print(f'[{row["short_name"]}] {detail}', flush=True)
                 continue
             source = cloud_url(url, provider)
             if item == 'images':

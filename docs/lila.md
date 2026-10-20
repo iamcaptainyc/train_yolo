@@ -158,7 +158,7 @@ python download_lila.py https://lila.science/datasets/caltech-camera-traps --ima
 | `failed_images.json` | 本次下载失败的图片及原因 |
 | `downloaded_images.sqlite` | 完成图片的 URL/大小检查点 |
 
-输出根目录另外保存 `selection_batch_report.json` 和 `lila_download_report.json`。图片仍保留原有相对路径。**已有目录里的多余图片不会被删除，训练必须使用筛选清单/COCO 子集，不能直接递归读取整个旧目录。** 类别仍保留各数据集原始定义；混合训练前需要统一类别并转换 YOLO。当前 `prepare_dataset.py` 仅适用于 Animals Detection 的原始格式。
+输出根目录另外保存 `selection_batch_report.json` 和 `lila_download_report.json`。图片仍保留原有相对路径。**已有目录里的多余图片不会被删除，训练必须使用筛选清单/COCO 子集，不能直接递归读取整个旧目录。** 类别仍保留各数据集原始定义；混合训练前需要统一类别并转换 YOLO。`prepare_lila.py` 可将这五个数据集合并为 YOLO 并按相机位置/序列划分，详见 [转换说明](lila_yolo.md)。`prepare_dataset.py` 仅适用于 Animals Detection 的原始格式。
 
 ## 重跑、重试与恢复
 
