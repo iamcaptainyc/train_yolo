@@ -1,12 +1,13 @@
 # train_yolo：YOLO11 / YOLO26 动物目标检测
 
-使用 Ultralytics 做**多类别目标检测**：输出动物类别与边界框。提供通用 Kaggle 下载工具，以及 Animals Detection 数据集专用的标注转换和训练流程。仓库不包含数据集、模型权重或训练结果；下载操作需要手动运行脚本。
+使用 Ultralytics 做**多类别目标检测**：输出动物类别与边界框。提供通用 Kaggle、LILA 下载工具，以及 Animals Detection 数据集专用的标注转换和训练流程。仓库不包含数据集、模型权重或训练结果；下载操作需要手动运行脚本。
 
 ## 项目结构
 
 ```text
 train_yolo/
   download_kaggle.py       # 通用 Kaggle Datasets 下载
+  download_lila.py          # LILA AWS / Azure / GCP 下载
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
@@ -16,6 +17,8 @@ train_yolo/
     test_prepare_dataset.py
     test_download_kaggle.py
     test_kaggle_resume.py
+    test_download_lila.py
+  docs/lila.md             # LILA 多源下载说明
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
@@ -28,6 +31,16 @@ cd train_yolo
 ```
 
 安装环境后，依次执行“下载 → 转换并检查预览 → 训练 → 测试集评估”。下载工具可用于其他 Kaggle 数据集；转换器只适用于下文描述的 Animals Detection 原始格式。
+
+LILA 相机陷阱数据集使用独立下载器，默认 AWS、32 并发：
+
+```bash
+python -m pip install awscli
+python download_lila.py --list
+python download_lila.py wcs --provider aws --workers 32
+```
+
+支持搜索数据集、下载图片/元数据/bbox、切换三云源和按子目录下载。图片下载中断后可重跑原命令，按所选云工具规则比较并跳过已有图片。完整用法见 [LILA 下载说明](docs/lila.md)。LILA 标注格式与本仓库的 Animals Detection 转换器不同，下载后不能直接套用 `prepare_dataset.py`。
 
 ## 1. 安装环境
 
