@@ -1,11 +1,12 @@
 import unittest
 import tempfile
 from pathlib import Path
+from threading import Barrier, Event, Lock
 from unittest.mock import Mock, patch
 
 import requests
 
-from download_kaggle import dataset_handle, default_output_dir, download_with_retry, main
+from download_kaggle import build_jobs, dataset_handle, default_output_dir, download_with_retry, main, run_downloads
 
 
 class DestinationTests(unittest.TestCase):
@@ -109,6 +110,91 @@ class RetryTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 download_with_retry(download, 'owner/data', **kwargs)
             download.assert_not_called()
+
+
+class ParallelTests(unittest.TestCase):
+    def test_two_downloads_really_overlap_and_keep_separate_outputs(self):
+        barrier = Barrier(2)
+        lock = Lock()
+        active, peak = 0, 0
+        outputs = []
+
+        def download(handle, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                outputs.append(kwargs['output_dir'])
+            try:
+                barrier.wait(timeout=5)
+                return kwargs['output_dir']
+            finally:
+                with lock:
+                    active -= 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = build_jobs(['alice/data', 'bob/data'], Path(tmp))
+            successes, failures = run_downloads(download, jobs, workers=2)
+            self.assertEqual(peak, 2)
+            self.assertEqual(len(set(outputs)), 2)
+            self.assertEqual({h for h, _ in successes}, {'alice/data', 'bob/data'})
+            self.assertEqual(failures, [])
+
+    def test_failure_isolated_and_retries_per_dataset(self):
+        calls = {}
+        lock = Lock()
+
+        def download(handle, **kwargs):
+            with lock:
+                calls[handle] = calls.get(handle, 0) + 1
+                count = calls[handle]
+            if handle == 'owner/bad':
+                raise ValueError('invalid resource')
+            if handle == 'owner/retry' and count == 1:
+                raise requests.exceptions.ReadTimeout()
+            return '/cache/' + handle
+
+        jobs = [(h, None) for h in ['owner/bad', 'owner/retry', 'owner/good']]
+        successes, failures = run_downloads(download, jobs, workers=2, retry_delay=0)
+        self.assertEqual({h for h, _ in successes}, {'owner/retry', 'owner/good'})
+        self.assertEqual([h for h, _ in failures], ['owner/bad'])
+        self.assertEqual(calls, {'owner/bad': 1, 'owner/retry': 2, 'owner/good': 1})
+
+    def test_overlapping_directories_rejected_before_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, 'overlap'):
+                build_jobs(['owner/data', 'owner/data/versions/2'], Path(tmp))
+        with self.assertRaisesRegex(ValueError, 'share a cache'):
+            build_jobs(['owner/data', 'owner/data/versions/2'], cache=True)
+
+    def test_batch_cli_deduplicates_and_logs_in_once(self):
+        module = Mock()
+        module.dataset_download.side_effect = lambda handle, **kwargs: '/cache/' + handle
+        with patch.dict('sys.modules', {'kagglehub': module}), \
+             patch('sys.argv', ['download_kaggle.py', 'owner/first', 'owner/second',
+                                'https://www.kaggle.com/datasets/owner/first', '--cache', '--login', '--workers', '2']):
+            main()
+        self.assertEqual(module.dataset_download.call_count, 2)
+        module.login.assert_called_once_with()
+
+    def test_stop_event_prevents_next_attempt(self):
+        stop = Event()
+        stop.set()
+        download = Mock()
+        from concurrent.futures import CancelledError
+        with self.assertRaises(CancelledError):
+            download_with_retry(download, 'owner/data', stop_event=stop)
+        download.assert_not_called()
+
+    def test_batch_reports_failure_exit_status(self):
+        module = Mock()
+        module.dataset_download.side_effect = [ValueError('missing'), '/cache/good']
+        with patch.dict('sys.modules', {'kagglehub': module}), \
+             patch('sys.argv', ['download_kaggle.py', 'owner/bad', 'owner/good', '--cache', '--workers', '1']), \
+             self.assertRaises(SystemExit) as raised:
+            main()
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(module.dataset_download.call_count, 2)
 
 
 if __name__ == '__main__':

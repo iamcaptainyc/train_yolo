@@ -54,7 +54,7 @@ python -m pip install --upgrade kagglehub
 python download_kaggle.py antoreepjana/animals-detection-images-dataset --output datasets/raw
 ```
 
-支持任意 `OWNER/DATASET`、完整 Kaggle 数据集网址和 `OWNER/DATASET/versions/N`。省略 `--output` 时自动创建 `datasets/OWNER/DATASET/`；显式指定版本时使用 `datasets/OWNER/DATASET/version-N/`，按发布者区分同名数据集。目录相对于当前工作目录。`--output` 指定的目录直接使用，不额外添加数据集名称。也可用 `--cache` 沿用 kagglehub 默认缓存（不能与 `--output` 同时使用）。示例：
+支持任意 `OWNER/DATASET`、完整 Kaggle 数据集网址和 `OWNER/DATASET/versions/N`，可一次传入多个数据集。省略 `--output` 时自动创建 `datasets/OWNER/DATASET/`；显式指定版本时使用 `datasets/OWNER/DATASET/version-N/`，按发布者区分同名数据集。目录相对于当前工作目录。单数据集的 `--output` 指定最终目录；多数据集的 `--output` 指定公共根目录，各自追加 `OWNER/DATASET[/version-N]`，避免覆盖。也可用 `--cache` 沿用 kagglehub 默认缓存（不能与 `--output` 同时使用）。示例：
 
 ```powershell
 python download_kaggle.py "https://www.kaggle.com/datasets/antoreepjana/animals-detection-images-dataset" --version 1 --output datasets/animals_v1
@@ -65,7 +65,18 @@ python download_kaggle.py OWNER/DATASET --cache
 python download_kaggle.py OWNER/DATASET --output datasets/my_dataset --retries 5 --retry-delay 10 --max-retry-delay 60
 ```
 
-下载默认在超时、连接中断、HTTP 408/429/5xx 后额外重试 3 次（最多 4 次调用），等待 5、10、20 秒；`--retry-delay` 设置初始等待，`--max-retry-delay` 限制等待上限。`--retries 0` 关闭重试。认证失败、资源不存在、证书错误或本地文件错误直接退出，Ctrl+C 可中止。KaggleHub 内部也可能重试，因此总耗时和底层请求数可能更多。
+多数据集并行下载，例如：
+
+```powershell
+python download_kaggle.py antoreepjana/animals-detection-images-dataset uciml/iris --workers 2
+python download_kaggle.py OWNER_A/DATASET_A OWNER_B/DATASET_B --output datasets/batch --workers 2 --retries 5
+```
+
+默认最多同时下载 3 个数据集，`--workers 1` 改为串行。每个数据集独立重试、独立输出目录，日志带数据集标识；同一标识或网址重复输入时只下载一次。登录在开始任务前只执行一次。某个下载失败不会阻止其他数据集，最后汇总成功/失败数，并在有失败时以退出码 1 结束。所有输出目录会在开始前检查；目录相同或互为父子时拒绝执行，避免并行覆盖。批量模式不接受 `--file` / `--version`，版本应逐个写为 `OWNER/DATASET/versions/N`。
+
+这里的并行是“多个数据集同时下载”，不对单个数据集压缩包做多连接分片。它可能改善总吞吐，但不能保证提高单数据集速度；若每个任务只有 20～30 KB/s，可先比较直连与代理线路的效果。提高重试次数主要改善失败后的恢复，不能提高带宽。
+
+下载默认在超时、连接中断、HTTP 408/429/5xx 后额外重试 3 次（最多 4 次调用），等待 5、10、20 秒；`--retry-delay` 设置初始等待，`--max-retry-delay` 限制等待上限。`--retries 0` 关闭重试。认证失败、资源不存在、证书错误或本地文件错误结束对应任务。Ctrl+C 会取消排队任务及后续重试，正在进行的网络请求需等待返回或超时后退出。KaggleHub 内部也可能重试，因此总耗时和底层请求数可能更多。
 
 使用自动命名或 `--output` 目录时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载（不保证断点续传）；使用 `--cache` 时沿用其缓存机制。重试不会重新触发 `--login`。脚本仍会在开始前拒绝非空输出目录，除非显式指定 `--force`。
 
