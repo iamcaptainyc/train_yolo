@@ -36,11 +36,11 @@ LILA 相机陷阱数据集使用独立下载器，默认 AWS、32 并发：
 
 ```bash
 python -m pip install awscli
-python download_lila.py --list
-python download_lila.py wcs --provider aws --workers 32
+python download_lila.py https://lila.science/datasets/ena24detection
+python download_lila.py https://lila.science/datasets/wcscameratraps --provider aws --workers 32
 ```
 
-支持搜索数据集、下载图片/元数据/bbox、切换三云源和按子目录下载。图片下载中断后可重跑原命令，按所选云工具规则比较并跳过已有图片。完整用法见 [LILA 下载说明](docs/lila.md)。LILA 标注格式与本仓库的 Animals Detection 转换器不同，下载后不能直接套用 `prepare_dataset.py`。
+直接传入 LILA 数据集页面网址即可自动识别，无需查询数据集名字；也保留名称和关键词输入。支持下载图片/元数据/bbox、切换三云源和按子目录下载。图片下载中断后可重跑原命令，按所选云工具规则比较并跳过已有图片。完整用法见 [LILA 下载说明](docs/lila.md)。LILA 标注格式与本仓库的 Animals Detection 转换器不同，下载后不能直接套用 `prepare_dataset.py`。
 
 ## 1. 安装环境
 

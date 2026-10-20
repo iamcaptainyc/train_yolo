@@ -1,6 +1,18 @@
 # LILA 相机陷阱数据集下载
 
+**直接把数据集页面网址传给脚本即可，无需查询数据集名称：**
+
+```bash
+python -m pip install awscli
+python download_lila.py https://lila.science/datasets/ena24detection
+python download_lila.py https://lila.science/datasets/wcscameratraps --provider aws --workers 32
+```
+
+默认 AWS、32 并发，自动下载图片和可识别的标注。网址中的页面名不必与目录名称一致，例如 `ena24detection` 会通过实际云存储路径识别为 ENA24。也可以一次传入多个页面网址。
+
 `download_lila.py` 读取 [LILA 官方相机陷阱目录](https://lila.science/wp-content/uploads/2023/06/lila_camera_trap_datasets.csv)，支持其收录的数据集，不将路径写死为 WCS。目前查询到 32 个条目，例如 WCS、NACTI、Caltech、Snapshot Serengeti、Snapshot Safari 等。官方增加条目后用 `--refresh` 更新目录即可。
+
+输入页面网址时，脚本还会读取页面列出的云目录和标注链接，通过实际文件路径匹配目录；没有目录条目时可从页面公开目录直接生成配置。仅提供大压缩包、需要申请访问或无法识别图片目录的页面会明确报错，不会下载其他数据集。官方目录获取失败时，网址输入仍会尝试直接解析页面。
 
 三个云源由同一个脚本调度，使用 [LILA 推荐的原生工具](https://lila.science/image-access)：
 
@@ -106,7 +118,9 @@ python download_lila.py --list --refresh
 
 已知三个 LILA 公共镜像根目录的对象会按相同相对路径转换到所选云源，包括部分表格单元格填入另一云地址的情况。新版对象可能尚未同步到所有镜像，远端返回不存在时可以切换源或指定准确地址。
 
-**官方目录中的部分 bbox 链接是历史版本，刷新目录不意味着标注一定是该数据集页面上的最新版。** 请用 `--info` 核对并与数据集页面比较。`--bbox-url` 可覆盖单个数据集的框标注地址，地址需对应所选云源；这个选项不影响图片目录。
+**官方目录中的部分 bbox 链接是历史版本，刷新目录不意味着标注一定是该数据集页面上的最新版。** 直接输入页面网址时会优先采用页面上可识别的标注链接；同时有 `with_classes` 和 `no_classes` 框标注时优先前者。仅输入名称时仍使用目录中的标注。也可以通过 `--bbox-url` 覆盖单个数据集的框标注地址，这个选项不影响图片目录。
+
+ENA24 的检测框位于其 metadata JSON 中，没有单独的 bbox 下载项；默认 `all` 会下载 metadata，即使提示目录中无单独 bbox 地址也不表示缺少检测框。
 
 例如，[WCS 页面](https://lila.science/datasets/wcscameratraps)提供带物种类别的 2022 年版框标注，而当前目录仍指向 2020 年版。使用 AWS 下载页面列出的带类别版本：
 

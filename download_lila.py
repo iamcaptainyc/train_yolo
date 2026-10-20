@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from html.parser import HTMLParser
 import io
 import json
 import os
@@ -13,7 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import urlopen
 
 CATALOG_URL = 'https://lila.science/wp-content/uploads/2023/06/lila_camera_trap_datasets.csv'
@@ -75,6 +76,152 @@ def select_dataset(rows, query):
         choices = ', '.join(r['short_name'] for r in matches)
         raise ValueError(f'Dataset {query!r}: ' + (f'ambiguous ({choices})' if matches else 'not found; use --list or --search'))
     return matches[0]
+
+
+class DatasetPage(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links, self.text, self.title = [], [], []
+        self.heading = False
+        self.anchor = None
+        self.ignored = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag in ('script', 'style'):
+            self.ignored += 1
+        if tag == 'h1':
+            self.heading = True
+        if tag == 'a' and attrs.get('href'):
+            self.anchor = [attrs['href'], []]
+
+    def handle_endtag(self, tag):
+        if tag in ('script', 'style'):
+            self.ignored = max(0, self.ignored-1)
+        if tag == 'h1':
+            self.heading = False
+        if tag == 'a' and self.anchor is not None:
+            self.links.append((self.anchor[0], ' '.join(self.anchor[1])))
+            self.anchor = None
+
+    def handle_data(self, data):
+        if self.ignored:
+            return
+        self.text.append(data)
+        if self.heading:
+            self.title.append(data)
+        if self.anchor is not None:
+            self.anchor[1].append(data)
+
+
+def is_page_url(query):
+    return '://' in query or query.startswith(('lila.science/', 'www.lila.science/'))
+
+
+def parse_dataset_page(rows, url, html):
+    """Match by actual cloud paths, not by assuming page slugs equal catalog names."""
+    page = DatasetPage()
+    page.feed(html)
+    links = [(urljoin(url, href), label) for href, label in page.links]
+    text_urls = re.findall(r'(?:s3|gs|https?)://[^\s<>\"\x27]+', ' '.join(page.text))
+    links.extend((value.rstrip('),;'), '') for value in text_urls)
+    resources = {}
+    for value, label in links:
+        for provider in TOOLS:
+            try:
+                native = cloud_url(value, provider)
+            except ValueError:
+                continue
+            resources.setdefault(value, {'label': label})[provider] = native
+
+    # An ENA24-detection page contains ena24/images, a stronger match than its title.
+    keys = {info.get('aws', info.get('gcp', info.get('azure'))) for info in resources.values()}
+    matches = []
+    for row in rows:
+        known = set()
+        for column, value in row.items():
+            if '_url_' not in column or not value:
+                continue
+            for provider in TOOLS:
+                try:
+                    known.add(cloud_url(value, provider))
+                    break
+                except ValueError:
+                    pass
+        score = len(keys & known)
+        if score:
+            matches.append((score, row))
+    if matches:
+        best = max(score for score, _ in matches)
+        candidates = [row for score, row in matches if score == best]
+        if len(candidates) != 1:
+            raise ValueError('Page matches multiple catalog datasets; refused to choose an unrelated image folder')
+        result = candidates[0].copy()
+    else:
+        slug = re.sub(r'[^A-Za-z0-9_-]+', '-', unquote(urlparse(url).path.rstrip('/').split('/')[-1])).strip('-')
+        if not slug:
+            raise ValueError('Cannot derive dataset directory name from page URL')
+        result = {'name': ' '.join(page.title).strip() or slug, 'short_name': slug}
+
+    candidates = {}
+    for value, info in resources.items():
+        label = (info['label'] + ' ' + value).casefold()
+        path = urlparse(value).path.rstrip('/')
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix in ('.json', '.zip', '.csv', '.gz'):
+            if any(word in label for word in ('bbox', 'bounding')):
+                kind = 'bbox'
+            elif any(word in label for word in ('metadata', 'annotation', 'label')) or suffix == '.json':
+                kind = 'metadata'
+            else:
+                continue  # Giant image zipfiles are not annotation files.
+        elif not suffix and ('images' in label or value.startswith(('s3://', 'gs://'))):
+            kind = 'images'
+        else:
+            continue  # Individual example images are not dataset roots.
+        # Prefer species-class boxes over coarse animal/person/vehicle boxes, and
+        # official metadata over optional alternate/non-human-only metadata links.
+        score = 10 if 'with_classes' in label else 0
+        if any(word in label for word in ('no_classes', 'unofficial', 'non-human', 'non_human')):
+            score -= 10
+        for provider in TOOLS:
+            if provider in info:
+                key = (kind, provider)
+                if key not in candidates or score > candidates[key][0]:
+                    candidates[key] = (score, info[provider])
+    for (kind, provider), (_, value) in candidates.items():
+        column = 'image_base_url_'+provider if kind == 'images' else f'{kind}_url_{provider}'
+        if kind == 'images' and result.get(column):
+            continue  # Preserve the catalog root, rather than selecting an example subfolder.
+        result[column] = value
+    if not any(result.get('image_base_url_'+p) for p in TOOLS):
+        raise ValueError('Page has no supported public image folder; it may offer only archives or restricted access')
+    result['page_url'] = url
+    return result
+
+
+def resolve_dataset(rows, query, retries=3):
+    if not is_page_url(query):
+        return select_dataset(rows, query)
+    url = query if '://' in query else 'https://' + query
+    parsed = urlparse(url)
+    if (parsed.scheme not in ('http', 'https') or parsed.hostname not in ('lila.science', 'www.lila.science')
+            or not re.fullmatch(r'/datasets/[^/]+/?', parsed.path) or parsed.username or parsed.password):
+        raise ValueError('Expected a LILA dataset page URL: https://lila.science/datasets/...')
+    url = parsed._replace(query='', fragment='').geturl()
+    for attempt in range(retries+1):
+        try:
+            with urlopen(url, timeout=30) as response:
+                html = response.read(4*1024*1024+1)
+            if len(html) > 4*1024*1024:
+                raise ValueError('Dataset page is unexpectedly large')
+            row = parse_dataset_page(rows, url, html.decode('utf-8-sig'))
+            print(f'Page identified: {url} -> {row["name"]} ({row["short_name"]})', flush=True)
+            return row
+        except OSError:
+            if attempt == retries:
+                raise
+            time.sleep(min(2**attempt, 10))
 
 
 def cloud_url(value, provider):
@@ -217,7 +364,7 @@ def run_plan(plan, provider, workers=32, retries=3, dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('datasets', nargs='*', help='Dataset short_name, full name (quoted), or unique keyword, e.g. wcs')
+    parser.add_argument('datasets', nargs='*', help='LILA dataset page URLs, or catalog names/keywords')
     parser.add_argument('--provider', choices=TOOLS, default='aws')
     parser.add_argument('--output', type=Path, default=Path('datasets/lila'), help='Root directory; dataset subdirectories are added')
     parser.add_argument('--kind', choices=['images', 'metadata', 'bbox', 'all'], default='all')
@@ -236,7 +383,13 @@ def main():
         if args.workers < 1 or args.retries < 0:
             raise ValueError('--workers must be >= 1 and --retries must be >= 0')
         output = args.output.expanduser().resolve()
-        rows = load_catalog(args.catalog, output / '.catalog.csv', args.refresh, args.retries)
+        try:
+            rows = load_catalog(args.catalog, output / '.catalog.csv', args.refresh, args.retries)
+        except OSError:
+            if args.catalog is not None or args.list or args.search or not args.datasets or not all(is_page_url(q) for q in args.datasets):
+                raise
+            print('Catalog unavailable; resolving download sources directly from dataset pages.', flush=True)
+            rows = []
         if args.list or args.search:
             query = (args.search or '').casefold()
             for row in rows:
@@ -246,7 +399,7 @@ def main():
             return
         if not args.datasets:
             parser.error('Specify datasets or use --list / --search')
-        selected = {row['short_name']: row for row in (select_dataset(rows, query) for query in args.datasets)}
+        selected = {row['short_name']: row for row in (resolve_dataset(rows, query, args.retries) for query in args.datasets)}
         if args.info:
             print(json.dumps(list(selected.values()), indent=2, ensure_ascii=False))
             return

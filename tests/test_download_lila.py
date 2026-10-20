@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from download_lila import (build_plan, cloud_url, command_for, load_catalog, read_catalog,
-                           relative_prefix, run_plan, select_dataset)
+                           parse_dataset_page, relative_prefix, resolve_dataset, run_plan, select_dataset)
 
 
 def entry(slug='wcs-camera-traps', name='WCS Camera Traps'):
@@ -49,6 +49,55 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(load_catalog(None, cached)[0]['short_name'], 'wcs')
                 self.assertEqual(load_catalog(cached, Path(tmp)/'missing', refresh=True)[0]['name'], 'WCS')
             network.assert_not_called()
+
+
+class PageUrlTests(unittest.TestCase):
+    def test_ena24_page_slug_need_not_match_catalog_name(self):
+        row = entry('ena24', 'ENA24')
+        for key in row:
+            if '_url_' in key:
+                row[key] = row[key].replace('wcs-unzipped', 'ena24/images').replace('/wcs/', '/ena24/')
+        row['bbox_url_aws'] = row['bbox_url_gcp'] = row['bbox_url_azure'] = ''
+        html = '''<h1>ENA24-detection</h1>
+            <p>s3://us-west-2.opendata.source.coop/agentmorris/lila-wildlife/ena24/images (AWS)</p>
+            <a href="https://storage.googleapis.com/public-datasets-lila/ena24/ena24.json">Metadata</a>
+            <a href="https://storage.googleapis.com/public-datasets-lila/ena24/non_human.json">Metadata (non-human only)</a>'''
+        result = parse_dataset_page([row], 'https://lila.science/datasets/ena24detection', html)
+        self.assertEqual(result['short_name'], 'ena24')
+        self.assertTrue(result['metadata_url_aws'].endswith('/ena24/ena24.json'))
+        self.assertEqual(result['bbox_url_aws'], '')
+
+    def test_page_updates_old_catalog_bboxes_and_prefers_species_classes(self):
+        html = '''<h1>WCS Camera Traps</h1>
+            <p>gs://public-datasets-lila/wcs-unzipped (GCP)</p>
+            <a href="https://storage.googleapis.com/public-datasets-lila/wcs/new_no_classes.zip">Bounding box annotations</a>
+            <a href="https://storage.googleapis.com/public-datasets-lila/wcs/new_with_classes.zip">Bounding box annotations</a>
+            <a href="https://storage.googleapis.com/public-datasets-lila/wcs-unzipped/animals/0011/0009.jpg">Example image</a>'''
+        result = parse_dataset_page([entry()], 'https://lila.science/datasets/wcscameratraps', html)
+        self.assertTrue(result['bbox_url_aws'].endswith('/wcs/new_with_classes.zip'))
+        self.assertTrue(result['image_base_url_aws'].endswith('/wcs-unzipped'))
+
+    def test_unlisted_dataset_resolved_from_actual_page_sources(self):
+        html = '''<h1>New Camera Dataset</h1><p>gs://public-datasets-lila/new-camera/images</p>
+            <a href="https://storage.googleapis.com/public-datasets-lila/new-camera/metadata.json.zip">Metadata</a>'''
+        result = parse_dataset_page([], 'https://lila.science/datasets/new-camera', html)
+        self.assertEqual(result['short_name'], 'new-camera')
+        self.assertEqual(result['image_base_url_aws'],
+                         's3://us-west-2.opendata.source.coop/agentmorris/lila-wildlife/new-camera/images')
+
+    def test_resolves_url_ignoring_page_query_and_fragment(self):
+        response = io.BytesIO(b'<h1>WCS</h1><p>gs://public-datasets-lila/wcs-unzipped</p>')
+        with patch('download_lila.urlopen', return_value=response) as fetch:
+            result = resolve_dataset([entry()], 'https://lila.science/datasets/wcscameratraps/?x=1#download')
+        self.assertEqual(result['short_name'], 'wcs-camera-traps')
+        self.assertEqual(fetch.call_args.args[0], 'https://lila.science/datasets/wcscameratraps/')
+
+    def test_unrelated_page_and_non_lila_urls_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'no supported public image folder'):
+            parse_dataset_page([], 'https://lila.science/datasets/unknown', '<h1>Not found</h1>')
+        with patch('download_lila.urlopen') as fetch, self.assertRaises(ValueError):
+            resolve_dataset([], 'https://example.com/datasets/ena24detection')
+        fetch.assert_not_called()
 
 
 class PlanTests(unittest.TestCase):
