@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from threading import Event
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import urlopen
 
@@ -174,7 +176,10 @@ def parse_dataset_page(rows, url, html):
         if suffix in ('.json', '.zip', '.csv', '.gz'):
             if any(word in label for word in ('bbox', 'bounding')):
                 kind = 'bbox'
-            elif any(word in label for word in ('metadata', 'annotation', 'label')) or suffix == '.json':
+            elif (any(word in label for word in ('metadata', 'annotation', 'label'))
+                  or suffix == '.json' or path.casefold().endswith('.json.zip')):
+                if re.search(r'(?:^|[/_.-])(?:splits?|taxonomy|mapping|results?)(?:[_.-]|$)', path.casefold()):
+                    continue  # Split definitions and detector outputs are not annotation metadata.
                 kind = 'metadata'
             else:
                 continue  # Giant image zipfiles are not annotation files.
@@ -312,11 +317,21 @@ def command_for(item, provider, workers):
             *(['rsync', '-r', source, target] if folder else ['cp', source, target])]
 
 
-def execute(command, env):
+def execute(command, env, stop_event=None):
+    if stop_event is not None and stop_event.is_set():
+        raise CancelledError('Download cancelled')
     process = subprocess.Popen(command, env=env)  # Argument list, never a shell command.
     try:
-        return process.wait()
-    except KeyboardInterrupt:
+        if stop_event is None:
+            return process.wait()
+        while True:
+            if stop_event.is_set():
+                raise CancelledError('Download cancelled')
+            try:
+                return process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                pass
+    except (KeyboardInterrupt, CancelledError):
         process.terminate()
         try:
             process.wait(timeout=5)
@@ -345,7 +360,7 @@ def save_checkpoint(path, state):
 
 
 def run_plan(plan, provider, workers=32, retries=3, dry_run=False, *, state_dir=None,
-             resume=True, retry_delay=5.0, max_retry_delay=60.0):
+             resume=True, retry_delay=5.0, max_retry_delay=60.0, stop_event=None):
     if workers < 1 or retries < 0 or not all(math.isfinite(v) and v >= 0 for v in (retry_delay, max_retry_delay)):
         raise ValueError('Invalid worker count, retry count or retry delay')
     if not dry_run and shutil.which(TOOLS[provider]) is None:
@@ -366,6 +381,8 @@ def run_plan(plan, provider, workers=32, retries=3, dry_run=False, *, state_dir=
         if provider == 'azure':
             env['AZCOPY_CONCURRENCY_VALUE'] = str(workers)
         for index, item in enumerate(plan, 1):
+            if stop_event is not None and stop_event.is_set():
+                raise CancelledError('Download cancelled')
             command = command_for(item, provider, workers)
             label = f'[{index}/{len(plan)}][{item["dataset"]}/{item["kind"]}]'
             print(f'{label} {shlex.join(command)}', flush=True)
@@ -411,16 +428,19 @@ def run_plan(plan, provider, workers=32, retries=3, dry_run=False, *, state_dir=
                 for attempt in range(retries + 1):
                     record('running', attempt=attempt+1)
                     print(f'{label} Attempt {attempt+1}/{retries+1}', flush=True)
-                    code = execute(command, env)
+                    code = execute(command, env) if stop_event is None else execute(command, env, stop_event=stop_event)
                     record('ok' if code == 0 else 'failed', exit_code=code)
                     if code == 0:
                         break
                     if attempt < retries:
                         print(f'{label} Exit {code}; retrying in {delay:g}s '
                               '(completed images will be reused).', flush=True)
-                        time.sleep(delay)
+                        if stop_event is None:
+                            time.sleep(delay)
+                        elif stop_event.wait(delay):
+                            raise CancelledError('Download cancelled')
                         delay = min(delay*2, max_retry_delay)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, CancelledError):
                 record('interrupted')
                 raise
             except OSError as exc:
@@ -437,9 +457,87 @@ def run_plan(plan, provider, workers=32, retries=3, dry_run=False, *, state_dir=
     return results
 
 
+def dataset_inputs(arguments, urls_file=None):
+    inputs = list(arguments)
+    if urls_file is not None:
+        text = urls_file.read_text(encoding='utf-8-sig')
+        if urls_file.suffix.casefold() == '.json':
+            values = json.loads(text)
+            if not isinstance(values, list) or not all(isinstance(v, str) and v.strip() for v in values):
+                raise ValueError('--urls-file JSON must be a list of non-empty URL strings')
+        else:
+            values = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        inputs.extend(values)
+    return list(dict.fromkeys(value.strip() for value in inputs if value.strip()))
+
+
+def run_datasets(plan, provider, *, mode='serial', dataset_workers=2, **options):
+    """Schedule one native-tool sequence per dataset, with independent checkpoints."""
+    if mode not in ('serial', 'parallel') or dataset_workers < 1:
+        raise ValueError('Invalid mode or dataset worker count')
+    groups = {}
+    for item in plan:
+        groups.setdefault(item['dataset'], []).append(item)
+    stop = Event()
+    results, completed = [], 0
+
+    def run_group(name, items):
+        print(f'[Dataset {name}] Starting ({mode})', flush=True)
+        try:
+            return run_plan(items, provider, stop_event=stop, **options)
+        except CancelledError:
+            raise
+        except (OSError, ValueError) as exc:
+            print(f'[Dataset {name}] Failed: {exc}', flush=True)
+            return [{**item, 'status': 'failed', 'error': str(exc), 'exit_code': -1} for item in items]
+
+    def collect(name, items):
+        nonlocal completed
+        results.extend(items)
+        completed += 1
+        failed = any(r['status'] == 'failed' for r in items)
+        print(f'[Dataset {name}] {"Failed" if failed else "Completed"}. '
+              f'Dataset progress: {completed}/{len(groups)} ({completed/len(groups):.0%})', flush=True)
+
+    concurrency = min(dataset_workers, len(groups)) if mode == 'parallel' else min(1, len(groups))
+    print(f'Datasets: {len(groups)}; mode: {mode}; simultaneous datasets: {concurrency}; '
+          f'transfer workers per dataset: {options.get("workers", 32)}', flush=True)
+    if mode == 'serial':
+        try:
+            for name, items in groups.items():
+                collect(name, run_group(name, items))
+        except KeyboardInterrupt:
+            stop.set()
+            raise
+        return results
+    executor = ThreadPoolExecutor(max_workers=max(1, concurrency))
+    futures = {}
+    try:
+        for name, items in groups.items():
+            futures[executor.submit(run_group, name, items)] = name
+        for future in as_completed(futures):
+            collect(futures[future], future.result())
+    except KeyboardInterrupt:
+        stop.set()
+        for future in futures:
+            future.cancel()
+        print('Stopping active transfers and cancelling queued datasets; progress is preserved.', flush=True)
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+    # Keep reports stable even when datasets finish out of order.
+    fields = ('dataset', 'kind', 'source', 'target')
+    order = {tuple(item[k] for k in fields): i for i, item in enumerate(plan)}
+    results.sort(key=lambda r: order[tuple(r[k] for k in fields)])
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('datasets', nargs='*', help='LILA dataset page URLs, or catalog names/keywords')
+    parser.add_argument('--urls-file', type=Path, help='UTF-8 text file (one URL per line) or JSON array of URLs')
+    parser.add_argument('--mode', choices=['serial', 'parallel'], default='serial', help='Dataset scheduling mode (default: serial)')
+    parser.add_argument('--dataset-workers', type=int, default=2, help='Simultaneous datasets in parallel mode (default: 2)')
     parser.add_argument('--provider', choices=TOOLS, default='aws')
     parser.add_argument('--output', type=Path, default=Path('datasets/lila'), help='Root directory; dataset subdirectories are added')
     parser.add_argument('--kind', choices=['images', 'metadata', 'bbox', 'all'], default='all')
@@ -459,15 +557,16 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Print commands without running cloud tools')
     args = parser.parse_args()
     try:
-        if args.workers < 1 or args.retries < 0:
-            raise ValueError('--workers must be >= 1 and --retries must be >= 0')
+        if args.workers < 1 or args.dataset_workers < 1 or args.retries < 0:
+            raise ValueError('--workers and --dataset-workers must be >= 1; --retries must be >= 0')
         if not all(math.isfinite(v) and v >= 0 for v in (args.retry_delay, args.max_retry_delay)):
             raise ValueError('Retry delays must be finite and >= 0')
         output = args.output.expanduser().resolve()
+        inputs = dataset_inputs(args.datasets, args.urls_file)
         try:
             rows = load_catalog(args.catalog, output / '.catalog.csv', args.refresh, args.retries)
         except OSError:
-            if args.catalog is not None or args.list or args.search or not args.datasets or not all(is_page_url(q) for q in args.datasets):
+            if args.catalog is not None or args.list or args.search or not inputs or not all(is_page_url(q) for q in inputs):
                 raise
             print('Catalog unavailable; resolving download sources directly from dataset pages.', flush=True)
             rows = []
@@ -478,9 +577,9 @@ def main():
                     providers = ','.join(p for p in TOOLS if row.get('image_base_url_'+p))
                     print(f'{row["short_name"]:42s} {row["name"]} [{providers}]')
             return
-        if not args.datasets:
-            parser.error('Specify datasets or use --list / --search')
-        selected = {row['short_name']: row for row in (resolve_dataset(rows, query, args.retries) for query in args.datasets)}
+        if not inputs:
+            parser.error('Specify dataset URLs, --urls-file, or use --list / --search')
+        selected = {row['short_name']: row for row in (resolve_dataset(rows, query, args.retries) for query in inputs)}
         if args.info:
             print(json.dumps(list(selected.values()), indent=2, ensure_ascii=False))
             return
@@ -488,9 +587,10 @@ def main():
             raise ValueError('--bbox-url requires one dataset and --kind bbox or all')
         plan = build_plan(list(selected.values()), args.provider, output, args.kind,
                           relative_prefix(args.prefix), args.bbox_url)
-        results = run_plan(plan, args.provider, args.workers, args.retries, args.dry_run,
-                           state_dir=output/'.transfer-state', resume=args.resume and not args.refresh,
-                           retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay)
+        results = run_datasets(plan, args.provider, mode=args.mode, dataset_workers=args.dataset_workers,
+                               workers=args.workers, retries=args.retries, dry_run=args.dry_run,
+                               state_dir=output/'.transfer-state', resume=args.resume and not args.refresh,
+                               retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay)
         failures = [r for r in results if r['status'] == 'failed']
         if not args.dry_run:
             output.mkdir(parents=True, exist_ok=True)

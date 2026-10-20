@@ -4,11 +4,15 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import subprocess
+from concurrent.futures import CancelledError
+from threading import Barrier, Event, Lock
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from download_lila import (build_plan, cloud_url, command_for, load_catalog, read_catalog,
-                           parse_dataset_page, relative_prefix, resolve_dataset, run_plan, select_dataset)
+                           dataset_inputs, execute, parse_dataset_page, relative_prefix,
+                           resolve_dataset, run_datasets, run_plan, select_dataset)
 
 
 def entry(slug='wcs-camera-traps', name='WCS Camera Traps'):
@@ -77,6 +81,13 @@ class PageUrlTests(unittest.TestCase):
         result = parse_dataset_page([entry()], 'https://lila.science/datasets/wcscameratraps', html)
         self.assertTrue(result['bbox_url_aws'].endswith('/wcs/new_with_classes.zip'))
         self.assertTrue(result['image_base_url_aws'].endswith('/wcs-unzipped'))
+
+    def test_split_json_does_not_replace_annotation_metadata(self):
+        html = '''<h1>WCS</h1><p>gs://public-datasets-lila/wcs-unzipped</p>
+            <a href="https://storage.googleapis.com/public-datasets-lila/wcs/wcs_camera_traps.json.zip">wcs_camera_traps.json.zip</a>
+            <a href="https://storage.googleapis.com/public-datasets-lila/wcs/wcs_splits.json">wcs_splits.json</a>'''
+        result = parse_dataset_page([entry()], 'https://lila.science/datasets/wcscameratraps', html)
+        self.assertTrue(result['metadata_url_aws'].endswith('/wcs/wcs_camera_traps.json.zip'))
 
     def test_unlisted_dataset_resolved_from_actual_page_sources(self):
         html = '''<h1>New Camera Dataset</h1><p>gs://public-datasets-lila/new-camera/images</p>
@@ -157,6 +168,82 @@ class PlanTests(unittest.TestCase):
         for command in (aws, azure, gcp):
             self.assertNotIn('--delete', command)
             self.assertNotIn('-d', command)
+
+
+class BatchTests(unittest.TestCase):
+    def test_text_and_json_url_lists_merge_and_deduplicate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = Path(tmp)/'urls.txt'
+            text.write_text('\ufeff# notes\n\n https://lila.science/datasets/ena24detection \n'
+                            'https://lila.science/datasets/wcscameratraps#download\n', encoding='utf-8')
+            first = 'https://lila.science/datasets/ena24detection'
+            self.assertEqual(dataset_inputs([first], text),
+                             [first, 'https://lila.science/datasets/wcscameratraps#download'])
+            data = Path(tmp)/'urls.json'
+            data.write_text(json.dumps([first, 'wcs', first]))
+            self.assertEqual(dataset_inputs([], data), [first, 'wcs'])
+            data.write_text(json.dumps({'urls': [first]}))
+            with self.assertRaises(ValueError):
+                dataset_inputs([], data)
+
+    def test_serial_mode_keeps_dataset_order_and_isolates_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = build_plan([entry('first'), entry('second')], 'aws', Path(tmp), kind='images')
+            calls = []
+
+            def run(items, provider, **kwargs):
+                name = items[0]['dataset']
+                calls.append(name)
+                if name == 'first':
+                    raise OSError('failed transfer')
+                return [{**item, 'status': 'ok'} for item in items]
+
+            with patch('download_lila.run_plan', side_effect=run):
+                results = run_datasets(plan, 'aws', mode='serial')
+            self.assertEqual(calls, ['first', 'second'])
+            self.assertEqual([r['status'] for r in results], ['failed', 'ok'])
+
+    def test_parallel_datasets_overlap_but_do_not_exceed_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = build_plan([entry(name) for name in ['first', 'second', 'third']],
+                              'aws', Path(tmp), kind='images')
+            barrier, lock = Barrier(2), Lock()
+            active, peak, started = 0, 0, 0
+
+            def run(items, provider, **kwargs):
+                nonlocal active, peak, started
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                    started += 1
+                    ordinal = started
+                try:
+                    if ordinal <= 2:
+                        barrier.wait(timeout=5)
+                    return [{**item, 'status': 'ok'} for item in items]
+                finally:
+                    with lock:
+                        active -= 1
+
+            with patch('download_lila.run_plan', side_effect=run):
+                results = run_datasets(plan, 'aws', mode='parallel', dataset_workers=2, workers=17)
+            self.assertEqual(peak, 2)
+            self.assertEqual([r['dataset'] for r in results], ['first', 'second', 'third'])
+
+    def test_cancel_stops_active_native_process(self):
+        stop = Event()
+        process = Mock()
+
+        def wait(timeout=None):
+            if timeout == 0.5:
+                stop.set()
+                raise subprocess.TimeoutExpired('aws', timeout)
+            return 0
+
+        process.wait.side_effect = wait
+        with patch('download_lila.subprocess.Popen', return_value=process), self.assertRaises(CancelledError):
+            execute(['aws', 's3', 'sync'], {}, stop_event=stop)
+        process.terminate.assert_called_once_with()
 
 
 class ExecutionTests(unittest.TestCase):

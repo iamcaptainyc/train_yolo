@@ -77,11 +77,42 @@ python download_lila.py wcs --provider gcp --workers 32
 
 `--workers` 是**单个数据集内的文件传输并发**，不是同时下载的数据集数。可以从 16 或 32 开始，根据总吞吐、超时情况和磁盘性能调整；并发提高不保证提速。
 
-可以一次提供多个数据集，按输入顺序逐个执行；每个数据集内部并发下载：
+## 网址列表、串行和并行
+
+直接提供多个网址，默认按输入顺序串行执行：
+
+```bash
+python download_lila.py \
+  https://lila.science/datasets/ena24detection \
+  https://lila.science/datasets/wcscameratraps \
+  --mode serial
+```
+
+也可创建 `urls.txt`，每行一个网址，支持空行和以 `#` 开头的整行注释（示例文件见 `examples/lila_urls.txt`）：
+
+```text
+# Camera trap datasets
+https://lila.science/datasets/ena24detection
+https://lila.science/datasets/wcscameratraps
+```
+
+```bash
+# 列表串行下载
+python download_lila.py --urls-file urls.txt --mode serial
+
+# 同时下载 2 个数据集，每个数据集最多 16 个文件传输并发
+python download_lila.py --urls-file urls.txt --mode parallel --dataset-workers 2 --workers 16
+```
+
+`--urls-file` 也接受 `.json` 文件，内容为网址字符串数组。命令行网址和列表文件可同时使用，合并后去重；不同网址若识别为同一数据集，也只调度一次。仍兼容名称和关键词输入：
 
 ```bash
 python download_lila.py wcs nacti caltech-camera-traps --provider aws --workers 32
 ```
+
+`--mode serial`（默认）每次执行一个数据集；`--mode parallel` 通过 `--dataset-workers`（默认 2）限制同时运行的数据集数。每个数据集内部的图片、metadata、bbox 任务仍依次执行，避免重复操作同一数据集。总传输并发可能接近 `dataset-workers × workers`，应结合网络与磁盘性能控制。
+
+各数据集独立记录恢复状态、独立重试；一个数据集的传输失败不阻止其他数据集。显示单个数据集内的任务进度和总体已处理数据集数。并行运行时，云工具的原生传输输出可能交错，可通过带数据集名称的任务行和最终报告确认状态。Ctrl+C 会取消排队任务、终止正在运行的云工具并保存恢复状态；重跑相同命令继续。网址解析与目录检查会在实际下载前完成，无法解析的网址会在这一阶段报错。
 
 失败命令默认额外重试 3 次（等待 5、10、20 秒），`--retries 0` 关闭脚本层重试。可用 `--retry-delay` / `--max-retry-delay` 控制初始等待和上限。单个命令最终失败后继续其他条目，最终汇总报告；有任何失败时脚本退出码为 1。云工具也可能自行重试。
 

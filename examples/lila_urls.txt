@@ -1,0 +1,3 @@
+# One LILA dataset page URL per line. Blank lines and full-line comments are ignored.
+https://lila.science/datasets/ena24detection
+https://lila.science/datasets/wcscameratraps
