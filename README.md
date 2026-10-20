@@ -7,6 +7,7 @@
 ```text
 train_yolo/
   download_kaggle.py       # 通用 Kaggle Datasets 下载
+  download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
   train.py                 # 训练 / 恢复 / 评估 / 预测
   requirements.txt         # Python 依赖
@@ -112,6 +113,22 @@ datasets/animals_yolo/
 **开始训练前打开 `preview/` 检查框与类别，查看 `report.json` 的类别分布。** 小样本类别可能缺席验证集/测试集，见 `missing_classes`；多类别图的划分只是近似分层。
 
 ## 3. 训练 YOLO11 和 YOLO26
+
+可先独立下载官方预训练检测权重（不会启动训练），默认下载 `yolo11s.pt` 和 `yolo26s.pt` 到 `weights/`：
+
+```powershell
+python download_weights.py
+python download_weights.py --models yolo11n.pt yolo26n.pt --output weights --retries 5
+```
+
+`--models` 支持 YOLO11、YOLO26 各自的 `n/s/m/l/x` 型号，可同时指定多个。使用 Ultralytics 自带下载器从官方 assets 仓库下载；已有权重跳过，文件大小检查不等于完整性或可加载性验证。下载较慢时可在 PowerShell 配置实际代理地址，例如 `$env:HTTPS_PROXY = "http://127.0.0.1:7890"`，端口应替换为实际值。
+
+训练时指定本地文件路径：
+
+```powershell
+python train.py --model weights/yolo11s.pt --epochs 100 --batch 8 --device 0 --name yolo11s
+python train.py --model weights/yolo26s.pt --epochs 100 --batch 8 --device 0 --name yolo26s
+```
 
 先做 1 个 epoch 的流程验证：
 
