@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -159,6 +160,78 @@ class PlanTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_completed_annotations_verified_and_reused_across_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = build_plan([entry()], 'aws', root, kind='metadata')
+            state_dir = root/'.transfer-state'
+
+            def transfer(command, env):
+                Path(command[4]).write_bytes(b'complete annotation')
+                return 0
+
+            with patch('download_lila.shutil.which', return_value='/bin/aws'), \
+                 patch('download_lila.execute', side_effect=transfer) as execute:
+                first = run_plan(plan, 'aws', state_dir=state_dir)
+                second = run_plan(plan, 'aws', state_dir=state_dir)
+                self.assertEqual(execute.call_count, 1)
+                self.assertEqual(first[0]['status'], 'ok')
+                self.assertEqual(second[0]['status'], 'skipped')
+                # Existence alone is insufficient: detect a same-sized corrupt annotation.
+                target = Path(plan[0]['target'])
+                target.write_bytes(b'x'*target.stat().st_size)
+                third = run_plan(plan, 'aws', state_dir=state_dir)
+                self.assertEqual(execute.call_count, 2)
+                self.assertEqual(third[0]['status'], 'ok')
+
+    def test_interrupted_job_persists_and_image_jobs_always_resync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = build_plan([entry()], 'aws', root, kind='images')
+            state_dir = root/'.transfer-state'
+            with patch('download_lila.shutil.which', return_value='/bin/aws'), \
+                 patch('download_lila.execute', side_effect=KeyboardInterrupt), \
+                 self.assertRaises(KeyboardInterrupt):
+                run_plan(plan, 'aws', state_dir=state_dir)
+            checkpoint = next(state_dir.glob('*.json'))
+            self.assertEqual(json.loads(checkpoint.read_text())['status'], 'interrupted')
+            with patch('download_lila.shutil.which', return_value='/bin/aws'), \
+                 patch('download_lila.execute', return_value=0) as execute:
+                run_plan(plan, 'aws', state_dir=state_dir)
+                run_plan(plan, 'aws', state_dir=state_dir)
+                self.assertEqual(execute.call_count, 2)
+            self.assertEqual(json.loads(checkpoint.read_text())['status'], 'ok')
+
+    def test_retry_delays_are_capped_and_state_reports_final_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = build_plan([entry()], 'aws', root, kind='images')
+            state_dir = root/'.transfer-state'
+            with patch('download_lila.shutil.which', return_value='/bin/aws'), \
+                 patch('download_lila.execute', return_value=1), patch('download_lila.time.sleep') as sleep:
+                result = run_plan(plan, 'aws', retries=3, state_dir=state_dir,
+                                  retry_delay=2, max_retry_delay=3)
+            self.assertEqual([c.args[0] for c in sleep.call_args_list], [2, 3, 3])
+            self.assertEqual(result[0]['status'], 'failed')
+            saved = json.loads(next(state_dir.glob('*.json')).read_text())
+            self.assertEqual(saved['status'], 'failed')
+            self.assertEqual(saved['attempt'], 4)
+
+    def test_recovery_mode_can_recheck_completed_annotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = build_plan([entry()], 'aws', root, kind='metadata')
+
+            def transfer(command, env):
+                Path(command[4]).write_bytes(b'annotation')
+                return 0
+
+            with patch('download_lila.shutil.which', return_value='/bin/aws'), \
+                 patch('download_lila.execute', side_effect=transfer) as execute:
+                run_plan(plan, 'aws', state_dir=root/'state')
+                run_plan(plan, 'aws', state_dir=root/'state', resume=False)
+                self.assertEqual(execute.call_count, 2)
+
     def test_dry_run_needs_no_cloud_tool_and_creates_no_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)/'not-created'

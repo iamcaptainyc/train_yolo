@@ -40,7 +40,7 @@ python download_lila.py https://lila.science/datasets/ena24detection
 python download_lila.py https://lila.science/datasets/wcscameratraps --provider aws --workers 32
 ```
 
-直接传入 LILA 数据集页面网址即可自动识别，无需查询数据集名字；也保留名称和关键词输入。支持下载图片/元数据/bbox、切换三云源和按子目录下载。图片下载中断后可重跑原命令，按所选云工具规则比较并跳过已有图片。完整用法见 [LILA 下载说明](docs/lila.md)。LILA 标注格式与本仓库的 Animals Detection 转换器不同，下载后不能直接套用 `prepare_dataset.py`。
+直接传入 LILA 数据集页面网址即可自动识别，无需查询数据集名字；也保留名称和关键词输入。支持下载图片/元数据/bbox、切换三云源和按子目录下载。默认显示原生传输进度及任务进度，并持久保存恢复状态；中断后重跑原命令即可增量补下载图片，已完成且校验通过的标注自动跳过。`--retries 10` 可增加失败重试次数。完整用法见 [LILA 下载说明](docs/lila.md)。LILA 标注格式与本仓库的 Animals Detection 转换器不同，下载后不能直接套用 `prepare_dataset.py`。
 
 ## 1. 安装环境
 

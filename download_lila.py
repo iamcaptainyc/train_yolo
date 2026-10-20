@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
+import hashlib
 from html.parser import HTMLParser
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -323,7 +326,28 @@ def execute(command, env):
         raise
 
 
-def run_plan(plan, provider, workers=32, retries=3, dry_run=False):
+def file_signature(path):
+    """Validate a completed annotation file before reusing a local checkpoint."""
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return {'size': path.stat().st_size, 'sha256': digest.hexdigest()}
+
+
+def save_checkpoint(path, state):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding='utf-8')
+    temporary.replace(path)
+
+
+def run_plan(plan, provider, workers=32, retries=3, dry_run=False, *, state_dir=None,
+             resume=True, retry_delay=5.0, max_retry_delay=60.0):
+    if workers < 1 or retries < 0 or not all(math.isfinite(v) and v >= 0 for v in (retry_delay, max_retry_delay)):
+        raise ValueError('Invalid worker count, retry count or retry delay')
     if not dry_run and shutil.which(TOOLS[provider]) is None:
         install = {'aws': 'python -m pip install awscli', 'azure': 'install AzCopy v10', 'gcp': 'install Google Cloud SDK (gsutil)'}
         raise ValueError(f'{TOOLS[provider]} is not on PATH; {install[provider]}')
@@ -341,24 +365,75 @@ def run_plan(plan, provider, workers=32, retries=3, dry_run=False):
             env.pop('AWS_DEFAULT_PROFILE', None)
         if provider == 'azure':
             env['AZCOPY_CONCURRENCY_VALUE'] = str(workers)
-        for item in plan:
+        for index, item in enumerate(plan, 1):
             command = command_for(item, provider, workers)
-            print(f'[{item["dataset"]}/{item["kind"]}] {shlex.join(command)}', flush=True)
+            label = f'[{index}/{len(plan)}][{item["dataset"]}/{item["kind"]}]'
+            print(f'{label} {shlex.join(command)}', flush=True)
             if dry_run:
                 results.append({**item, 'status': 'planned'})
                 continue
             target = Path(item['target'])
             (target if item['kind'] == 'images' else target.parent).mkdir(parents=True, exist_ok=True)
+            identity = {**item, 'provider': provider}
+            key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+            checkpoint = Path(state_dir)/f'{key}.json' if state_dir is not None else None
+            previous = {}
+            if checkpoint is not None and checkpoint.is_file():
+                try:
+                    previous = json.loads(checkpoint.read_text(encoding='utf-8'))
+                    if not isinstance(previous, dict) or any(previous.get(k) != v for k, v in identity.items()):
+                        previous = {}
+                except (ValueError, OSError):
+                    print(f'{label} Cannot read previous checkpoint; cloud tool will compare local files.', flush=True)
+            if (resume and previous.get('status') == 'ok' and item['kind'] != 'images'
+                    and previous.get('file_signature') is not None
+                    and file_signature(target) == previous['file_signature']):
+                print(f'{label} Verified completed annotation; skipping download.', flush=True)
+                results.append({**item, 'status': 'skipped', 'exit_code': 0})
+                print(f'Task progress: {index}/{len(plan)} processed ({index/len(plan):.0%})', flush=True)
+                continue
+            if item['kind'] == 'images':
+                print(f'{label} Recovering by comparing local images with the source; '
+                      'completed matching files are kept. Native byte/file/speed progress follows.', flush=True)
+            elif previous.get('status') in ('running', 'failed', 'interrupted'):
+                print(f'{label} Recovering an unfinished annotation transfer.', flush=True)
+            state = {**identity, 'status': 'running', 'attempt': 0}
+
+            def record(status, **updates):
+                state.update(status=status, updated_at=datetime.now(timezone.utc).isoformat(), **updates)
+                if checkpoint is not None:
+                    save_checkpoint(checkpoint, state)
+
+            started = time.monotonic()
             code = 1
-            for attempt in range(retries + 1):
-                code = execute(command, env)
-                if code == 0:
-                    break
-                if attempt < retries:
-                    delay = min(5 * 2 ** attempt, 60)
-                    print(f'Command failed (exit {code}); retry {attempt+1}/{retries} in {delay}s', flush=True)
-                    time.sleep(delay)
-            results.append({**item, 'status': 'ok' if code == 0 else 'failed', 'exit_code': code})
+            delay = min(retry_delay, max_retry_delay)
+            try:
+                for attempt in range(retries + 1):
+                    record('running', attempt=attempt+1)
+                    print(f'{label} Attempt {attempt+1}/{retries+1}', flush=True)
+                    code = execute(command, env)
+                    record('ok' if code == 0 else 'failed', exit_code=code)
+                    if code == 0:
+                        break
+                    if attempt < retries:
+                        print(f'{label} Exit {code}; retrying in {delay:g}s '
+                              '(completed images will be reused).', flush=True)
+                        time.sleep(delay)
+                        delay = min(delay*2, max_retry_delay)
+            except KeyboardInterrupt:
+                record('interrupted')
+                raise
+            except OSError as exc:
+                record('failed', error=str(exc))
+                raise
+            elapsed = time.monotonic()-started
+            if code == 0:
+                signature = file_signature(target) if item['kind'] != 'images' else None
+                record('ok', elapsed_seconds=elapsed, file_signature=signature)
+            results.append({**item, 'status': 'ok' if code == 0 else 'failed', 'exit_code': code,
+                            'elapsed_seconds': elapsed})
+            print(f'{label} {"Completed" if code == 0 else "Failed"} in {elapsed:.1f}s. '
+                  f'Task progress: {index}/{len(plan)} processed ({index/len(plan):.0%}).', flush=True)
     return results
 
 
@@ -370,6 +445,10 @@ def main():
     parser.add_argument('--kind', choices=['images', 'metadata', 'bbox', 'all'], default='all')
     parser.add_argument('--workers', type=int, default=32, help='Native tool concurrency inside each dataset')
     parser.add_argument('--retries', type=int, default=3, help='Extra retries per native tool command')
+    parser.add_argument('--retry-delay', type=float, default=5.0, help='Initial retry delay in seconds (doubles after failure)')
+    parser.add_argument('--max-retry-delay', type=float, default=60.0, help='Maximum retry delay in seconds')
+    parser.add_argument('--resume', action=argparse.BooleanOptionalAction, default=True,
+                        help='Reuse verified annotation checkpoints (default: enabled); images always sync incrementally')
     parser.add_argument('--prefix', default='', help='Download one image subfolder, preserving its relative path')
     parser.add_argument('--bbox-url', help='Override bounding-box URL for one dataset, using the selected provider')
     parser.add_argument('--list', action='store_true', help='List catalog entries')
@@ -382,6 +461,8 @@ def main():
     try:
         if args.workers < 1 or args.retries < 0:
             raise ValueError('--workers must be >= 1 and --retries must be >= 0')
+        if not all(math.isfinite(v) and v >= 0 for v in (args.retry_delay, args.max_retry_delay)):
+            raise ValueError('Retry delays must be finite and >= 0')
         output = args.output.expanduser().resolve()
         try:
             rows = load_catalog(args.catalog, output / '.catalog.csv', args.refresh, args.retries)
@@ -407,13 +488,17 @@ def main():
             raise ValueError('--bbox-url requires one dataset and --kind bbox or all')
         plan = build_plan(list(selected.values()), args.provider, output, args.kind,
                           relative_prefix(args.prefix), args.bbox_url)
-        results = run_plan(plan, args.provider, args.workers, args.retries, args.dry_run)
+        results = run_plan(plan, args.provider, args.workers, args.retries, args.dry_run,
+                           state_dir=output/'.transfer-state', resume=args.resume and not args.refresh,
+                           retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay)
         failures = [r for r in results if r['status'] == 'failed']
         if not args.dry_run:
             output.mkdir(parents=True, exist_ok=True)
             (output/'lila_download_report.json').write_text(json.dumps(
                 {'provider': args.provider, 'results': results}, indent=2, ensure_ascii=False), encoding='utf-8')
-        print(f'Finished: {len(results)-len(failures)} successful/planned, {len(failures)} failed.')
+        skipped = sum(r['status'] == 'skipped' for r in results)
+        print(f'Finished: {len(results)-len(failures)-skipped} successful/planned, '
+              f'{skipped} verified/skipped, {len(failures)} failed.')
         if failures:
             parser.exit(1, 'Some transfers failed; rerun the command to recover missing images.\n')
     except KeyboardInterrupt:
