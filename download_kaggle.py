@@ -85,10 +85,21 @@ def dataset_handle(value: str, version: int | None = None) -> str:
     return match[1] + (f'/versions/{selected}' if selected is not None else '')
 
 
+def default_output_dir(handle: str) -> Path:
+    """Keep owners and explicit versions separate to avoid dataset-name collisions."""
+    parts = dataset_handle(handle).split('/')
+    output = Path('datasets') / parts[0] / parts[1]
+    if len(parts) == 4:
+        output /= f'version-{parts[3]}'
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('dataset', help='OWNER/DATASET or full Kaggle dataset URL')
-    parser.add_argument('--output', type=Path, help='Download directly to this directory; omitted = kagglehub cache')
+    destination = parser.add_mutually_exclusive_group()
+    destination.add_argument('--output', type=Path, help='Custom directory; default: datasets/OWNER/DATASET[/version-N]')
+    destination.add_argument('--cache', action='store_true', help='Use kagglehub cache instead of an automatically named directory')
     parser.add_argument('--version', type=int, help='Specific version; omitted = latest unless specified in URL/handle')
     parser.add_argument('--file', help='Download only this dataset-relative file or directory')
     parser.add_argument('--force', action='store_true', help='Force download; permits overwriting files in --output')
@@ -107,8 +118,8 @@ def main():
             relative = PurePosixPath(args.file.replace('\\', '/'))
             if relative.is_absolute() or '..' in relative.parts or ':' in str(relative) or str(relative) == '.':
                 raise ValueError('--file must be a relative path within the dataset')
-        if args.output:
-            output = args.output.expanduser().resolve()
+        output = None if args.cache else (args.output or default_output_dir(handle)).expanduser().resolve()
+        if output is not None:
             if output.exists() and not output.is_dir():
                 raise ValueError(f'Output is not a directory: {output}')
             if output.is_dir() and any(output.iterdir()) and not args.force:
@@ -120,11 +131,12 @@ def main():
         if args.login:
             kagglehub.login()
         kwargs = {'force_download': args.force}
-        if args.output:
+        if output is not None:
             kwargs['output_dir'] = str(output)
         if args.file:
             kwargs['path'] = str(relative)
         print(f'Dataset: {handle}', flush=True)
+        print(f'Download directory: {output if output is not None else "kagglehub cache"}', flush=True)
         location = download_with_retry(
             kagglehub.dataset_download, handle, retries=args.retries,
             retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay, **kwargs,

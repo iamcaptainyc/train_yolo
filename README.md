@@ -54,18 +54,20 @@ python -m pip install --upgrade kagglehub
 python download_kaggle.py antoreepjana/animals-detection-images-dataset --output datasets/raw
 ```
 
-支持任意 `OWNER/DATASET`、完整 Kaggle 数据集网址和 `OWNER/DATASET/versions/N`。省略 `--output` 时使用 kagglehub 默认缓存并打印实际路径。示例：
+支持任意 `OWNER/DATASET`、完整 Kaggle 数据集网址和 `OWNER/DATASET/versions/N`。省略 `--output` 时自动创建 `datasets/OWNER/DATASET/`；显式指定版本时使用 `datasets/OWNER/DATASET/version-N/`，按发布者区分同名数据集。目录相对于当前工作目录。`--output` 指定的目录直接使用，不额外添加数据集名称。也可用 `--cache` 沿用 kagglehub 默认缓存（不能与 `--output` 同时使用）。示例：
 
 ```powershell
 python download_kaggle.py "https://www.kaggle.com/datasets/antoreepjana/animals-detection-images-dataset" --version 1 --output datasets/animals_v1
 python download_kaggle.py OWNER/DATASET --file data.csv --output datasets/single_file
 python download_kaggle.py OWNER/DATASET --login
+python download_kaggle.py antoreepjana/animals-detection-images-dataset
+python download_kaggle.py OWNER/DATASET --cache
 python download_kaggle.py OWNER/DATASET --output datasets/my_dataset --retries 5 --retry-delay 10 --max-retry-delay 60
 ```
 
 下载默认在超时、连接中断、HTTP 408/429/5xx 后额外重试 3 次（最多 4 次调用），等待 5、10、20 秒；`--retry-delay` 设置初始等待，`--max-retry-delay` 限制等待上限。`--retries 0` 关闭重试。认证失败、资源不存在、证书错误或本地文件错误直接退出，Ctrl+C 可中止。KaggleHub 内部也可能重试，因此总耗时和底层请求数可能更多。
 
-指定 `--output` 时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载（不保证断点续传）；未指定输出目录时沿用其缓存机制。重试不会重新触发 `--login`。脚本仍会在开始前拒绝非空输出目录，除非显式指定 `--force`。
+使用自动命名或 `--output` 目录时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载（不保证断点续传）；使用 `--cache` 时沿用其缓存机制。重试不会重新触发 `--login`。脚本仍会在开始前拒绝非空输出目录，除非显式指定 `--force`。
 
 默认下载整个数据集，`--file` 可限定到数据集内的单个文件或目录。输出目录非空时默认拒绝，显式 `--force` 可强制下载并允许覆盖已有文件。使用专属目录，避免混入其他数据集；切换版本应选择新目录。访问私有或需同意条款的数据时，可用 `--login` 交互认证，并先在 Kaggle 页面接受相应条款。脚本不保存或打印凭据。此脚本面向 Kaggle Datasets，竞赛下载请使用 kagglehub 的 `competition_download`。
 
@@ -90,6 +92,12 @@ datasets/raw/animals/
 
 ```powershell
 python prepare_dataset.py --source datasets/raw --output datasets/animals_yolo
+```
+
+如果下载时采用自动命名目录，改用：
+
+```powershell
+python prepare_dataset.py --source datasets/antoreepjana/animals-detection-images-dataset --output datasets/animals_yolo
 ```
 
 处理规则：

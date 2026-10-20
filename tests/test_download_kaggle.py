@@ -1,9 +1,47 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
 
-from download_kaggle import download_with_retry
+from download_kaggle import dataset_handle, default_output_dir, download_with_retry, main
+
+
+class DestinationTests(unittest.TestCase):
+    def test_url_and_versions_have_separate_directories(self):
+        self.assertEqual(default_output_dir('alice/animals'), Path('datasets/alice/animals'))
+        self.assertNotEqual(default_output_dir('alice/animals'), default_output_dir('bob/animals'))
+        handle = dataset_handle('https://www.kaggle.com/datasets/alice/animals?datasetVersionNumber=2')
+        self.assertEqual(default_output_dir(handle), Path('datasets/alice/animals/version-2'))
+
+    def test_default_custom_and_cache_forwarding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            automatic, custom = Path(tmp)/'automatic', Path(tmp)/'custom'
+            for flags, expected in [([], automatic), (['--output', str(custom)], custom), (['--cache'], None)]:
+                module = Mock()
+                module.dataset_download.return_value = str(Path(tmp)/'downloaded')
+                with self.subTest(flags=flags), patch.dict('sys.modules', {'kagglehub': module}), \
+                     patch('sys.argv', ['download_kaggle.py', 'owner/data', *flags]), \
+                     patch('download_kaggle.default_output_dir', return_value=automatic):
+                    main()
+                kwargs = module.dataset_download.call_args.kwargs
+                self.assertEqual(kwargs.get('output_dir'), str(expected.resolve()) if expected else None)
+
+    def test_nonempty_output_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            sentinel = output / 'existing.txt'
+            sentinel.write_text('keep', encoding='utf-8')
+            module = Mock()
+            with patch.dict('sys.modules', {'kagglehub': module}), \
+                 patch('sys.argv', ['download_kaggle.py', 'owner/data']), \
+                 patch('download_kaggle.default_output_dir', return_value=output), \
+                 self.assertRaises(SystemExit) as raised:
+                main()
+            self.assertEqual(raised.exception.code, 1)
+            module.dataset_download.assert_not_called()
+            self.assertEqual(sentinel.read_text(encoding='utf-8'), 'keep')
 
 
 class RetryTests(unittest.TestCase):
