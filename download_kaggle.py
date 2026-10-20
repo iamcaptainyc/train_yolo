@@ -31,7 +31,7 @@ def is_retryable(error: Exception) -> bool:
 
 
 def download_with_retry(download, handle, *, retries=3, retry_delay=5.0,
-                        max_retry_delay=60.0, stop_event=None, **kwargs):
+                        max_retry_delay=60.0, stop_event=None, restart_output=True, **kwargs):
     """retries counts extra attempts after the first call; never catches Ctrl+C.
 
     Callers must validate output_dir is empty or explicitly authorized for replacement.
@@ -58,7 +58,7 @@ def download_with_retry(download, handle, *, retries=3, retry_delay=5.0,
             elif stop_event.wait(delay):
                 raise CancelledError('Download cancelled') from exc
             delay = min(delay * 2, max_retry_delay)
-            if kwargs.get('output_dir'):
+            if restart_output and kwargs.get('output_dir'):
                 # Initial preflight permits an empty output or explicit --force only.
                 # Replace partial files from this run; do not delete paths ourselves.
                 kwargs['force_download'] = True
@@ -101,7 +101,7 @@ def default_output_dir(handle: str) -> Path:
     return output
 
 
-def build_jobs(handles, output=None, cache=False, force=False):
+def build_jobs(handles, output=None, cache=False, force=False, resume=False):
     """Validate all destinations before starting any downloads."""
     jobs = []
     for handle in handles:
@@ -115,8 +115,9 @@ def build_jobs(handles, output=None, cache=False, force=False):
                     raise ValueError(f'Download directories overlap: {existing} and {target}; download these separately')
             if target.exists() and not target.is_dir():
                 raise ValueError(f'Output is not a directory: {target}')
-            if target.is_dir() and any(target.iterdir()) and not force:
-                raise ValueError(f'Output directory is non-empty: {target}; choose a new directory or explicitly use --force')
+            if target.is_dir() and any(target.iterdir()) and not (force or resume):
+                raise ValueError(f'Output directory is non-empty: {target}; use --resume to continue, '
+                                 'or choose a new directory (--force restarts and may discard partial progress)')
         else:
             # A latest-version handle may resolve to a simultaneously requested explicit version.
             parts = handle.split('/')
@@ -129,7 +130,7 @@ def build_jobs(handles, output=None, cache=False, force=False):
 
 
 def run_downloads(download, jobs, *, workers=3, retries=3, retry_delay=5.0,
-                  max_retry_delay=60.0, force=False, path=None):
+                  max_retry_delay=60.0, force=False, path=None, resume=False):
     """Run independent datasets concurrently; one failure does not cancel the others."""
     if workers < 1:
         raise ValueError('--workers must be >= 1')
@@ -144,7 +145,8 @@ def run_downloads(download, jobs, *, workers=3, retries=3, retry_delay=5.0,
             kwargs['path'] = path
         print(f'[{handle}] Download directory: {output if output is not None else "kagglehub cache"}', flush=True)
         return download_with_retry(download, handle, retries=retries, retry_delay=retry_delay,
-                                   max_retry_delay=max_retry_delay, stop_event=stop, **kwargs)
+                                   max_retry_delay=max_retry_delay, stop_event=stop,
+                                   restart_output=not resume, **kwargs)
 
     executor = ThreadPoolExecutor(max_workers=min(workers, max(1, len(jobs))))
     futures = {}
@@ -181,6 +183,7 @@ def main():
     parser.add_argument('--version', type=int, help='Specific version; omitted = latest unless specified in URL/handle')
     parser.add_argument('--file', help='Download only this dataset-relative file or directory')
     parser.add_argument('--force', action='store_true', help='Force download; permits overwriting files in --output')
+    parser.add_argument('--resume', action='store_true', help='Continue a full dataset from its existing .archive without clearing the directory')
     parser.add_argument('--login', action='store_true', help='Interactively log in using kagglehub before downloading')
     parser.add_argument('--retries', type=int, default=3, help='Extra attempts after a transient failure (default: 3; 0 disables retries)')
     parser.add_argument('--retry-delay', type=float, default=5.0, help='Initial retry wait in seconds (default: 5; doubles each retry)')
@@ -190,6 +193,8 @@ def main():
     try:
         if args.workers < 1:
             raise ValueError('--workers must be >= 1')
+        if args.resume and (args.force or args.cache or args.file):
+            raise ValueError('--resume cannot be combined with --force, --cache or --file')
         if len(args.dataset) > 1 and (args.version is not None or args.file):
             raise ValueError('--version and --file require a single dataset; specify /versions/N per dataset for batches')
         handles = list(dict.fromkeys(dataset_handle(value, args.version).casefold() for value in args.dataset))
@@ -201,18 +206,22 @@ def main():
             relative = PurePosixPath(args.file.replace('\\', '/'))
             if relative.is_absolute() or '..' in relative.parts or ':' in str(relative) or str(relative) == '.':
                 raise ValueError('--file must be a relative path within the dataset')
-        jobs = build_jobs(handles, args.output, args.cache, args.force)
+        jobs = build_jobs(handles, args.output, args.cache, args.force, args.resume)
         try:
             import kagglehub
         except ModuleNotFoundError as exc:
             raise ValueError('Install dependency first: python -m pip install --upgrade kagglehub') from exc
         if args.login:
             kagglehub.login()
+        download = kagglehub.dataset_download
+        if args.resume:
+            from kaggle_resume import resumable_dataset_download
+            download = resumable_dataset_download
         print(f'Datasets: {len(jobs)}; concurrent downloads: {min(args.workers, len(jobs))}', flush=True)
         successes, failures = run_downloads(
-            kagglehub.dataset_download, jobs, workers=args.workers, retries=args.retries,
+            download, jobs, workers=args.workers, retries=args.retries,
             retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay,
-            force=args.force, path=str(relative) if args.file else None,
+            force=args.force, path=str(relative) if args.file else None, resume=args.resume,
         )
         print(f'Finished: {len(successes)} succeeded, {len(failures)} failed.', flush=True)
         if failures:

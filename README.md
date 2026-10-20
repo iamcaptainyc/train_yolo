@@ -7,6 +7,7 @@
 ```text
 train_yolo/
   download_kaggle.py       # 通用 Kaggle Datasets 下载
+  kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
   train.py                 # 训练 / 恢复 / 评估 / 预测
@@ -14,6 +15,7 @@ train_yolo/
   tests/
     test_prepare_dataset.py
     test_download_kaggle.py
+    test_kaggle_resume.py
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
@@ -78,9 +80,29 @@ python download_kaggle.py OWNER_A/DATASET_A OWNER_B/DATASET_B --output datasets/
 
 下载默认在超时、连接中断、HTTP 408/429/5xx 后额外重试 3 次（最多 4 次调用），等待 5、10、20 秒；`--retry-delay` 设置初始等待，`--max-retry-delay` 限制等待上限。`--retries 0` 关闭重试。认证失败、资源不存在、证书错误或本地文件错误结束对应任务。Ctrl+C 会取消排队任务及后续重试，正在进行的网络请求需等待返回或超时后退出。KaggleHub 内部也可能重试，因此总耗时和底层请求数可能更多。
 
-使用自动命名或 `--output` 目录时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载（不保证断点续传）；使用 `--cache` 时沿用其缓存机制。重试不会重新触发 `--login`。脚本仍会在开始前拒绝非空输出目录，除非显式指定 `--force`。
+普通模式使用自动命名或 `--output` 目录时，本轮超时留下的部分文件会在重试时由 KaggleHub 覆盖并重新下载；使用 `--cache` 时沿用其缓存机制。重试不会重新触发 `--login`。非空输出目录需要显式选择 `--resume` 续传，或 `--force` 重新下载。
 
-默认下载整个数据集，`--file` 可限定到数据集内的单个文件或目录。输出目录非空时默认拒绝，显式 `--force` 可强制下载并允许覆盖已有文件。使用专属目录，避免混入其他数据集；切换版本应选择新目录。访问私有或需同意条款的数据时，可用 `--login` 交互认证，并先在 Kaggle 页面接受相应条款。脚本不保存或打印凭据。此脚本面向 Kaggle Datasets，竞赛下载请使用 kagglehub 的 `competition_download`。
+### 中断后继续下载
+
+先更新代码和下载依赖，再在**原来的工作目录**运行相同数据集并加上 `--resume`：
+
+```bash
+git pull --ff-only
+python -m pip install --upgrade 'kagglehub>=1.0.2,<2'
+python download_kaggle.py banuprasadb/wildlife-dataset --resume --retries 5
+```
+
+也可从首次下载就加 `--resume`，中断后原命令重跑即可。支持多数据集同时续传：
+
+```bash
+python download_kaggle.py OWNER_A/DATASET_A OWNER_B/DATASET_B --resume --workers 2
+```
+
+续传模式复用目标目录中的 `版本号.archive`，包括旧脚本留下的文件；使用 HTTP Range 只请求缺失字节。通过 `.kaggle-resume.json` 固定数据集和版本，避免“最新版本”变化后混用内容。下载失败保留部分文件，后续重试不会自动开启强制重下。完成后先校验远端 MD5（若提供）与 ZIP CRC，再解压并标记完成；已有完成标记则直接跳过。校验、解压需要额外时间，压缩包和解压文件同时存在时需要足够空间。
+
+如果服务器忽略 Range、版本不一致或校验失败，会保留现有文件并明确报错，不会静默删除进度。`--resume` 面向整个 ZIP 数据集，不可与 `--force`、`--cache` 或 `--file` 同时使用；只有解压文件、没有压缩包或可识别完成标记的旧目录不能恢复压缩包下载。它也不支持从其他下载器的任意 `.part` 文件自动恢复。首次开始后应避免由另一个脚本进程同时操作同一输出目录。
+
+默认下载整个数据集，`--file` 可限定到数据集内的单个文件或目录。`--force` 表示重新下载并可能清理已有内容，不能用于保留断点。使用专属目录，避免混入其他数据集；切换版本应选择新目录。访问私有或需同意条款的数据时，可用 `--login` 交互认证，并先在 Kaggle 页面接受相应条款。脚本不保存或打印凭据。此脚本面向 Kaggle Datasets，竞赛下载请使用 kagglehub 的 `competition_download`。
 
 脚本支持原始目录结构（外面允许有一层或多层解压目录）：
 
