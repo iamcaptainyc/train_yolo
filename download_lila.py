@@ -1,4 +1,4 @@
-"""Download LILA camera-trap datasets via AWS, Azure or GCP native tools."""
+"""Download LILA camera-trap datasets with bbox filtering via AWS, Azure or GCP."""
 from __future__ import annotations
 
 import argparse
@@ -189,8 +189,8 @@ def parse_dataset_page(rows, url, html):
             continue  # Individual example images are not dataset roots.
         # Prefer species-class boxes over coarse animal/person/vehicle boxes, and
         # official metadata over optional alternate/non-human-only metadata links.
-        score = 10 if 'with_classes' in label else 0
-        if any(word in label for word in ('no_classes', 'unofficial', 'non-human', 'non_human')):
+        score = 10 if any(word in label for word in ('with_classes', 'with_species')) else 0
+        if any(word in label for word in ('no_classes', 'no_species', 'unofficial', 'non-human', 'non_human')):
             score -= 10
         for provider in TOOLS:
             if provider in info:
@@ -471,10 +471,16 @@ def dataset_inputs(arguments, urls_file=None):
     return list(dict.fromkeys(value.strip() for value in inputs if value.strip()))
 
 
-def run_datasets(plan, provider, *, mode='serial', dataset_workers=2, **options):
+def run_datasets(plan, provider, *, mode='serial', dataset_workers=2, image_policy='all',
+                 negative_fraction=0.05, seed=42, prefix='', audit_only=False, **options):
     """Schedule one native-tool sequence per dataset, with independent checkpoints."""
     if mode not in ('serial', 'parallel') or dataset_workers < 1:
         raise ValueError('Invalid mode or dataset worker count')
+    if image_policy == 'boxed' and any(item['kind'] == 'images' for item in plan):
+        from lila_selection import run_boxed_datasets
+        return run_boxed_datasets(plan, provider, mode=mode, dataset_workers=dataset_workers,
+                                  negative_fraction=negative_fraction, seed=seed, prefix=prefix,
+                                  audit_only=audit_only, run_annotations=run_datasets, options=options)
     groups = {}
     for item in plan:
         groups.setdefault(item['dataset'], []).append(item)
@@ -487,7 +493,7 @@ def run_datasets(plan, provider, *, mode='serial', dataset_workers=2, **options)
             return run_plan(items, provider, stop_event=stop, **options)
         except CancelledError:
             raise
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, ImportError) as exc:
             print(f'[Dataset {name}] Failed: {exc}', flush=True)
             return [{**item, 'status': 'failed', 'error': str(exc), 'exit_code': -1} for item in items]
 
@@ -541,12 +547,18 @@ def main():
     parser.add_argument('--provider', choices=TOOLS, default='aws')
     parser.add_argument('--output', type=Path, default=Path('datasets/lila'), help='Root directory; dataset subdirectories are added')
     parser.add_argument('--kind', choices=['images', 'metadata', 'bbox', 'all'], default='all')
-    parser.add_argument('--workers', type=int, default=32, help='Native tool concurrency inside each dataset')
-    parser.add_argument('--retries', type=int, default=3, help='Extra retries per native tool command')
+    parser.add_argument('--image-policy', choices=['boxed', 'all'], default='boxed',
+                        help='Default: valid boxed images plus confirmed-empty negatives; all restores full-folder downloads')
+    parser.add_argument('--negative-fraction', type=float, default=0.05,
+                        help='Target negative share of selected images across the batch (default: 0.05)')
+    parser.add_argument('--seed', type=int, default=42, help='Reproducible negative sampling seed')
+    parser.add_argument('--audit-only', action='store_true', help='Download annotations and write selection reports, without downloading images')
+    parser.add_argument('--workers', type=int, default=32, help='Image transfer concurrency inside each dataset')
+    parser.add_argument('--retries', type=int, default=3, help='Extra retries per transfer')
     parser.add_argument('--retry-delay', type=float, default=5.0, help='Initial retry delay in seconds (doubles after failure)')
     parser.add_argument('--max-retry-delay', type=float, default=60.0, help='Maximum retry delay in seconds')
     parser.add_argument('--resume', action=argparse.BooleanOptionalAction, default=True,
-                        help='Reuse verified annotation checkpoints (default: enabled); images always sync incrementally')
+                        help='Reuse completed annotation and image checkpoints (default: enabled)')
     parser.add_argument('--prefix', default='', help='Download one image subfolder, preserving its relative path')
     parser.add_argument('--bbox-url', help='Override bounding-box URL for one dataset, using the selected provider')
     parser.add_argument('--list', action='store_true', help='List catalog entries')
@@ -561,6 +573,10 @@ def main():
             raise ValueError('--workers and --dataset-workers must be >= 1; --retries must be >= 0')
         if not all(math.isfinite(v) and v >= 0 for v in (args.retry_delay, args.max_retry_delay)):
             raise ValueError('Retry delays must be finite and >= 0')
+        if not math.isfinite(args.negative_fraction) or not 0 <= args.negative_fraction < 1:
+            raise ValueError('--negative-fraction must be in [0, 1)')
+        if args.audit_only and (args.image_policy != 'boxed' or args.kind not in ('images', 'all')):
+            raise ValueError('--audit-only requires --image-policy boxed and --kind images or all')
         output = args.output.expanduser().resolve()
         inputs = dataset_inputs(args.datasets, args.urls_file)
         try:
@@ -583,11 +599,19 @@ def main():
         if args.info:
             print(json.dumps(list(selected.values()), indent=2, ensure_ascii=False))
             return
-        if args.bbox_url and (len(selected) != 1 or args.kind not in ('bbox', 'all')):
+        if args.bbox_url and (len(selected) != 1 or (args.kind not in ('bbox', 'all') and args.image_policy != 'boxed')):
             raise ValueError('--bbox-url requires one dataset and --kind bbox or all')
-        plan = build_plan(list(selected.values()), args.provider, output, args.kind,
+        plan_kind = 'all' if args.image_policy == 'boxed' and args.kind == 'images' else args.kind
+        plan = build_plan(list(selected.values()), args.provider, output, plan_kind,
                           relative_prefix(args.prefix), args.bbox_url)
+        if args.image_policy == 'boxed' and args.kind in ('images', 'all') and not args.dry_run:
+            try:
+                import ijson, requests, tqdm, PIL  # noqa: F401
+            except ImportError as exc:
+                raise ValueError('Install selection dependencies: python -m pip install -r requirements-lila.txt') from exc
         results = run_datasets(plan, args.provider, mode=args.mode, dataset_workers=args.dataset_workers,
+                               image_policy=args.image_policy, negative_fraction=args.negative_fraction,
+                               seed=args.seed, prefix=relative_prefix(args.prefix), audit_only=args.audit_only,
                                workers=args.workers, retries=args.retries, dry_run=args.dry_run,
                                state_dir=output/'.transfer-state', resume=args.resume and not args.refresh,
                                retry_delay=args.retry_delay, max_retry_delay=args.max_retry_delay)

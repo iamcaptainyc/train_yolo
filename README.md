@@ -1,6 +1,6 @@
 # train_yolo：YOLO11 / YOLO26 动物目标检测
 
-使用 Ultralytics 做**多类别目标检测**：输出动物类别与边界框。提供通用 Kaggle、LILA 下载工具，以及 Animals Detection 数据集专用的标注转换和训练流程。仓库不包含数据集、模型权重或训练结果；下载操作需要手动运行脚本。
+使用 Ultralytics 做**多类别目标检测**：输出动物类别与边界框。提供通用 Kaggle、LILA 下载工具，以及 Animals Detection 数据集专用的标注转换和训练流程。LILA 默认只选有效框图片，并加入约占最终总数 5% 的明确空图负样本，支持网址列表及断点续传，见 [下载说明](docs/lila.md)。仓库不包含数据集、模型权重或训练结果；下载操作需要手动运行脚本。
 
 ## 项目结构
 
@@ -8,6 +8,8 @@
 train_yolo/
   download_kaggle.py       # 通用 Kaggle Datasets 下载
   download_lila.py          # LILA AWS / Azure / GCP 下载
+  lila_selection.py        # 有效框筛选、明确空图抽样与图片续传
+  requirements-lila.txt    # 仅下载 LILA 所需 Python 依赖
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
@@ -18,7 +20,9 @@ train_yolo/
     test_download_kaggle.py
     test_kaggle_resume.py
     test_download_lila.py
+    test_lila_selection.py
   docs/lila.md             # LILA 多源下载说明
+  docs/lila_annotation_audit.md # 五数据集实际标注审计
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```

@@ -2,3 +2,4 @@ ultralytics>=8.4.0,<9
 Pillow>=10.0
 PyYAML>=6.0
 kagglehub>=1.0.2,<2
+-r requirements-lila.txt

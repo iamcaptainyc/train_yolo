@@ -1,3 +1,6 @@
 # One LILA dataset page URL per line. Blank lines and full-line comments are ignored.
+https://lila.science/datasets/swg-camera-traps
+https://lila.science/datasets/caltech-camera-traps
 https://lila.science/datasets/ena24detection
-https://lila.science/datasets/wcscameratraps
+https://lila.science/datasets/oregon-critters/
+https://lila.science/datasets/nkhotakota-camera-traps/

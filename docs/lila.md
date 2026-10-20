@@ -3,32 +3,32 @@
 **直接把数据集页面网址传给脚本即可，无需查询数据集名称：**
 
 ```bash
-python -m pip install awscli
+python -m pip install -r requirements-lila.txt awscli
 python download_lila.py https://lila.science/datasets/ena24detection
 python download_lila.py https://lila.science/datasets/wcscameratraps --provider aws --workers 32
 ```
 
-默认 AWS、32 并发，自动下载图片和可识别的标注。网址中的页面名不必与目录名称一致，例如 `ena24detection` 会通过实际云存储路径识别为 ENA24。也可以一次传入多个页面网址。
+默认 AWS、32 并发，先下载标注，筛选有效动物框图片，再加入约占最终图片总数 5% 的明确空图负样本。网址中的页面名不必与目录名称一致，例如 `ena24detection` 会通过实际云存储路径识别为 ENA24。也可以一次传入多个页面网址。
 
 `download_lila.py` 读取 [LILA 官方相机陷阱目录](https://lila.science/wp-content/uploads/2023/06/lila_camera_trap_datasets.csv)，支持其收录的数据集，不将路径写死为 WCS。目前查询到 32 个条目，例如 WCS、NACTI、Caltech、Snapshot Serengeti、Snapshot Safari 等。官方增加条目后用 `--refresh` 更新目录即可。
 
 输入页面网址时，脚本还会读取页面列出的云目录和标注链接，通过实际文件路径匹配目录；没有目录条目时可从页面公开目录直接生成配置。仅提供大压缩包、需要申请访问或无法识别图片目录的页面会明确报错，不会下载其他数据集。官方目录获取失败时，网址输入仍会尝试直接解析页面。
 
-三个云源由同一个脚本调度，使用 [LILA 推荐的原生工具](https://lila.science/image-access)：
+三个云源由同一个脚本调度。默认筛选模式使用公开 HTTPS 地址按清单并发下载图片，复用连接；标注下载和显式选择 `--image-policy all` 时使用 [LILA 推荐的原生工具](https://lila.science/image-access)：
 
-| `--provider` | 需安装的命令 | 图片传输方式 |
+| `--provider` | 需安装的命令 | 全目录模式图片传输方式 |
 | --- | --- | --- |
-| `aws`（默认） | `aws`，可用 `python -m pip install awscli` 安装 | 匿名 `aws s3 sync` |
+| `aws`（默认） | `aws`，可用 `python -m pip install -r requirements-lila.txt awscli` 安装 | 匿名 `aws s3 sync` |
 | `azure` | [AzCopy v10](https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azcopy-v10) 的 `azcopy` | `azcopy copy`，比较源文件更新时间 |
 | `gcp` | [Google Cloud SDK](https://cloud.google.com/storage/docs/gsutil_install) 中的 `gsutil` | `gsutil -m rsync -r` |
 
-仅使用哪个源，就安装哪个工具，并确保其位于 PATH 中。脚本本身仅依赖 Python 标准库；查看目录和 `--dry-run` 不需要安装云工具。云工具负责图片级并发、网络传输与错误输出。公开数据无需设置 AWS 密钥；脚本不修改现有 AWS 配置，使用临时配置控制并发。
+仅使用哪个源，就安装哪个工具，并确保其位于 PATH 中。筛选模式需要 `requirements-lila.txt` 中的依赖；查看目录和 `--dry-run` 不需要安装云工具。公开数据无需设置 AWS 密钥；脚本不修改现有 AWS 配置，使用临时配置控制并发。
 
 ## AutoDL 上使用
 
 ```bash
 git pull --ff-only
-python -m pip install awscli
+python -m pip install -r requirements-lila.txt awscli
 
 # 查看所有数据集，或按关键字搜索
 python download_lila.py --list
@@ -110,7 +110,7 @@ python download_lila.py --urls-file urls.txt --mode parallel --dataset-workers 2
 python download_lila.py wcs nacti caltech-camera-traps --provider aws --workers 32
 ```
 
-`--mode serial`（默认）每次执行一个数据集；`--mode parallel` 通过 `--dataset-workers`（默认 2）限制同时运行的数据集数。每个数据集内部的图片、metadata、bbox 任务仍依次执行，避免重复操作同一数据集。总传输并发可能接近 `dataset-workers × workers`，应结合网络与磁盘性能控制。
+`--mode serial`（默认）每次执行一个数据集；`--mode parallel` 通过 `--dataset-workers`（默认 2）限制同时运行的数据集数。筛选模式会先获取所有数据集的标注，再逐一分析、确定整批负样本配额，最后按所选模式下载图片。总传输并发可能接近 `dataset-workers × workers`，应结合网络与磁盘性能控制。
 
 各数据集独立记录恢复状态、独立重试；一个数据集的传输失败不阻止其他数据集。显示单个数据集内的任务进度和总体已处理数据集数。并行运行时，云工具的原生传输输出可能交错，可通过带数据集名称的任务行和最终报告确认状态。Ctrl+C 会取消排队任务、终止正在运行的云工具并保存恢复状态；重跑相同命令继续。网址解析与目录检查会在实际下载前完成，无法解析的网址会在这一阶段报错。
 
@@ -121,32 +121,65 @@ python download_lila.py https://lila.science/datasets/ena24detection \
   --retries 10 --retry-delay 5 --max-retry-delay 60
 ```
 
-进度默认直接显示在终端，包括当前任务编号（如 `[1/2][ena24/images]`）、当前尝试次数、结束耗时、已处理任务数与百分比。云工具的 stdout/stderr 直接连接终端，保留其文件/字节进度和传输速度。任务百分比按图片目录/标注等传输任务计数，**不代表总数据字节的百分比**；字节进度以云工具显示为准，尚在列举远端文件时可能无法立即显示总量。
+筛选图片下载显示图片数量进度、处理速度、累计新下载 MiB、跳过数和失败数。标注下载保留云工具的原生输出。分析标注时显示阶段信息，大型 JSON 的扫描可能需要等待；并行下载时各数据集各有进度条。
 
-## 重跑与恢复
+## 检测框筛选与负样本
 
-图片目录通过云工具比较已有文件并补下载缺失/需要更新的文件；中断后直接重跑同一命令。不会删除本地多余文件。AWS/GCP 的比较与 Azure `ifSourceNewer` 的比较规则不同，不能将其视为统一的逐字节校验或压缩包断点续传。
+默认 `--image-policy boxed --negative-fraction 0.05 --seed 42`。详细的五数据集核查见 [标注审计](lila_annotation_audit.md)。
 
-默认自动恢复，无需额外参数，也可以显式加 `--resume`。每个任务的源地址、目标路径、运行/中断/失败/完成状态会原子保存到输出根目录下的 `.transfer-state/`，每次尝试及时更新；Ctrl+C 时先终止传输进程，再记录中断状态。即使异常退出未能记录，重跑仍会调用云工具比较图片目录，不会因状态文件显示“完成”而跳过整个图片检查。
-
-标注文件使用云工具的单文件复制；完成后保存文件大小和 SHA-256。重跑时若源地址未变且本地内容校验通过，则跳过已完成标注；文件缺失、内容变化或上次未完成时重新传输。`--no-resume` 会重新执行标注传输，`--refresh` 同时刷新目录并重新检查标注，适用于远端在同一 URL 更新文件的情况。这两个选项都不会清空图片目录，图片仍然按云工具规则增量比较。
-
-元数据及 bbox 压缩包仅下载、不自动解压。**恢复以已完成图片/任务为单位，不保证半张图片或半个标注压缩包跨运行按字节继续。** 图片若损坏而大小/时间等恰好满足工具跳过规则，仍可能需要手动检查处理。校验标注 SHA-256 验证的是本地内容与本次下载完成时一致，不代表每次都会检查远端版本变化。
-
-## 只下载一部分或先下载标注
-
-`--kind` 支持 `images`、`metadata`、`bbox`、`all`，默认 `all`。`all` 模式在目录未提供 metadata/bbox 地址时提示并跳过；显式选择缺失的标注类型则报错。metadata 可能只有图片/序列级分类，**有 metadata 不代表有检测框**。
+- 正样本必须有有效的动物框：COCO `[x,y,width,height]` 像素坐标，宽高大于零、有限数值，并按图片尺寸检查越界。排除人类、vehicle、ignore、损坏或私有图片，以及含无效动物框的图片。
+- 负样本必须由元数据明确标记为 `empty`、`blank` 等空场景，且没有矛盾的非空标注或物体框。缺框、缺标注、有动物但没有检测框都不能作为负样本；类别 ID 为 0 也不自动代表空图。
+- 5% 指**整批最终图片中的负样本比例**，计算 `N=round(P×0.05/0.95)`。先按各数据集正样本数分配，再从其他数据集的明确空图池补足缺额。ENA24 没有明确空图，因此不提供负样本；单独下载 ENA24 会报告不足。
+- 空图总数不足时如实报告，不使用未知图片凑数。固定标注版本、输入顺序和 seed 可复现抽样。零正样本或无法解析标注时明确失败，不退回全目录下载。
 
 ```bash
-# 训练检测模型前，可先检查框标注
-python download_lila.py wcs --kind bbox
-python download_lila.py wcs --kind metadata
+# 示例列表已包含本次五个网址；先只下载标注和生成清单
+python download_lila.py --urls-file examples/lila_urls.txt --audit-only
 
-# 只下载指定图片子目录；本地保留相对路径
-python download_lila.py wcs --kind images --prefix animals/0011
+# 下载筛选结果：两个数据集同时下载，各 32 个图片线程
+python download_lila.py --urls-file examples/lila_urls.txt --mode parallel --dataset-workers 2 --workers 32
+
+# 只要有框图片，不加入空图
+python download_lila.py https://lila.science/datasets/caltech-camera-traps --negative-fraction 0
+
+# 明确需要全量图片时才启用
+python download_lila.py https://lila.science/datasets/caltech-camera-traps --image-policy all
 ```
 
-`--prefix` 作用于图片目录，不会自动按物种或 bbox 筛选，不接收通配符或 `..`。选择物种或仅下载有框图片需要另行根据标注生成文件清单；当前脚本不提供这种筛选。
+每个数据集的 `selection/` 保存：
+
+| 文件 | 用途 |
+| --- | --- |
+| `selected_images.txt` / `positives.txt` / `negatives.txt` | 相对于该数据集 `images/` 的路径清单 |
+| `selected_images.jsonl` | 图片、角色和框标注，逐行记录 |
+| `selected_annotations.json` | COCO 子集，负样本有图片记录、没有对象标注；重新分配图片/标注 ID，保留 `source_image_id` |
+| `selection_report.json` | 筛选计数、来源、随机种子和负样本不足统计 |
+| `negative_candidates.jsonl` | 明确空图候选池，供整批配额调整 |
+| `failed_images.json` | 本次下载失败的图片及原因 |
+| `downloaded_images.sqlite` | 完成图片的 URL/大小检查点 |
+
+输出根目录另外保存 `selection_batch_report.json` 和 `lila_download_report.json`。图片仍保留原有相对路径。**已有目录里的多余图片不会被删除，训练必须使用筛选清单/COCO 子集，不能直接递归读取整个旧目录。** 类别仍保留各数据集原始定义；混合训练前需要统一类别并转换 YOLO。当前 `prepare_dataset.py` 仅适用于 Animals Detection 的原始格式。
+
+## 重跑、重试与恢复
+
+直接重跑同一命令即可。筛选图片以 `.part` 保存未完成内容，并记录 URL、ETag；服务端支持 Range 时续传，忽略 Range 或对象变化时重下该图片。完成后验证图片格式再原子改名，SQLite 记录 URL/大小；下次按 URL 和本地大小跳过完成项。已有全量下载图片没有检查点时，比较远端长度并验证图片后复用。图片完成检查点不提供每次运行的逐字节校验。
+
+网络错误按 `--retries`、`--retry-delay`、`--max-retry-delay` 退避重试；404 等永久错误记录后继续其他图片。最终存在任何失败时退出码为 1。Ctrl+C 停止排队任务，活动 HTTP 请求在返回或超时后结束，保留部分文件；重新运行会继续。
+
+标注文件仍由云工具下载，完成后记录大小和 SHA-256，重跑校验通过即跳过。`.transfer-state/` 保存这些传输任务状态。标注压缩包不保证字节级续传，筛选时在 `annotations/.json-cache/` 缓存解压后的 JSON，不解压图片包。
+
+`--no-resume` 重新检查标注及图片完成记录；`--refresh` 还刷新官方目录，适用于同 URL 的标注更新，不会清空图片目录。`--image-policy all` 使用原生工具的增量比较规则，不保证半张图片跨运行续传。
+
+## 只下载部分或先下载标注
+
+`--kind` 支持 `images`、`metadata`、`bbox`、`all`，默认 `all`。在筛选模式选择 `images` 仍会先获取所需标注；单选 `metadata` 或 `bbox` 则仅下载对应文件。metadata 可能只有分类，存在 metadata 并不表示有检测框。
+
+```bash
+python download_lila.py https://lila.science/datasets/caltech-camera-traps --kind bbox
+python download_lila.py https://lila.science/datasets/ena24detection --kind metadata
+```
+
+`--prefix` 限制图片子目录并保留相对路径，可与框筛选结合，不接收通配符或 `..`。`--bbox-url` 可覆盖单个数据集的框标注地址。ENA24、Oregon、Nkhotakota 的框嵌在 metadata 中，没有单独 bbox 下载项。
 
 ## 更新目录与标注版本
 
@@ -160,7 +193,7 @@ python download_lila.py --list --refresh
 
 已知三个 LILA 公共镜像根目录的对象会按相同相对路径转换到所选云源，包括部分表格单元格填入另一云地址的情况。新版对象可能尚未同步到所有镜像，远端返回不存在时可以切换源或指定准确地址。
 
-**官方目录中的部分 bbox 链接是历史版本，刷新目录不意味着标注一定是该数据集页面上的最新版。** 直接输入页面网址时会优先采用页面上可识别的标注链接；同时有 `with_classes` 和 `no_classes` 框标注时优先前者。仅输入名称时仍使用目录中的标注。也可以通过 `--bbox-url` 覆盖单个数据集的框标注地址，这个选项不影响图片目录。
+**官方目录中的部分 bbox 链接是历史版本，刷新目录不意味着标注一定是该数据集页面上的最新版。** 直接输入页面网址时会优先采用页面上可识别的标注链接；同时有带类别/物种和无类别框标注时优先带类别/物种的版本。仅输入名称时仍使用目录中的标注。也可以通过 `--bbox-url` 覆盖单个数据集的框标注地址，这个选项不影响图片目录。
 
 ENA24 的检测框位于其 metadata JSON 中，没有单独的 bbox 下载项；默认 `all` 会下载 metadata，即使提示目录中无单独 bbox 地址也不表示缺少检测框。
 
@@ -171,4 +204,4 @@ python download_lila.py wcs --provider aws --kind bbox \
   --bbox-url s3://us-west-2.opendata.source.coop/agentmorris/lila-wildlife/wcs/wcs_20220205_bboxes_with_classes.zip
 ```
 
-这个工具负责下载，不自动转换 COCO Camera Traps 为 YOLO，也不判断各类别是否具备完整框标注。后续训练前应检查标注类型、类别、空图及推荐的数据划分。
+这个工具按图片是否有有效框进行筛选，不自动转换 COCO Camera Traps 为 YOLO，也不能保证每张入选图片的全部动物都已被人工完整标注。后续训练前应检查标注类型、类别、空图及推荐的数据划分。
