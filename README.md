@@ -207,9 +207,10 @@ python train.py --data datasets/animals_yolo/data.yaml --model yolo11s.pt --epoc
 ```powershell
 python download_weights.py
 python download_weights.py --models yolo11n.pt yolo26n.pt --output weights --retries 5
+python download_weights.py yolov8n.pt yolov8s.pt --output weights
 ```
 
-`--models` 支持 YOLO11、YOLO26 各自的 `n/s/m/l/x` 型号，可同时指定多个。使用 Ultralytics 自带下载器从官方 assets 仓库下载；已有权重跳过，文件大小检查不等于完整性或可加载性验证。下载较慢时可在 PowerShell 配置实际代理地址，例如 `$env:HTTPS_PROXY = "http://127.0.0.1:7890"`，端口应替换为实际值。
+支持直接传模型名或使用 `--models`，可混用并去重；不传仍下载 YOLO11s 和 YOLO26s。YOLOv8 文件名为 `yolov8n.pt`、`yolov8s.pt`（注意字母 `v`）。支持 YOLOv8、YOLO11、YOLO26 各自的 `n/s/m/l/x` 型号。使用 Ultralytics 自带下载器从官方 assets 仓库下载；已有权重跳过，文件大小检查不等于完整性或可加载性验证。下载较慢时可在 PowerShell 配置实际代理地址，例如 `$env:HTTPS_PROXY = "http://127.0.0.1:7890"`，端口应替换为实际值。
 
 训练时指定本地文件路径：
 

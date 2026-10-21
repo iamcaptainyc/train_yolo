@@ -1,22 +1,37 @@
-"""Download official YOLO11 / YOLO26 detection checkpoints without starting training."""
+"""Download official YOLOv8 / YOLO11 / YOLO26 detection checkpoints without training."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 import shutil
 
-MODELS = tuple(f'{family}{size}.pt' for family in ('yolo11', 'yolo26') for size in 'nsmlx')
+MODELS = tuple(f'{family}{size}.pt' for family in ('yolov8', 'yolo11', 'yolo26') for size in 'nsmlx')
+
+
+def checkpoint_name(value):
+    if value not in MODELS:
+        hint = ' YOLOv8 filenames start with yolov8, e.g. yolov8n.pt.' if value.startswith('yolo8') else ''
+        raise argparse.ArgumentTypeError(f'Unsupported detection checkpoint: {value}.{hint}')
+    return value
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('model_names', nargs='*', type=checkpoint_name,
+                        help='Checkpoint names, e.g. yolov8n.pt yolov8s.pt')
+    parser.add_argument('--models', nargs='+', choices=MODELS,
+                        type=checkpoint_name, help='Alternative to positional checkpoint names')
+    parser.add_argument('--output', type=Path, default=Path('weights'), help='Destination directory (default: weights)')
+    parser.add_argument('--retries', type=int, default=3, help='Ultralytics download retries (default: 3)')
+    args = parser.parse_args(argv)
+    if args.retries < 0:
+        parser.error('--retries must be >= 0')
+    args.models = list(dict.fromkeys(args.model_names+(args.models or []))) or ['yolo11s.pt', 'yolo26s.pt']
+    return parser, args
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--models', nargs='+', choices=MODELS,
-                        default=['yolo11s.pt', 'yolo26s.pt'], help='Detection checkpoints to download')
-    parser.add_argument('--output', type=Path, default=Path('weights'), help='Destination directory (default: weights)')
-    parser.add_argument('--retries', type=int, default=3, help='Ultralytics download retries (default: 3)')
-    args = parser.parse_args()
-    if args.retries < 0:
-        parser.error('--retries must be >= 0')
+    parser, args = parse_args()
     try:
         from ultralytics.utils.downloads import attempt_download_asset
     except ImportError:
