@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from concurrent.futures import CancelledError, FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
+import errno
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,22 @@ import zipfile
 EMPTY_NAMES = {'empty', 'blank', 'background', 'no animal', 'no animals', 'none'}
 EXCLUDED_NAMES = {'human', 'humans', 'person', 'people', 'homo sapiens', 'ignore',
                   'vehicle', 'vehicles', 'car', 'cars', 'blurred', 'problem', 'unlabeled', 'unlabelled'}
+
+
+class LocalStorageError(OSError):
+    """Stop the whole batch when local storage cannot safely record progress."""
+
+
+def storage_error(path, exc):
+    return LocalStorageError(f'Local storage/checkpoint error at {path}: {exc}. '
+                             'Downloaded images and partial files are retained. '
+                             'Check disk space/quota, free inodes, mount availability and directory permissions; '
+                             'fix storage, then rerun with the same output directory.')
+
+
+def is_storage_error(exc):
+    return isinstance(exc, LocalStorageError) or getattr(exc, 'errno', None) in {
+        errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EACCES, errno.EPERM, errno.EIO}
 
 
 def normalized_name(value):
@@ -334,6 +351,8 @@ def run_boxed_datasets(plan, provider, *, mode, dataset_workers, negative_fracti
 
     def run_one(p, position):
         try:
+            if stop.is_set():
+                raise CancelledError('Batch stopped after a local storage error')
             transfer = download_selected(load_selection(p['directory']), p['item'],
                                          workers=options.get('workers', 32), retries=options.get('retries', 3),
                                          retry_delay=options.get('retry_delay', 5.0),
@@ -341,7 +360,12 @@ def run_boxed_datasets(plan, provider, *, mode, dataset_workers, negative_fracti
                                          state_dir=p['directory'], stop_event=stop, prefix=prefix,
                                          resume=options.get('resume', True), position=position)
             return {**p['item'], **transfer, 'selection_report': p['report']}
+        except CancelledError as exc:
+            return {**p['item'], 'status': 'failed', 'error': str(exc)}
         except (ValueError, OSError) as exc:
+            if is_storage_error(exc):
+                stop.set()
+            print(f'[{p["item"]["dataset"]}] Failed: {exc}', flush=True)
             return {**p['item'], 'status': 'failed', 'error': str(exc)}
     executor = ThreadPoolExecutor(max_workers=min(dataset_workers, len(prepared)) if mode == 'parallel' else 1)
     futures = []
@@ -383,9 +407,16 @@ def download_selected(selected, item, *, workers, retries, retry_delay, max_retr
     from tqdm import tqdm
 
     state_dir.mkdir(parents=True, exist_ok=True)
-    database = sqlite3.connect(state_dir/'downloaded_images.sqlite')
-    database.execute('CREATE TABLE IF NOT EXISTS completed (url TEXT PRIMARY KEY, size INTEGER NOT NULL)')
-    completed = dict(database.execute('SELECT url,size FROM completed')) if resume else {}
+    database = None
+    try:
+        database = sqlite3.connect(state_dir/'downloaded_images.sqlite')
+        database.execute('CREATE TABLE IF NOT EXISTS completed (url TEXT PRIMARY KEY, size INTEGER NOT NULL)')
+        completed = dict(database.execute('SELECT url,size FROM completed')) if resume else {}
+    except sqlite3.Error as exc:
+        if database is not None:
+            database.close()
+        stop_event.set()
+        raise storage_error(state_dir, exc) from exc
     sessions = local()
 
     def verify(path):
@@ -461,6 +492,9 @@ def download_selected(selected, item, *, workers, retries, retry_delay, max_retr
                 state.unlink(missing_ok=True)
                 return url, target.stat().st_size, received, 'ok'
             except (requests.RequestException, OSError, ValueError) as exc:
+                if is_storage_error(exc):
+                    stop_event.set()
+                    raise storage_error(target, exc) from exc
                 status = getattr(getattr(exc, 'response', None), 'status_code', None)
                 if status == 416:
                     # A full .part left by interruption after the last chunk needs no retransmission.
@@ -501,16 +535,21 @@ def download_selected(selected, item, *, workers, retries, retry_delay, max_retr
                     except CancelledError:
                         raise
                     except Exception as exc:
+                        if is_storage_error(exc):
+                            raise storage_error(Path(item['target'])/name, exc) from exc
                         failures.append({'file_name': name, 'error': str(exc)})
                     else:
                         downloaded += received
                         skipped += status == 'skipped'
-                        database.execute('INSERT OR REPLACE INTO completed VALUES (?,?)', (url, size))
-                        database.commit()
+                        try:
+                            database.execute('INSERT OR REPLACE INTO completed VALUES (?,?)', (url, size))
+                            database.commit()
+                        except sqlite3.Error as exc:
+                            raise storage_error(state_dir, exc) from exc
                     progress.update(1)
                     progress.set_postfix(MiB=f'{downloaded/1048576:.1f}', skipped=skipped, failed=len(failures), refresh=False)
                     submit()
-    except (KeyboardInterrupt, CancelledError):
+    except (KeyboardInterrupt, CancelledError, LocalStorageError):
         stop_event.set()
         for future in pending:
             future.cancel()

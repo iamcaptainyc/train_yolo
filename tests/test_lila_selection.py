@@ -1,5 +1,7 @@
 import io
+import errno
 import json
+import sqlite3
 from pathlib import Path
 from threading import Event
 import tempfile
@@ -10,7 +12,7 @@ import zipfile
 from PIL import Image
 import requests
 
-from lila_selection import download_selected, image_url, select_images, write_selection, rebalance_negatives
+from lila_selection import download_selected, image_url, select_images, write_selection, rebalance_negatives, LocalStorageError
 from download_lila import run_datasets
 
 
@@ -199,6 +201,49 @@ class SelectedDownloadTests(unittest.TestCase):
             self.assertEqual(result['failed_images'], 1)
             self.assertEqual(session.get.call_count, 2)
             self.assertEqual(json.loads((root/'state/failed_images.json').read_text())[0]['file_name'], 'missing.png')
+
+    def test_checkpoint_write_failure_keeps_completed_image_and_can_recover(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item = {'source':'s3://bucket/images', 'target':str(root/'images'), 'dataset':'test'}
+            database = Mock()
+            database.execute.side_effect = [None, [], sqlite3.OperationalError('unable to open database file')]
+            session = Mock()
+            payload = self.png()
+            session.get.return_value = response(payload, **{'Content-Length':str(len(payload))})
+            stop = Event()
+            with patch('requests.Session', return_value=session), patch('lila_selection.sqlite3.connect', return_value=database):
+                with self.assertRaisesRegex(LocalStorageError, 'Downloaded images and partial files are retained'):
+                    download_selected({'a.png':{}}, item, workers=1, retries=0, retry_delay=0,
+                                      max_retry_delay=0, state_dir=root/'state', stop_event=stop)
+            self.assertTrue(stop.is_set())
+            self.assertEqual((root/'images/a.png').read_bytes(), payload)
+            database.close.assert_called_once()
+            # The last file can exist even though SQLite failed to record it.
+            with patch('requests.Session', return_value=session):
+                result = download_selected({'a.png':{}}, item, workers=1, retries=0, retry_delay=0,
+                                           max_retry_delay=0, state_dir=root/'state', stop_event=Event())
+            self.assertEqual(result['skipped_images'], 1)
+
+    def test_disk_full_stops_without_retrying_or_deleting_partial_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item = {'source':'s3://bucket/images', 'target':str(root/'images'), 'dataset':'test'}
+            session = Mock()
+            first = response(b'')
+            def chunks(*args, **kwargs):
+                yield b'partial-image'
+                raise OSError(errno.ENOSPC, 'No space left on device')
+            first.iter_content = chunks
+            session.get.return_value = first
+            stop = Event()
+            with patch('requests.Session', return_value=session):
+                with self.assertRaisesRegex(LocalStorageError, 'Check disk space'):
+                    download_selected({'a.png':{}}, item, workers=1, retries=3, retry_delay=0,
+                                      max_retry_delay=0, state_dir=root/'state', stop_event=stop)
+            self.assertTrue(stop.is_set())
+            self.assertEqual(session.get.call_count, 1)
+            self.assertEqual((root/'images/a.png.part').read_bytes(), b'partial-image')
 
 
 if __name__ == '__main__':

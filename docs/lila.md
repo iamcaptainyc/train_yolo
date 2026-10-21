@@ -172,6 +172,20 @@ python download_lila.py https://lila.science/datasets/caltech-camera-traps --ima
 
 ## 只下载部分或先下载标注
 
+### 本地存储错误时如何恢复
+
+`sqlite3.OperationalError: unable to open database file` 是本地完成检查点的访问/写入错误，不能仅凭这一条确定原因。尤其在大量图片突然失败后，应先检查目标盘空间、磁盘配额、inode、挂载和目录权限。程序不会因此删除已经完成的图片。
+
+```bash
+df -h datasets/lila /tmp
+df -i datasets/lila /tmp
+du -sh datasets/lila
+```
+
+新版在 SQLite 检查点失败，或图片写入遇到磁盘满/配额/权限/只读/IO 错误时停止整批任务，保留完成文件和 `.part`，避免快速产生大量失败记录。修复本地存储后，更新代码并以相同输出目录重跑原下载命令。SQLite 未记录到最后一张已完成图片时，会比较长度和验证图片以复用，不需要删图片或重头下载。
+
+进度条 `100%` 表示任务已处理，仍要检查 `failed` 是否为零。异常发生时最终报告可能来不及写入，以终端错误为准；不要删除 `images/`、`.part` 或 `selection/downloaded_images.sqlite` 来尝试修复空间问题。
+
 `--kind` 支持 `images`、`metadata`、`bbox`、`all`，默认 `all`。在筛选模式选择 `images` 仍会先获取所需标注；单选 `metadata` 或 `bbox` 则仅下载对应文件。metadata 可能只有分类，存在 metadata 并不表示有检测框。
 
 ```bash
