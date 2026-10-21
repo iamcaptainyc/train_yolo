@@ -1,0 +1,4 @@
+-r requirements.txt
+ultralytics>=8.4.182,<9
+optuna>=4.0,<6
+filelock>=3.13

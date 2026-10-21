@@ -17,6 +17,8 @@ train_yolo/
   prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
   training_guard.py        # Linux 独立进程组守护与残留 DataLoader 回收
+  search_yolo.py           # Optuna 轮转搜索 YOLOv8n/s、YOLO11n/s，导出最佳 n/s
+  search_worker.py         # 独立 GPU 训练/评估阶段与逐候选结果
   requirements.txt         # Python 依赖
   tests/
     test_prepare_dataset.py
@@ -29,6 +31,7 @@ train_yolo/
   docs/lila_annotation_audit.md # 五数据集实际标注审计
   docs/lila_yolo.md         # LILA 类别转换及防泄漏划分
   docs/snake_data.md        # SnakeAid 下载与 Open Images 有框蛇筛选
+  docs/model_search.md      # 四模型自动搜索、每轮测试及恢复说明
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
@@ -245,6 +248,8 @@ python train.py --resume runs/animals/yolo11s/weights/last.pt --device 0
 恢复时沿用检查点记录的训练配置。如果训练已结束、想追加一轮微调，用 `--model .../last.pt --epochs 50 --name finetune` 新开训练。
 
 ### Linux 训练异常退出保护
+
+需要自动比较 YOLOv8n/s、YOLO11n/s 时，使用 `search_yolo.py`；它会逐轮 Optuna 调参、逐候选测试并导出最佳 n/s。运行、恢复和结果目录见 [四模型自动搜索说明](docs/model_search.md)。每模型默认 5 次候选，共 20 次训练，启动前可加 `--dry-run` 查看计划。
 
 在 Linux/AutoDL 中，`python train.py ...` 默认由一个不加载 PyTorch/CUDA 的轻量守护进程启动真正的训练进程，参数保持原样。每次运行创建独立进程组。训练正常完成、异常退出或收到 SIGKILL 后，只要守护仍存活，就会终止本组尚存的 DataLoader 等子进程；先 SIGTERM，等待后对未退出进程使用 SIGKILL。Ctrl+C/SIGTERM 转发给本次任务，超时后强制停止。Linux subreaper 用于回收被训练主进程遗留的后代进程，避免交给容器 PID 1 后长期残留。
 

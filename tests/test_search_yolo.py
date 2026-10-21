@@ -1,0 +1,218 @@
+from argparse import Namespace
+import contextlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+import yaml
+
+import search_yolo
+from search_worker import digest, execute, write_json
+
+
+class FakeGPU:
+    """Fake only the expensive process boundary; use real studies, files and reports."""
+    def __init__(self):
+        self.calls = []
+        self.fail_test_once = False
+        self.kill_train_once = False
+
+    def launch(self, command, **kwargs):
+        job = json.loads(Path(command[-1]).read_text())
+        phase = job['phase']
+        self.calls.append(job)
+        output = Path(job['result'])
+        if phase == 'train' and self.kill_train_once:
+            self.kill_train_once = False
+            return Mock(wait=Mock(return_value=137))
+        if phase == 'test' and self.fail_test_once:
+            self.fail_test_once = False
+            write_json(output, {'status':'failed', 'error':'temporary evaluation error'})
+            return Mock(wait=Mock(return_value=1))
+        if phase == 'prepare':
+            target = Path(job['target'])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(job['model'].encode())
+            result = {'checkpoint':str(target), 'sha256':digest(target)}
+        elif phase == 'train':
+            best = Path(job['train_dir'])/'weights/best.pt'
+            best.parent.mkdir(parents=True, exist_ok=True)
+            best.write_bytes((job['model']+str(job['trial'])).encode())
+            result = {'best_checkpoint':str(best), 'checkpoint_sha256':digest(best), 'recorded_epochs':2}
+        else:
+            score = {'yolov8n.pt':.2, 'yolov8s.pt':.3, 'yolo11n.pt':.5, 'yolo11s.pt':.6}[job['model']]
+            score += job['trial']*.01
+            if phase == 'test':
+                score = 1-score  # Test favors the opposite models; it must never select winners.
+            result = {'split':phase, 'checkpoint_sha256':digest(job['checkpoint']),
+                      'metrics':{'precision':score, 'recall':score, 'map50':score, 'map50_95':score}}
+        write_json(output, {'status':'ok', **result})
+        return Mock(wait=Mock(return_value=0))
+
+
+@unittest.skipUnless(importlib.util.find_spec('optuna'), 'Install requirements-search.txt for real Optuna integration')
+class SearchIntegrationTests(unittest.TestCase):
+    def args(self, root, trials=1, test_policy='every-trial'):
+        data = root/'dataset.yaml'
+        data.write_text(yaml.safe_dump({'path':str(root), 'train':'images/train', 'val':'images/val',
+                                       'test':'images/test', 'names':{0:'cat'}}))
+        output = root/'search'
+        output.mkdir(exist_ok=True)
+        return Namespace(data=data, output=output, weights_dir=root/'weights', epochs=2, patience=1,
+                         imgsz=640, batch=4, eval_batch=2, workers=0, device='cpu', seed=42,
+                         amp=False, trials=trials, test_policy=test_policy)
+
+    def run_fake(self, args, gpu):
+        with patch('search_yolo.subprocess.Popen', side_effect=gpu.launch), \
+                patch('training_guard.supervise', side_effect=lambda command: gpu.launch(command).wait()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            search_yolo.run(args)
+
+    def test_round_robin_resume_and_validation_only_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, gpu = self.args(root), FakeGPU()
+            self.run_fake(args, gpu)
+            args.trials = 2  # Total target, not two additional trials per model.
+            self.run_fake(args, gpu)
+            training = [j for j in gpu.calls if j['phase']=='train']
+            self.assertEqual([j['model'] for j in training], list(search_yolo.MODELS)*2)
+            self.assertEqual(len([j for j in gpu.calls if j['phase']=='prepare']), 4)
+            report = json.loads((args.output/'summary.json').read_text())
+            self.assertEqual(len(report['iterations']), 8)
+            self.assertEqual(report['winners']['n']['model'], 'yolo11n.pt')
+            self.assertEqual(report['winners']['s']['model'], 'yolo11s.pt')
+            self.assertEqual(report['winners']['n']['trial'], 1)
+            self.assertEqual((args.output/'best/best_n.pt').read_bytes(), b'yolo11n.pt1')
+            self.assertTrue((args.output/'rounds/round_0002.json').is_file())
+            count = len(gpu.calls)
+            self.run_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)  # Completed search performs no new GPU stages.
+
+    def test_test_stage_failure_retries_without_training_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp)), FakeGPU()
+            gpu.fail_test_once = True
+            with self.assertRaisesRegex(ValueError, 'test stages failed'):
+                self.run_fake(args, gpu)
+            count = len([j for j in gpu.calls if j['phase']=='train'])
+            self.run_fake(args, gpu)
+            self.assertEqual(len([j for j in gpu.calls if j['phase']=='train']), count)
+            self.assertEqual(len([j for j in gpu.calls if j['phase']=='test']), 5)
+
+    def test_sigkill_stops_batch_and_preserves_running_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp)), FakeGPU()
+            gpu.kill_train_once = True
+            with self.assertRaises(search_yolo.JobError):
+                self.run_fake(args, gpu)
+            before = json.loads((args.output/'models/yolov8n/trial_0000/config.json').read_text())
+            self.run_fake(args, gpu)
+            after = json.loads((args.output/'models/yolov8n/trial_0000/config.json').read_text())
+            self.assertEqual(before, after)
+            self.assertEqual(len(json.loads((args.output/'summary.json').read_text())['iterations']), 4)
+
+    def test_final_policy_evaluates_only_two_selected_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), test_policy='final'), FakeGPU()
+            self.run_fake(args, gpu)
+            self.assertEqual([j['model'] for j in gpu.calls if j['phase']=='test'], ['yolo11n.pt','yolo11s.pt'])
+
+    def test_final_evaluation_failure_is_reported_and_resumable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), test_policy='final'), FakeGPU()
+            gpu.fail_test_once = True
+            with self.assertRaises(search_yolo.JobError):
+                self.run_fake(args, gpu)
+            summary = json.loads((args.output/'summary.json').read_text())
+            self.assertEqual(summary['winners']['n']['test']['status'], 'failed')
+            self.run_fake(args, gpu)
+            self.assertEqual(len([j for j in gpu.calls if j['phase']=='train']), 4)
+
+    def test_changed_experiment_cannot_mix_with_old_trials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp)), FakeGPU()
+            self.run_fake(args, gpu)
+            args.epochs += 1
+            count = len(gpu.calls)
+            with self.assertRaisesRegex(ValueError, 'configuration/data changed'):
+                self.run_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)
+
+
+class WorkerTests(unittest.TestCase):
+    def test_incomplete_initial_checkpoint_is_not_accepted_by_size_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)/'yolov8n.pt'
+            target.write_bytes(b'x'*100_001)
+            sdk = SimpleNamespace(YOLO=Mock(side_effect=RuntimeError('truncated checkpoint')))
+            modules = {'ultralytics':sdk, 'ultralytics.utils':SimpleNamespace(),
+                       'ultralytics.utils.downloads':SimpleNamespace(attempt_download_asset=Mock())}
+            with patch.dict('sys.modules', modules), self.assertRaisesRegex(ValueError, 'cannot be loaded'):
+                execute({'phase':'prepare','target':str(target),'source':str(Path(tmp)/'missing.pt')})
+            self.assertEqual(target.stat().st_size, 100_001)
+
+    def test_test_evaluation_records_metrics_and_uses_correct_split(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp)/'best.pt'
+            checkpoint.write_bytes(b'checkpoint')
+            metrics = SimpleNamespace(box=SimpleNamespace(mp=.6, mr=.5, map50=.7, map=.4),
+                                      speed={'inference':1.2}, summary=lambda:[{'Class':'cat','mAP50-95':.4}])
+            model = Mock()
+            model.val.return_value = metrics
+            sdk = SimpleNamespace(YOLO=Mock(return_value=model), __version__='fake')
+            job = {'phase':'test','checkpoint':str(checkpoint),'data':'data.yaml','imgsz':640,
+                   'eval_batch':2,'workers':0,'device':'cpu','trial_dir':tmp}
+            with patch.dict('sys.modules', {'ultralytics':sdk,'torch':SimpleNamespace(__version__='fake')}):
+                result = execute(job)
+            self.assertEqual(result['metrics']['map50_95'], .4)
+            self.assertEqual(model.val.call_args.kwargs['split'], 'test')
+            self.assertEqual(model.val.call_args.kwargs['conf'], .001)
+            self.assertEqual(result['per_class'][0]['Class'], 'cat')
+
+    def test_json_accepts_scientific_scalar_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'metric.json'
+            write_json(path, {'metric':SimpleNamespace(item=lambda:.25)})
+            self.assertEqual(json.loads(path.read_text())['metric'], .25)
+
+    def test_explicit_optimizer_and_learning_rate_reach_training(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)/'training'
+            model = Mock()
+            def train(**kwargs):
+                (directory/'weights').mkdir(parents=True)
+                (directory/'weights/best.pt').write_bytes(b'best')
+                (directory/'weights/last.pt').write_bytes(b'last')
+            model.train.side_effect = train
+            sdk = SimpleNamespace(YOLO=Mock(return_value=model), __version__='fake')
+            job = {'phase':'train','train_dir':str(directory),'epochs':2,'data':'data.yaml','imgsz':640,
+                   'batch':4,'workers':0,'device':'cpu','seed':42,'patience':1,'amp':False,
+                   'initial_checkpoint':'initial.pt','params':{'optimizer':'AdamW','lr0':.002}}
+            with patch.dict('sys.modules', {'ultralytics':sdk, 'torch':SimpleNamespace(__version__='fake')}):
+                result = execute(job)
+            self.assertEqual(model.train.call_args.kwargs['optimizer'], 'AdamW')
+            self.assertEqual(model.train.call_args.kwargs['lr0'], .002)
+            self.assertFalse(model.train.call_args.kwargs['cache'])
+            self.assertEqual(result['checkpoint_sha256'], digest(directory/'weights/best.pt'))
+
+    def test_recovery_of_finished_checkpoint_skips_training(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory/'weights').mkdir()
+            for name in ('best.pt','last.pt'):
+                (directory/'weights'/name).write_bytes(b'finished')
+            model = Mock(ckpt={'epoch':-1})
+            sdk = SimpleNamespace(YOLO=Mock(return_value=model), __version__='fake')
+            with patch.dict('sys.modules', {'ultralytics':sdk, 'torch':SimpleNamespace(__version__='fake')}):
+                execute({'phase':'train','train_dir':str(directory),'epochs':2})
+            model.train.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()
