@@ -1,5 +1,6 @@
 from argparse import Namespace
 import contextlib
+import csv
 import importlib.util
 import io
 import json
@@ -64,7 +65,7 @@ class SearchIntegrationTests(unittest.TestCase):
         output = root/'search'
         output.mkdir(exist_ok=True)
         return Namespace(data=data, output=output, weights_dir=root/'weights', epochs=2, patience=1,
-                         imgsz=640, batch=4, eval_batch=2, workers=0, device='cpu', seed=42,
+                         imgsz=640, batch=None, eval_batch=2, workers=0, device='cpu', seed=42,
                          amp=False, trials=trials, test_policy=test_policy)
 
     def run_fake(self, args, gpu):
@@ -83,6 +84,14 @@ class SearchIntegrationTests(unittest.TestCase):
             training = [j for j in gpu.calls if j['phase']=='train']
             self.assertEqual([j['model'] for j in training], list(search_yolo.MODELS)*2)
             self.assertEqual(len([j for j in gpu.calls if j['phase']=='prepare']), 4)
+            for job in training:
+                self.assertIn(job['batch'], [64, 128, 256])
+                self.assertEqual(job['batch'], job['params']['batch'])
+            self.assertEqual([job['batch'] for job in training[:4]], [64]*4)
+            self.assertTrue(all(j['eval_batch'] == 2 for j in gpu.calls if j['phase'] in ('val', 'test')))
+            with (args.output/'iterations.csv').open(encoding='utf-8-sig', newline='') as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([int(row['batch']) for row in rows], [job['batch'] for job in training])
             report = json.loads((args.output/'summary.json').read_text())
             self.assertEqual(len(report['iterations']), 8)
             self.assertEqual(report['winners']['n']['model'], 'yolo11n.pt')
@@ -93,6 +102,17 @@ class SearchIntegrationTests(unittest.TestCase):
             count = len(gpu.calls)
             self.run_fake(args, gpu)
             self.assertEqual(len(gpu.calls), count)  # Completed search performs no new GPU stages.
+
+    def test_explicit_batch_disables_search_and_survives_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp)), FakeGPU()
+            args.batch = 32
+            self.run_fake(args, gpu)
+            args.trials = 2
+            self.run_fake(args, gpu)
+            training = [j for j in gpu.calls if j['phase'] == 'train']
+            self.assertEqual(len(training), 8)
+            self.assertTrue(all(j['batch'] == j['params']['batch'] == 32 for j in training))
 
     def test_test_stage_failure_retries_without_training_again(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,6 +165,17 @@ class SearchIntegrationTests(unittest.TestCase):
             self.assertEqual(len(gpu.calls), count)
 
 
+class BatchSpaceTests(unittest.TestCase):
+    def test_each_batch_choice_is_sampled_as_a_category(self):
+        for batch in (64, 128, 256):
+            with self.subTest(batch=batch):
+                trial = Mock()
+                trial.suggest_categorical.side_effect = [batch, 'AdamW']
+                params = search_yolo.sample_params(trial)
+                self.assertEqual(params['batch'], batch)
+                self.assertEqual(trial.suggest_categorical.call_args_list[0].args, ('batch', [64, 128, 256]))
+
+
 class WorkerTests(unittest.TestCase):
     def test_incomplete_initial_checkpoint_is_not_accepted_by_size_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,11 +224,12 @@ class WorkerTests(unittest.TestCase):
             sdk = SimpleNamespace(YOLO=Mock(return_value=model), __version__='fake')
             job = {'phase':'train','train_dir':str(directory),'epochs':2,'data':'data.yaml','imgsz':640,
                    'batch':4,'workers':0,'device':'cpu','seed':42,'patience':1,'amp':False,
-                   'initial_checkpoint':'initial.pt','params':{'optimizer':'AdamW','lr0':.002}}
+                   'initial_checkpoint':'initial.pt','params':{'batch':256,'optimizer':'AdamW','lr0':.002}}
             with patch.dict('sys.modules', {'ultralytics':sdk, 'torch':SimpleNamespace(__version__='fake')}):
                 result = execute(job)
             self.assertEqual(model.train.call_args.kwargs['optimizer'], 'AdamW')
             self.assertEqual(model.train.call_args.kwargs['lr0'], .002)
+            self.assertEqual(model.train.call_args.kwargs['batch'], 256)
             self.assertFalse(model.train.call_args.kwargs['cache'])
             self.assertEqual(result['checkpoint_sha256'], digest(directory/'weights/best.pt'))
 

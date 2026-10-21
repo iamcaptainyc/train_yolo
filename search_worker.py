@@ -94,11 +94,12 @@ def execute(job):
                 model.train(resume=True, device=job['device'], workers=job['workers'])
         else:
             model = YOLO(job['initial_checkpoint'])
-            model.train(data=job['data'], epochs=job['epochs'], imgsz=job['imgsz'], batch=job['batch'],
+            model.train(data=job['data'], epochs=job['epochs'], imgsz=job['imgsz'],
                         workers=job['workers'], device=job['device'], seed=job['seed'], deterministic=True,
                         patience=job['patience'], amp=job['amp'], cache=False, save=True, val=True,
                         project=str(directory.parent), name=directory.name, exist_ok=True,
-                        close_mosaic=min(10, max(0, job['epochs']//5)), plots=True, **job['params'])
+                        close_mosaic=min(10, max(0, job['epochs']//5)), plots=True,
+                        **{'batch': job['batch'], **job['params']})
         if not best.is_file():
             raise ValueError(f'Training did not produce {best}')
         rows = []

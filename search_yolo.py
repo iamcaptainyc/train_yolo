@@ -14,9 +14,10 @@ import time
 from search_worker import digest, write_json
 
 MODELS = ('yolov8n.pt', 'yolov8s.pt', 'yolo11n.pt', 'yolo11s.pt')
-BASELINE = {'optimizer': 'AdamW', 'lr0': 0.001, 'lrf': 0.01, 'momentum': 0.937,
+BASELINE = {'batch': 64, 'optimizer': 'AdamW', 'lr0': 0.001, 'lrf': 0.01, 'momentum': 0.937,
             'weight_decay': 0.0005, 'hsv_s': 0.7, 'hsv_v': 0.4, 'scale': 0.5, 'mosaic': 1.0}
-SPACE_VERSION = 1
+SPACE_VERSION = 2
+BATCH_CHOICES = [64, 128, 256]
 
 
 class JobError(RuntimeError):
@@ -37,8 +38,9 @@ def read_json(path, default=None):
     return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else default
 
 
-def sample_params(trial):
-    return {'optimizer': trial.suggest_categorical('optimizer', ['AdamW', 'SGD']),
+def sample_params(trial, fixed_batch=None):
+    return {'batch': trial.suggest_categorical('batch', [fixed_batch] if fixed_batch is not None else BATCH_CHOICES),
+            'optimizer': trial.suggest_categorical('optimizer', ['AdamW', 'SGD']),
             'lr0': trial.suggest_float('lr0', 1e-4, 1e-2, log=True),
             'lrf': trial.suggest_float('lrf', 0.01, 0.2, log=True),
             'momentum': trial.suggest_float('momentum', 0.85, 0.98),
@@ -247,7 +249,7 @@ def search_studies(args, root, initial, storage):
                                    sampler=optuna.samplers.TPESampler(seed=args.seed+index, n_startup_trials=3),
                                    pruner=optuna.pruners.NopPruner())
         if not study.get_trials():
-            study.enqueue_trial(BASELINE)
+            study.enqueue_trial({**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch']})
         studies[model] = study
     refresh_reports(root, studies)
 
@@ -289,7 +291,8 @@ def search_studies(args, root, initial, storage):
                 directory = root/'models'/Path(model).stem/f'trial_{number:04d}'
                 config = {**{k: getattr(args, k) for k in ('epochs', 'imgsz', 'batch', 'patience', 'seed', 'amp')},
                           'data': str(args.data), 'model': model, 'trial': number, 'trial_dir': str(directory),
-                          'initial_checkpoint': initial[model], 'params': sample_params(candidate)}
+                          'initial_checkpoint': initial[model], 'params': sample_params(candidate, args.batch)}
+                config['batch'] = config['params']['batch']
                 write_json(directory/'config.json', config)
             else:
                 continue
@@ -346,7 +349,8 @@ def main():
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--patience', type=int, default=20)
     p.add_argument('--imgsz', type=int, default=640)
-    p.add_argument('--batch', type=int, default=64)
+    p.add_argument('--batch', type=int, default=None,
+                   help='Fix training batch instead of searching the default choices 64/128/256')
     p.add_argument('--eval-batch', type=int, default=32)
     p.add_argument('--workers', type=int, default=4)
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
@@ -358,7 +362,7 @@ def main():
     args.data = args.data.expanduser().resolve()
     args.output = args.output.expanduser().resolve()
     args.weights_dir = args.weights_dir.expanduser().resolve()
-    if any(v < 1 for v in (args.trials, args.epochs, args.imgsz, args.batch, args.eval_batch)) or args.workers < 0 or args.patience < 0:
+    if any(v < 1 for v in (args.trials, args.epochs, args.imgsz, args.eval_batch)) or (args.batch is not None and args.batch < 1) or args.workers < 0 or args.patience < 0:
         p.error('Trials/epochs/imgsz/batches must be positive; workers/patience must be non-negative')
     if not (args.device == 'cpu' or args.device.isdecimal()):
         p.error('--device must be one GPU index or cpu')
@@ -367,9 +371,10 @@ def main():
         if args.dry_run:
             print(json.dumps({'models_in_order': MODELS, 'rounds': args.trials,
                               'total_trials': len(MODELS)*args.trials, 'max_epochs_per_trial': args.epochs,
-                              'batch': args.batch, 'eval_batch': args.eval_batch, 'workers': args.workers,
+                              'batch_choices': [args.batch] if args.batch is not None else BATCH_CHOICES,
+                              'eval_batch': args.eval_batch, 'workers': args.workers,
                               'selection_metric': 'validation mAP50-95', 'test_policy': args.test_policy,
-                              'output': str(args.output), 'baseline': BASELINE}, indent=2))
+                              'output': str(args.output), 'baseline': {**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch']}}, indent=2))
             return
         from filelock import FileLock, Timeout
         args.output.mkdir(parents=True, exist_ok=True)

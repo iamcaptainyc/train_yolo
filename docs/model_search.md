@@ -24,11 +24,11 @@ python search_yolo.py \
 # 正式搜索：5 轮、4 个模型，共 20 次训练，每次最多 100 epoch
 python search_yolo.py \
   --data yolo_datasets/animals-detection-images-dataset/data.yaml \
-  --output runs/animals_search --trials 5 --epochs 100 --patience 20 \
-  --batch 64 --eval-batch 32 --workers 4 --device 0
+  --output runs/animals_search_batch --trials 5 --epochs 100 --patience 20 \
+  --eval-batch 32 --workers 4 --device 0
 ```
 
-96GB 显存和 110 CPU 核并不保证容器 RAM 足够，因此默认固定 batch=64、workers=4，并关闭图片缓存。先检查资源再调高，不会自动尝试 batch=256/512 或 32 workers。`--eval-batch` 独立于训练 batch，避免测试阶段使用过大的 batch。脚本单卡串行执行，不会同时启动四个训练任务。
+96GB 显存和 110 CPU 核并不保证容器 RAM 足够，默认搜索 batch=64/128/256、workers=4，并关闭图片缓存。首个候选使用 batch=64，后续由 Optuna 选择。显式传入 `--batch 32` 等正整数会关闭 batch 搜索，固定所有候选的批大小。`--eval-batch` 独立于训练 batch，避免测试阶段使用过大的 batch。脚本单卡串行执行，不会同时启动四个训练任务。
 
 初始权重优先从 `--weights-dir`（默认 `weights/`）复制；缺失则使用 Ultralytics 官方下载器获取。首次保存到搜索目录的 `initial_weights/`，记录 SHA-256。每个新候选从这份固定的预训练权重开始，**不会从上一候选的 best.pt 接着微调**。只有同一中断候选才用自己的 last.pt 恢复。
 
@@ -40,6 +40,7 @@ python search_yolo.py \
 
 | 参数 | 范围 | 首个候选 |
 | --- | --- | --- |
+| batch | 64 / 128 / 256，分类采样 | 64 |
 | optimizer | AdamW / SGD | AdamW |
 | lr0 | 0.0001～0.01，对数采样 | 0.001 |
 | lrf | 0.01～0.2，对数采样 | 0.01 |
@@ -50,7 +51,7 @@ python search_yolo.py \
 | scale | 0.2～0.7 | 0.5 |
 | mosaic | 0.3～1.0 | 1.0 |
 
-显式使用优化器，避免 `optimizer=auto` 忽略建议的 lr0。训练轮数、batch、分辨率保持固定，保证候选比较条件一致。候选训练有 Ultralytics `patience` 早停；当前不使用 Optuna 的逐 epoch pruning。TPE 前三个候选是启动采样，之后参考已完成候选；5 个候选只是初步搜索，预算充足可以增加 `--trials`。
+显式使用优化器，避免 `optimizer=auto` 忽略建议的 lr0。训练轮数上限和分辨率保持固定；训练 batch 参与搜索，实际值保存到候选 config.json、Optuna、iterations.csv 和汇总结果。分类采样不保证有限次数内覆盖全部三个值。候选训练有 Ultralytics `patience` 早停；当前不使用 Optuna 的逐 epoch pruning。TPE 前三个候选是启动采样，之后参考已完成候选；5 个候选只是初步搜索，预算充足可以增加 `--trials`。
 
 训练以 Ultralytics 保存的 best.pt 为候选，然后显式重新评估验证集。Optuna 优化的是这个 checkpoint 的验证 mAP50-95，而非最后一个 epoch，也不一定是 results.csv 中单项 mAP 最高的那个 epoch（checkpoint 选择由所装 Ultralytics 的规则决定）。
 
@@ -59,7 +60,7 @@ python search_yolo.py \
 ## 输出
 
 ```text
-runs/animals_search/
+runs/animals_search_batch/
   run.json                         # 搜索配置和数据指纹，恢复时检查一致性
   optuna.sqlite3                   # 四个独立 study 的持久化记录
   iterations.csv                   # 所有候选的参数、验证/测试指标和状态
@@ -98,15 +99,17 @@ runs/animals_search/
 
 `--trials 5` 表示**每个模型累计目标五次尝试**，恢复时不会再额外执行五次；增加到 `--trials 10` 才会补充到十次。
 
-允许恢复时调整 trials、device、workers、eval-batch；已完成阶段保持原结果。更改 epochs、batch、imgsz、seed、patience、AMP、数据 YAML、初始权重目录或测试策略，需要使用新的输出目录。继续同一中断训练时，资源参数是否可覆盖仍由所安装的 Ultralytics 版本决定，实际以该阶段日志为准。需要公平测速时保持 eval-batch 一致。
+允许恢复时调整 trials、device、workers、eval-batch；已完成阶段保持原结果。更改 epochs、固定 batch 设置、imgsz、seed、patience、AMP、数据 YAML、初始权重目录或测试策略，需要使用新的输出目录。继续同一中断训练时，资源参数是否可覆盖仍由所安装的 Ultralytics 版本决定，实际以该阶段日志为准。需要公平测速时保持 eval-batch 一致。
+
+本次 batch 搜索将空间版本升级为 2，不能直接接续旧版固定 batch 的搜索目录；请使用新的 `--output`，旧结果保持保留。
 
 数据指纹包含 YAML 和转换器 report.json（如存在）的 SHA-256，没有逐张重新哈希数据集；搜索期间保持图片、标签和划分不变。初始权重固定为复制到搜索目录的版本，外部权重目录后来修改不会改变它。每阶段记录 Python、PyTorch 和 Ultralytics 版本，恢复时应尽量保持环境一致。建议参数随机种子按模型和候选编号派生，避免每次重启重复随机启动序列；浮点计算仍不保证跨硬件或库版本完全一致。
 
 ## 使用选出的模型
 
 ```bash
-python train.py --mode predict --model runs/animals_search/best/best_n.pt --source /你的新图片目录 --device 0 --name best_n_predict
-python train.py --mode predict --model runs/animals_search/best/best_s.pt --source /你的新图片目录 --device 0 --name best_s_predict
+python train.py --mode predict --model runs/animals_search_batch/best/best_n.pt --source /你的新图片目录 --device 0 --name best_n_predict
+python train.py --mode predict --model runs/animals_search_batch/best/best_s.pt --source /你的新图片目录 --device 0 --name best_s_predict
 ```
 
 本地验证使用真实 Optuna/SQLite 和模拟 GPU 进程边界，检查轮转、恢复、测试失败重试、配置隔离和验证集选优；没有替你在 AutoDL 上执行实际搜索或 GPU 训练。正式长搜索前先跑独立的 smoke 目录。
