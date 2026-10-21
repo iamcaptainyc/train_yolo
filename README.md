@@ -160,10 +160,10 @@ python prepare_dataset.py --source datasets/antoreepjana/animals-detection-image
 
 处理规则：
 
-- 保留原始 `test/`；默认从 `train/` 按类别近似分层划分 15% 为 `val/`，随机种子为 42。已有 `val/` 时原样保留。两个模型共用同一输出目录以获得相同划分。
+- 保留原始 `test/`；默认从 `train/` 按类别近似分层划分 15% 为 `val/`，随机种子为 42。生成验证集时保留每个训练类别至少一张训练图片；已有 `val/` 时原样保留。两个模型共用同一输出目录以获得相同划分。
 - 按图片内容 SHA-256 去重；同一 split 的相同文件合并标注。跨原始 split 的重复图片会报错，需先整理，避免评估泄漏。不会识别重新压缩、裁剪后的近似重复图。
 - 校验图片、缺失/空标签、非有限数、越界/退化框与 EXIF 方向。默认发现错误立即停止；可显式加 `--skip-invalid` 跳过有问题的整张图，错误记录保存在报告中。
-- 输出已存在时拒绝覆盖，请指定新目录。转换复制图片，需要额外磁盘空间；不会修改原始数据。
+- 输出已存在时拒绝覆盖，请指定新目录。默认 `--copy-mode auto` 优先硬链接图片（同一文件系统不重复占图片空间），不支持时回退复制。空间紧张时用 `--copy-mode hardlink`，无法硬链接则报错；需要独立副本用 `--copy-mode copy`。硬链接共享文件内容，原图及输出图片均应保持只读。实际方式记录在 `report.json` 的 `image_storage_modes`。
 
 输出：
 
@@ -177,6 +177,27 @@ datasets/animals_yolo/
 ```
 
 **开始训练前打开 `preview/` 检查框与类别，查看 `report.json` 的类别分布。** 小样本类别可能缺席验证集/测试集，见 `missing_classes`；多类别图的划分只是近似分层。
+
+### AutoDL 首轮训练
+
+已下载且使用默认自动命名目录时，直接执行：
+
+```bash
+git pull --ff-only
+python -m pip install -r requirements.txt
+python prepare_dataset.py --source datasets/antoreepjana/animals-detection-images-dataset --output datasets/animals_yolo --copy-mode hardlink
+```
+
+`--source` 应指向实际解压目录，脚本会自动查找内部的 train/test 层级；如果数据放在别处，仅替换该路径。上面的 hardlink 模式适合原始数据和输出均位于同一 AutoDL 数据盘的情况，不会为全部图片再占用一份空间。跨文件系统时改成 auto 或 copy，并确保足够空间。
+
+转换成功后查看 `preview/` 和 `report.json`，然后先跑 1 epoch 验证流程，再训练首版：
+
+```bash
+python train.py --data datasets/animals_yolo/data.yaml --model yolo11s.pt --epochs 1 --batch 8 --device 0 --workers 4 --name animals_smoke
+python train.py --data datasets/animals_yolo/data.yaml --model yolo11s.pt --epochs 50 --batch 8 --device 0 --workers 4 --name animals_v1
+```
+
+`yolo11s.pt` 若不在本地由 Ultralytics 获取；已有权重可传 `--model weights/yolo11s.pt`。batch=8 是起始配置，显存不足时减小。转换默认遇到坏图或异常标注会停止；确认要跳过时加 `--skip-invalid`，它会跳过整图并记入报告，不生成假负样本。转换期间显示图片校验/哈希和输出进度，尚未开始训练。
 
 ## 3. 训练 YOLO11 和 YOLO26
 

@@ -1,11 +1,14 @@
 import tempfile
+import errno
+import os
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from PIL import Image
 import yaml
 
-from prepare_dataset import collect, parse_annotation, prepare
+from prepare_dataset import assign_validation, collect, parse_annotation, prepare
 
 
 class ConversionTests(unittest.TestCase):
@@ -69,6 +72,28 @@ class ConversionTests(unittest.TestCase):
             records, issues = collect(root, skip_invalid=True)
             self.assertEqual(records, [])
             self.assertEqual(len(issues), 1)
+
+    def test_validation_retains_rare_secondary_class_in_train(self):
+        records = [{'id': str(i), 'split': 'train', 'boxes': {('cat', .5, .5, .2, .2)}} for i in range(5)]
+        records[0]['boxes'].add(('dog', .5, .5, .1, .1))
+        assign_validation(records, .8, 42)
+        self.assertEqual(records[0]['split'], 'train')
+        self.assertTrue(any(r['split']=='val' for r in records))
+
+    def test_auto_hardlinks_and_cross_device_fallback_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'raw'
+            for split, colors in [('train', ['red','green','blue']), ('test',['white'])]:
+                for i, color in enumerate(colors):
+                    self.image(root, split, 'Cat', str(i), color, 'Cat 0 0 20 20')
+            first = prepare(root, Path(tmp)/'linked', preview_count=0, copy_mode='hardlink')
+            self.assertEqual(first['image_storage_modes'], {'hardlink':4})
+            source = Path(first['manifest'][0]['sources'][0])
+            target = next((Path(tmp)/'linked/images').rglob(first['manifest'][0]['id']+'.png'))
+            self.assertTrue(os.path.samefile(source,target))
+            with patch('prepare_dataset.os.link', side_effect=OSError(errno.EXDEV, 'cross-device link')):
+                second = prepare(root, Path(tmp)/'copied', preview_count=0)
+            self.assertEqual(second['image_storage_modes'], {'copy':4})
 
 
 if __name__ == '__main__':

@@ -6,12 +6,14 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import shutil
 
 from PIL import Image, ImageDraw
 import yaml
+from tqdm import tqdm
 
 IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
@@ -55,7 +57,7 @@ def locate_root(source: Path) -> Path:
     return candidates[0]
 
 
-def collect(source: Path, skip_invalid: bool = False):
+def collect(source: Path, skip_invalid: bool = False, show_progress=False):
     records, issues = {}, []
     label_directories = {}
     for split in ('train', 'val', 'test'):
@@ -65,7 +67,7 @@ def collect(source: Path, skip_invalid: bool = False):
         images = sorted(p for p in directory.rglob('*') if p.suffix.lower() in IMAGE_SUFFIXES)
         if not images:
             raise ValueError(f'No images found in {directory}')
-        for image in images:
+        for image in tqdm(images, desc=f'Check {split}', unit='img', disable=not show_progress):
             # The original archive stores class/image.jpg and class/Label/image.txt.
             if image.parent not in label_directories:
                 labels = [p for p in image.parent.iterdir()
@@ -113,12 +115,22 @@ def assign_validation(records, fraction: float, seed: int):
             primary = min(box[0] for box in record['boxes'])
             groups[primary].append(record)
     rng = random.Random(seed)
+    remaining = Counter(name for r in records if r['split'] == 'train'
+                        for name in {box[0] for box in r['boxes']})
     for name in sorted(groups):
         group = sorted(groups[name], key=lambda r: r['id'])
         rng.shuffle(group)
         count = min(len(group)-1, max(1, round(len(group)*fraction))) if len(group) > 1 else 0
-        for record in group[:count]:
+        moved = 0
+        for record in group:
+            if moved >= count:
+                break
+            labels = {box[0] for box in record['boxes']}
+            if any(remaining[name] <= 1 for name in labels):
+                continue
             record['split'] = 'val'
+            remaining.subtract(labels)
+            moved += 1
     if not any(r['split'] == 'val' for r in records):
         raise ValueError('Too few training images to create validation; provide a val/ split')
 
@@ -143,7 +155,11 @@ def preview(records, names, output: Path, limit: int):
 
 
 def prepare(source: Path, output: Path, val_ratio=0.15, seed=42,
-            skip_invalid=False, preview_count=8):
+            skip_invalid=False, preview_count=8, copy_mode='auto'):
+    if copy_mode not in ('auto', 'copy', 'hardlink'):
+        raise ValueError('copy_mode must be auto, copy or hardlink')
+    if preview_count < 0:
+        raise ValueError('--preview-count must be >= 0')
     source, output = source.resolve(), output.resolve()
     if not source.is_dir():
         raise ValueError(f'Source directory does not exist: {source}')
@@ -152,7 +168,8 @@ def prepare(source: Path, output: Path, val_ratio=0.15, seed=42,
     if output.exists():
         raise ValueError(f'Output already exists: {output}. Choose a new output directory.')
     actual = locate_root(source)
-    records, issues = collect(actual, skip_invalid)
+    print(f'Input dataset: {actual}', flush=True)
+    records, issues = collect(actual, skip_invalid, show_progress=True)
     assign_validation(records, val_ratio, seed)
     counts = Counter(r['split'] for r in records)
     if any(counts[s] == 0 for s in ('train', 'val', 'test')):
@@ -166,12 +183,25 @@ def prepare(source: Path, output: Path, val_ratio=0.15, seed=42,
     output.mkdir(parents=True)
     distribution = {s: Counter() for s in ('train', 'val', 'test')}
     manifest = []
-    for record in records:
+    storage_modes = Counter()
+    for record in tqdm(records, desc='Write YOLO', unit='img'):
         split, digest = record['split'], record['id']
         image_dir, label_dir = output / 'images' / split, output / 'labels' / split
         image_dir.mkdir(parents=True, exist_ok=True)
         label_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(record['image'], image_dir / (digest + record['image'].suffix.lower()))
+        target = image_dir / (digest + record['image'].suffix.lower())
+        mode = copy_mode
+        if mode in ('auto', 'hardlink'):
+            try:
+                os.link(record['image'], target)
+                mode = 'hardlink'
+            except OSError:
+                if copy_mode == 'hardlink':
+                    raise
+                mode = 'copy'
+        if mode == 'copy':
+            shutil.copy2(record['image'], target)
+        storage_modes[mode] += 1
         lines = []
         for name, *coords in sorted(record['boxes']):
             lines.append(f'{ids[name]} ' + ' '.join(f'{v:.8f}' for v in coords))
@@ -183,7 +213,7 @@ def prepare(source: Path, output: Path, val_ratio=0.15, seed=42,
     (output / 'data.yaml').write_text(yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding='utf-8')
     report = {'source': str(actual), 'seed': seed, 'val_ratio': val_ratio,
               'images': dict(counts), 'classes': names, 'boxes_per_class': distribution,
-              'issues': issues, 'manifest': manifest,
+              'issues': issues, 'manifest': manifest, 'image_storage_modes': dict(storage_modes),
               'missing_classes': {s: sorted(set(names)-set(distribution[s])) for s in distribution}}
     (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     preview(records, names, output, preview_count)
@@ -201,9 +231,11 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--skip-invalid', action='store_true', help='Skip whole images with invalid/missing labels; log in report.json')
     parser.add_argument('--preview-count', type=int, default=8, help='Preview images per split')
+    parser.add_argument('--copy-mode', choices=['auto', 'copy', 'hardlink'], default='auto',
+                        help='auto: hardlink images when supported, otherwise copy; hardlink fails instead of copying')
     args = parser.parse_args()
     try:
-        prepare(args.source, args.output, args.val_ratio, args.seed, args.skip_invalid, args.preview_count)
+        prepare(args.source, args.output, args.val_ratio, args.seed, args.skip_invalid, args.preview_count, args.copy_mode)
     except (ValueError, OSError) as exc:
         parser.exit(2, f'Error: {exc}\n')
 
