@@ -68,4 +68,5 @@ def main():
 
 if __name__ == '__main__':
     # Required for Windows multiprocessing data loaders.
-    main()
+    from training_guard import entrypoint
+    raise SystemExit(entrypoint(main, __file__))

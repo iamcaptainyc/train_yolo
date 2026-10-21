@@ -16,6 +16,7 @@ train_yolo/
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
   prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
+  training_guard.py        # Linux 独立进程组守护与残留 DataLoader 回收
   requirements.txt         # Python 依赖
   tests/
     test_prepare_dataset.py
@@ -241,6 +242,22 @@ python train.py --resume runs/animals/yolo11s/weights/last.pt --device 0
 ```
 
 恢复时沿用检查点记录的训练配置。如果训练已结束、想追加一轮微调，用 `--model .../last.pt --epochs 50 --name finetune` 新开训练。
+
+### Linux 训练异常退出保护
+
+在 Linux/AutoDL 中，`python train.py ...` 默认由一个不加载 PyTorch/CUDA 的轻量守护进程启动真正的训练进程，参数保持原样。每次运行创建独立进程组。训练正常完成、异常退出或收到 SIGKILL 后，只要守护仍存活，就会终止本组尚存的 DataLoader 等子进程；先 SIGTERM，等待后对未退出进程使用 SIGKILL。Ctrl+C/SIGTERM 转发给本次任务，超时后强制停止。Linux subreaper 用于回收被训练主进程遗留的后代进程，避免交给容器 PID 1 后长期残留。
+
+这不会按名称批量杀其他 Python，也不会删除数据集或已保存权重。Windows 仍使用原直接运行方式；通过其他 Python 程序导入并直接调用 `train.main()` 时也不经过命令行守护。自行脱离本次进程组的外部程序不在清理范围。
+
+`Killed` 不是足以判定显存不足的错误信息，可能是主机/容器 RAM 限制或外部 SIGKILL。96GB GPU 显存、宿主机 free 显示的总内存、容器可用内存是不同限制；worker 数量需要结合容器内存额度，不能只根据 CPU 核数增大。排查时降低 batch/workers，并检查 cgroup memory.events 和平台内存统计。
+
+**若守护也被强杀、容器整体被杀或进程卡在不可中断内核 I/O，脚本无法保证清理。** 需要平台/宿主机层面的进程或 cgroup 管理。已有旧残留不会由新版本按名称自动清除，应先确认归属再清理，然后更新代码重新启动训练。新训练会打印 `[Guard] Worker PID/process group: ...`，被 SIGKILL 时返回退出码 137，并打印 RAM/外部终止排查提示，不将原因直接判为 CUDA OOM。
+
+Linux 上可单独验证守护行为（不需要 CUDA 或模型）：
+
+```bash
+python -m unittest discover -s tests -p 'test_training_guard.py' -v
+```
 
 ## 4. 测试集评估与预测
 
