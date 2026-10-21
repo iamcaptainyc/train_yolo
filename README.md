@@ -8,6 +8,7 @@
 train_yolo/
   download_kaggle.py       # 通用 Kaggle Datasets 下载
   download_lila.py          # LILA AWS / Azure / GCP 下载
+  download_huggingface.py   # HF 数据集直接落盘、重试及 SnakeAid 本地 YAML
   lila_selection.py        # 有效框筛选、明确空图抽样与图片续传
   requirements-lila.txt    # 仅下载 LILA 所需 Python 依赖
   kaggle_resume.py          # 整包 Range 续传与校验
@@ -26,6 +27,7 @@ train_yolo/
   docs/lila.md             # LILA 多源下载说明
   docs/lila_annotation_audit.md # 五数据集实际标注审计
   docs/lila_yolo.md         # LILA 类别转换及防泄漏划分
+  docs/snake_data.md        # SnakeAid 下载与 Open Images 有框蛇筛选
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
