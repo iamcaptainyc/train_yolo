@@ -1,6 +1,6 @@
 # LILA 合并为 YOLO 并按相机/序列划分
 
-需要自动解决父子类别混淆、原始类别全量统计与逐框审计时，请使用新的 [审计合并入口](lila_audited_merge.md)。下文旧入口仅做名称合并，仍保留不同粒度类别。
+需要自动解决父子类别混淆、原始类别全量统计与逐框审计时，请使用新的 [审计合并入口](lila_audited_merge.md)。新审计入口默认分组划分 90%/5%/5% 的 train/val/test。下文旧入口仅做名称合并，仍保留不同粒度类别和原默认 train/val；也可显式添加 `--val-fraction 0.05 --test-fraction 0.05` 生成三组。
 
 `prepare_lila.py` 读取五个数据集的 `selection/selected_annotations.json`，统一类别、转换归一化检测框、生成可直接传给 `train.py` 的 `data.yaml`。不会使用筛选清单外的图片。
 
@@ -20,7 +20,7 @@ python prepare_lila.py --source datasets/lila --output datasets/lila_yolo --val-
 python train.py --data datasets/lila_yolo/data.yaml --model weights/yolo11s.pt --epochs 100 --batch 8 --device 0
 python train.py --data datasets/lila_yolo/data.yaml --model weights/yolo26s.pt --epochs 100 --batch 8 --device 0
 
-# 本转换器只划分 train/val，没有独立 test，评估时显式指定 val
+# 旧入口默认仅划分 train/val；未指定 --test-fraction 时，评估使用 val
 python train.py --mode val --split val --data datasets/lila_yolo/data.yaml --model runs/animals/yolo11s/weights/best.pt --device 0
 ```
 

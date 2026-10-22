@@ -12,10 +12,12 @@ python -m pip install -r requirements-lila.txt PyYAML
 
 python prepare_lila_audited.py \
   --source datasets/lila \
-  --output datasets/lila_yolo_audited \
-  --val-fraction 0.2 --seed 42 \
-  --copy-mode auto --previews-per-class 1
+  --output datasets/lila_yolo_90505 \
+  --val-fraction 0.05 --test-fraction 0.05 --seed 42 \
+  --copy-mode hardlink --previews-per-class 1
 ```
+
+审计入口默认按 **train/val/test = 90%/5%/5%** 的目标比例联合分配完整连通组。`--val-fraction`、`--test-fraction` 分别指定验证和测试比例，训练比例为余数；两者之和必须小于 1。
 
 默认就是下面五个数据集，无需查名字或再传网址：
 
@@ -29,7 +31,7 @@ python prepare_lila_audited.py \
 
 每个目录需要保留下载脚本产生的 `images/`、`annotations/`、`selection/selected_annotations.json` 和 `selection/selection_report.json`。无需重新下载图片。程序会读取原始标注来核对下载清单，不能仅用筛选后的标注声称统计了“原始全集”。缺少这些文件时会停止。
 
-默认优先硬链接，跨文件系统则复制；同盘硬链接不再占用一份图片数据空间，但输入和输出共享内容，运行后勿修改原图。`--copy-mode copy` 需要完整图片副本空间。统计去重使用临时 SQLite；图片校验和输出哈希会全量读取图片，耗时与真实 I/O 和解码速度有关，各阶段显示进度。
+脚本默认 `auto` 优先硬链接，跨文件系统则复制；上面的命令显式使用 `hardlink`，不支持时直接报错，确保不会复制图片。硬链接不再占用一份图片数据空间，但输入和输出共享内容，运行后勿修改原图。`--copy-mode copy` 需要完整图片副本空间。统计去重使用临时 SQLite；图片校验和输出哈希会全量读取图片，耗时与真实 I/O 和解码速度有关，各阶段显示进度。
 
 输出目录必须为空。中断后源数据不变，但部分输出不能用于训练，修复问题后换一个新的 `--output`。只有全部审计通过，才写入最终 `data.yaml`；不是可断点恢复的转换任务。
 
@@ -84,13 +86,13 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 
 ## Markdown 报告内容
 
-运行成功后打开 `datasets/lila_yolo_audited/AUDIT_REPORT.md`：
+运行成功后打开 `datasets/lila_yolo_90505/AUDIT_REPORT.md`：
 
 - 五数据集原始图片/标注/框总数、筛选正负样本数、整图排除数、最终图片和框数。
 - 每个原始 metadata 类别的原 ID、名称、标注记录数、去重图片数、框记录数。
 - 每个原始 bbox 类别的框数与图片数、筛选框数、保留原框数、对应最终类及原因。
-- 合并后连续 YOLO ID、科学分类、总/train/val 框数与图片数、全部原始来源类别。
-- 相机/序列/连通分量/图像 SHA-256 的跨集交集检查、缺席验证类别、保守留训练的数据集。
+- 合并后连续 YOLO ID、科学分类、总/train/val/test 框数与图片数、全部原始来源类别。
+- 三组的目标与实际比例、各数据集在三组的图片/负样本/框数，以及 train↔val、train↔test、val↔test 的相机/序列/连通分量/图像 SHA-256 交集检查、缺席类别、保守留训练的数据集。
 - 全量校验数量、最大像素误差、裁剪量、重复框、重复图片记录数、唯一图片 SHA-256 数与证据框图。
 
 所有计数来自**本次服务器实际文件**，不是先填一个历史数量。图片多标签时各类图片数相加可能大于总图片数。字节相同且标注一致的图片保留为独立记录，但连接到同一划分，避免跨集精确重复；不会检测不同编码/相似帧的视觉重复。
@@ -98,10 +100,10 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 ## 输出文件
 
 ```text
-datasets/lila_yolo_audited/
+datasets/lila_yolo_90505/
   data.yaml                       # 所有审计成功后才生成
-  images/{train,val}/<dataset>/...
-  labels/{train,val}/<dataset>/...
+  images/{train,val,test}/<dataset>/...
+  labels/{train,val,test}/<dataset>/...
   AUDIT_REPORT.md                  # 详细类别统计、合并规则、审计数值与框图
   previews/<dataset>/*.jpg         # 原框/实际 YOLO 框并排图
   preview_index.json
@@ -114,10 +116,14 @@ datasets/lila_yolo_audited/
   report.json
 ```
 
-程序只新建 train/val，暂不生成独立 test。因此评估时用 `--split val`；需要独立测试集的四模型搜索脚本不可直接使用此 YAML。
+程序现在生成 train、val、test 和包含三个路径的 `data.yaml`，可直接用于四模型搜索。建议 `--test-policy final`，仅在模型和参数确定后评估测试集，选优仍使用验证集 mAP50-95。
+
+90%/5%/5% 是图片数量的目标，不能保证精确命中：相机、序列和重复图片的连通组永不拆开，缺可靠分组的数据集整体留训练，所有类别都至少保留训练样本。先为 val/test 联合预留独立正样本组，再按整体与各数据集目标分配剩余完整组；可用组不足或无法同时保留训练类别时会失败，不退回随机拆帧。报告列出实际比例，罕见类不保证同时出现在 val 和 test。
+
+划分发生变化，需要选择新的输出目录；不要混用旧版两组的 YAML、标签或分组清单。
 
 ```bash
-python train.py --data datasets/lila_yolo_audited/data.yaml \
+python train.py --data datasets/lila_yolo_90505/data.yaml \
   --model weights/yolo11s.pt --epochs 100 --batch 64 --workers 4 --device 0
 ```
 
@@ -135,3 +141,10 @@ ENA24 无可靠分组元数据时整体留在 train；其他数据若也有缺�
 ```
 
 保存为 `original_files.json` 后添加 `--original-files original_files.json`，其他未覆盖数据集仍使用下载报告中的路径。
+
+最终测试命令（权重路径替换为你的最佳模型）：
+
+```bash
+python train.py --mode val --split test --data datasets/lila_yolo_90505/data.yaml \
+  --model /你的模型/best.pt --device 0
+```

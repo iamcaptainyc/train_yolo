@@ -5,6 +5,7 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import json
+from itertools import combinations
 import math
 import os
 from pathlib import Path
@@ -151,8 +152,54 @@ def yolo_boxes(record, width, height, class_ids):
     return sorted(labels), clipped
 
 
-def split_records(records, val_fraction, seed):
-    """Connected components keep cameras, sequences and identical files together."""
+def split_fractions(val_fraction, test_fraction=0):
+    if (
+        not all(math.isfinite(v) for v in (val_fraction, test_fraction))
+        or not 0 < val_fraction < 1
+        or test_fraction < 0
+        or val_fraction + test_fraction >= 1
+    ):
+        raise ValueError(
+            'val/test fractions must be finite, val > 0, test >= 0 and val+test < 1'
+        )
+    fractions = {'train': 1 - (val_fraction + test_fraction), 'val': val_fraction}
+    if test_fraction:
+        fractions['test'] = test_fraction
+    return fractions
+
+
+def split_overlap(records):
+    """Check every pair of splits, including dataset-scoped cameras and sequences."""
+    splits = [
+        s for s in ('train', 'val', 'test') if any(r['split'] == s for r in records)
+    ]
+    keys = {
+        s: {
+            field: set()
+            for field in ('group', 'camera', 'sequence', 'component', 'digest')
+        }
+        for s in splits
+    }
+    for record in records:
+        current = keys[record['split']]
+        for field in ('group', 'component', 'digest'):
+            if record.get(field) is not None:
+                current[field].add(record[field])
+        for field, source in (('camera', 'location'), ('sequence', 'sequence')):
+            if record.get(source) is not None:
+                current[field].add((record['dataset'], record[source]))
+    return {
+        a
+        + '_vs_'
+        + b: {field: len(keys[a][field] & keys[b][field]) for field in keys[a]}
+        for a, b in combinations(splits, 2)
+    }
+
+
+def split_records(records, val_fraction, seed, test_fraction=0):
+    """Allocate whole connected groups jointly; never exhaust a training class."""
+    fractions = split_fractions(val_fraction, test_fraction)
+    holdouts = [s for s in fractions if s != 'train']
     union, seen = Union(len(records)), {}
     for index, r in enumerate(records):
         keys = [('group', r['group'])]
@@ -168,46 +215,121 @@ def split_records(records, val_fraction, seed):
     components = defaultdict(list)
     for index in range(len(records)):
         components[union.find(index)].append(index)
-    eligible = [indices for indices in components.values() if not any(records[i]['fallback'] for i in indices)]
+    eligible = []
+    for indices in components.values():
+        if not any(records[i]['fallback'] for i in indices):
+            eligible.append(
+                {
+                    'indices': indices,
+                    'datasets': Counter(records[i]['dataset'] for i in indices),
+                    'classes': Counter(
+                        label[0]
+                        for i in indices
+                        for label in records[i].get('labels', [])
+                    ),
+                    'positive': any(records[i].get('labels', [True]) for i in indices),
+                }
+            )
     if not eligible:
-        raise ValueError('No reliable independent camera/sequence groups available for validation')
+        raise ValueError(
+            'No reliable independent camera/sequence groups available for holdouts'
+        )
     rng = random.Random(seed)
     rng.shuffle(eligible)
-    # Approximate per-dataset proportions; never divide a component to hit a target.
     totals = Counter(r['dataset'] for r in records)
-    validation, counts, validation_classes = set(), Counter(), Counter()
     all_classes = Counter(label[0] for r in records for label in r.get('labels', []))
+    withheld_classes, withheld_count = Counter(), 0
+    allocations, counts = {s: set() for s in holdouts}, {s: Counter() for s in holdouts}
 
-    def class_counts(component):
-        return Counter(label[0] for i in component for label in records[i].get('labels', []))
+    def can_withhold(component):
+        return withheld_count + len(component['indices']) < len(records) and all(
+            withheld_classes[k] + n < all_classes[k]
+            for k, n in component['classes'].items()
+        )
 
-    for component in eligible:
-        contribution = Counter(records[i]['dataset'] for i in component)
-        classes = class_counts(component)
-        if any(validation_classes[k]+n >= all_classes[k] for k, n in classes.items()):
-            continue  # A class confined to one camera must retain its camera in train.
-        before = sum(abs(counts[d]-totals[d]*val_fraction)/totals[d] for d in contribution)
-        after = sum(abs(counts[d]+n-totals[d]*val_fraction)/totals[d] for d, n in contribution.items())
-        if after < before and len(validation)+len(component) < len(records):
-            validation.update(component)
-            counts.update(contribution)
-            validation_classes.update(classes)
-    if not validation:
-        candidates = [c for c in eligible if len(c) < len(records) and
-                      all(n < all_classes[k] for k, n in class_counts(c).items())]
-        if not candidates:
-            raise ValueError('Only one connected group or no split preserving training classes; cannot create disjoint train/val')
-        validation.update(min(candidates, key=lambda c: abs(len(c)-len(records)*val_fraction)))
+    # Seed a positive group for every holdout, jointly, so filling val cannot starve test.
+    positive = sorted(
+        (i for i, c in enumerate(eligible) if c['positive']),
+        key=lambda i: len(eligible[i]['indices']),
+    )
+    reserved = []
+
+    def reserve(start=0):
+        nonlocal withheld_count
+        if len(reserved) == len(holdouts):
+            return True
+        for position in range(start, len(positive)):
+            i = positive[position]
+            component = eligible[i]
+            if not can_withhold(component):
+                continue
+            reserved.append(i)
+            withheld_classes.update(component['classes'])
+            withheld_count += len(component['indices'])
+            if reserve(position + 1):
+                return True
+            withheld_count -= len(component['indices'])
+            withheld_classes.subtract(component['classes'])
+            reserved.pop()
+        return False
+
+    if not reserve():
+        raise ValueError(
+            'Only one connected group or insufficient independent positive groups preserving training classes; '
+            'cannot create disjoint ' + '/'.join(fractions)
+        )
+    for split, index in zip(holdouts, reserved):
+        allocations[split].update(eligible[index]['indices'])
+        counts[split].update(eligible[index]['datasets'])
+
+    def cost(split, component=None):
+        contribution = component['datasets'] if component else {}
+        amount = len(component['indices']) if component else 0
+        global_error = abs(
+            len(allocations[split]) + amount - len(records) * fractions[split]
+        ) / len(records)
+        dataset_error = sum(
+            abs(counts[split][d] + contribution.get(d, 0) - n * fractions[split]) / n
+            for d, n in totals.items()
+        ) / len(totals)
+        return global_error + 0.25 * dataset_error
+
+    for index, component in enumerate(eligible):
+        if index in reserved or not can_withhold(component):
+            continue
+        improvements = [
+            (cost(split) - cost(split, component), split)
+            for split in rng.sample(holdouts, len(holdouts))
+        ]
+        gain, split = max(improvements, key=lambda entry: entry[0])
+        if gain > 1e-12:
+            allocations[split].update(component['indices'])
+            counts[split].update(component['datasets'])
+            withheld_classes.update(component['classes'])
+            withheld_count += len(component['indices'])
+    assigned = {i: split for split, indices in allocations.items() for i in indices}
     for index, record in enumerate(records):
-        record['split'] = 'val' if index in validation else 'train'
+        record['split'] = assigned.get(index, 'train')
         record['component'] = union.find(index)
     return len(components)
 
 
-def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mode='auto',
-            plan_only=False, class_map=None, group_map=None, audit_hook=None, strict_boxes=False):
-    if not math.isfinite(val_fraction) or not 0 < val_fraction < 1:
-        raise ValueError('--val-fraction must be in (0, 1)')
+def prepare(
+    source,
+    output,
+    *,
+    datasets=None,
+    val_fraction=0.2,
+    seed=42,
+    copy_mode='auto',
+    plan_only=False,
+    class_map=None,
+    group_map=None,
+    audit_hook=None,
+    strict_boxes=False,
+    test_fraction=0,
+):
+    fractions = split_fractions(val_fraction, test_fraction)
     source, output = Path(source).resolve(), Path(output).resolve()
     if source == output or source in output.parents or output in source.parents:
         raise ValueError('Input and output directories must not contain each other')
@@ -250,7 +372,10 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
                 missing.append(f'{r["dataset"]}/{r["name"]}: {exc}')
     if missing:
         raise ValueError('Input files or annotations invalid; finish downloads before conversion. First issues:\n'+'\n'.join(missing))
-    components = split_records(records, val_fraction, seed)
+    components = split_records(records, val_fraction, seed, test_fraction)
+    overlaps = split_overlap(records)
+    if any(n for pair in overlaps.values() for n in pair.values()):
+        raise ValueError(f'Cross-split grouping overlap: {overlaps}')
     # Identical image bytes with differing labels need manual review, even within one split.
     duplicates = {}
     for r in records:
@@ -259,17 +384,26 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
             if digest in duplicates and duplicates[digest] != r['labels']:
                 raise ValueError(f'Identical image with conflicting annotations: {r["dataset"]}/{r["name"]}')
             duplicates[digest] = r['labels']
-    stats = {split: {'images': 0, 'negative_images': 0, 'boxes': Counter(), 'datasets': Counter()} for split in ('train', 'val')}
+    stats = {split: {'images': 0, 'negative_images': 0, 'boxes': Counter(), 'datasets': Counter()} for split in fractions}
+    dataset_stats = {d: {s: {'images': 0, 'negative_images': 0, 'boxes': 0} for s in stats} for d in sorted(datasets or DEFAULT_DATASETS)}
     for r in records:
         s = stats[r['split']]
         s['images'] += 1
         s['negative_images'] += r['role'] == 'negative'
         s['datasets'][r['dataset']] += 1
         s['boxes'].update(names[label[0]] for label in r['labels'])
+        ds = dataset_stats[r['dataset']][r['split']]
+        ds['images'] += 1
+        ds['negative_images'] += r['role'] == 'negative'
+        ds['boxes'] += len(r['labels'])
     if not all(stats[s]['boxes'] for s in stats):
-        raise ValueError('Train and val must both contain positive boxes; adjust grouping or validation fraction')
+        raise ValueError('Every split must contain positive boxes; adjust grouping or split fractions')
     report = {'source': str(source), 'seed': seed, 'requested_val_fraction': val_fraction,
               'actual_val_fraction': stats['val']['images']/len(records), 'groups': components,
+              'requested_test_fraction': test_fraction, 'requested_split_fractions': fractions,
+              'actual_split_fractions': {s: stats[s]['images']/len(records) for s in stats},
+              'cross_split_overlap': overlaps, 'dataset_split_stats': dataset_stats,
+              'split_groups': {s: len({r['component'] for r in records if r['split'] == s}) for s in stats},
               'train_only_datasets_missing_group_info': fallback, 'excluded_images': skipped,
               'classes': names, 'stats': stats, 'clipped_boxes_within_one_pixel': clipped,
               'plan_only': plan_only, 'image_files_verified': not plan_only,
@@ -311,9 +445,9 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
             audit_hook(records, mapping, report, output)
             (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
         (output/'data.yaml').write_text(yaml.safe_dump({'path': output.as_posix(), 'train': 'images/train',
-            'val': 'images/val', 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True), encoding='utf-8')
-    print(f'{len(records):,} images; {len(names)} classes; {components} disjoint groups; '
-          f'train={stats["train"]["images"]:,}, val={stats["val"]["images"]:,}; plan_only={plan_only}')
+            **{s: 'images/'+s for s in stats if s != 'train'}, 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True), encoding='utf-8')
+    counts = ', '.join(f'{s}={stats[s]["images"]:,}' for s in stats)
+    print(f'{len(records):,} images; {len(names)} classes; {components} disjoint groups; {counts}; plan_only={plan_only}')
     return report
 
 
@@ -323,6 +457,7 @@ def main():
     p.add_argument('--output', type=Path, default=Path('datasets/lila_yolo'))
     p.add_argument('--datasets', nargs='+', default=DEFAULT_DATASETS)
     p.add_argument('--val-fraction', type=float, default=0.2)
+    p.add_argument('--test-fraction', type=float, default=0, help='Optional independent test split; use 0.05 with --val-fraction 0.05 for 90/5/5')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--copy-mode', choices=['auto', 'copy', 'hardlink'], default='auto')
     p.add_argument('--plan-only', action='store_true', help='Check metadata and plan splits without image I/O or training YAML')
@@ -337,7 +472,7 @@ def main():
             if overrides[key] is not None and not isinstance(overrides[key], dict):
                 raise ValueError(f'--{key.replace("_", "-")} must contain a JSON object')
         prepare(args.source, args.output, datasets=args.datasets, val_fraction=args.val_fraction,
-                seed=args.seed, copy_mode=args.copy_mode, plan_only=args.plan_only, **overrides)
+                seed=args.seed, copy_mode=args.copy_mode, plan_only=args.plan_only, test_fraction=args.test_fraction, **overrides)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         p.exit(1, f'Error: {exc}\n')
 

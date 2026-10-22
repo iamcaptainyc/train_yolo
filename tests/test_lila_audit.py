@@ -7,6 +7,7 @@ import zipfile
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw
+import yaml
 
 from lila_audit import DATASET_NAMES, TAXONOMY, inspect_sources, taxonomy_mapping
 from prepare_lila_audited import merge, make_auditor
@@ -107,7 +108,16 @@ class AuditedLilaTests(unittest.TestCase):
                     self.assertEqual(row['boxes'], [])
             self.assertEqual(
                 report['audit']['cross_split_overlap'],
-                {'group': 0, 'component': 0, 'digest': 0, 'sequence': 0},
+                {
+                    pair: {
+                        'group': 0,
+                        'camera': 0,
+                        'component': 0,
+                        'digest': 0,
+                        'sequence': 0,
+                    }
+                    for pair in ('train_vs_val', 'train_vs_test', 'val_vs_test')
+                },
             )
             text = (root / 'out/AUDIT_REPORT.md').read_text(encoding='utf-8')
             for name in ('opossum', 'american crow', 'class:aves', 'bbox', '22'):
@@ -120,6 +130,69 @@ class AuditedLilaTests(unittest.TestCase):
             for item in previews:
                 with Image.open(root / 'out' / item['preview']) as image:
                     self.assertEqual(image.size, (2012, 805))
+            config = yaml.safe_load((root / 'out/data.yaml').read_text())
+            self.assertEqual(config['test'], 'images/test')
+            self.assertEqual(
+                report['requested_split_fractions'],
+                {'train': 0.9, 'val': 0.05, 'test': 0.05},
+            )
+            self.assertEqual({r['split'] for r in rows}, {'train', 'val', 'test'})
+            self.assertEqual({p['split'] for p in previews}, {'train', 'val', 'test'})
+            for name in report['classes']:
+                self.assertEqual(
+                    sum(
+                        report['stats'][split]['boxes'][name]
+                        for split in report['stats']
+                    ),
+                    sum(
+                        box['class_name'] == name
+                        for row in rows
+                        for box in row['boxes']
+                    ),
+                )
+            for split in ('train', 'val', 'test'):
+                self.assertEqual(
+                    report['stats'][split]['images'],
+                    sum(r['split'] == split for r in rows),
+                )
+                self.assertEqual(
+                    sum(
+                        report['dataset_split_stats'][d][split]['images']
+                        for d in report['dataset_split_stats']
+                    ),
+                    report['stats'][split]['images'],
+                )
+            for expected in ('test 框', 'test 图片', 'val_vs_test', '90.00%', '5.00%'):
+                self.assertIn(expected, text)
+
+    def test_fully_excluded_dataset_still_has_zero_three_way_statistics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture(root / 'source', 'caltech-camera-traps', ['opossum'])
+            _, selected = fixture(root / 'source', 'ena24', ['american crow'])
+            doc = json.loads(selected.read_text())
+            doc['images'] = [
+                image
+                for image in doc['images']
+                if image['selection_role'] == 'positive'
+            ]
+            selected.write_text(json.dumps(doc))
+            report = merge(
+                root / 'source',
+                root / 'out',
+                datasets=['caltech-camera-traps', 'ena24'],
+                copy_mode='copy',
+                exclusions=['ena24:4'],
+            )
+            self.assertEqual(
+                report['dataset_split_stats']['ena24'],
+                {
+                    split: {'images': 0, 'negative_images': 0, 'boxes': 0}
+                    for split in ('train', 'val', 'test')
+                },
+            )
+            self.assertEqual(report['audit']['excluded_images'], 11)
+            self.assertTrue((root / 'out/AUDIT_REPORT.md').is_file())
             self.assertTrue((root / 'out/data.yaml').is_file())
 
     def test_parent_species_conflicts_and_overly_broad_classes(self):

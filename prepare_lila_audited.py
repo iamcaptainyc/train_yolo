@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 from tqdm import tqdm
 
 from lila_audit import TAXONOMY, inspect_sources, sha256, taxonomy_mapping
-from prepare_lila import DEFAULT_DATASETS, prepare
+from prepare_lila import DEFAULT_DATASETS, prepare, split_fractions, split_overlap
 from lila_selection import items
 
 
@@ -207,6 +207,7 @@ def table(headers, rows):
 
 
 def write_markdown(output, inventories, details, report, audit, previews, retained):
+    splits = tuple(report['stats'])
     lines = [
         '# LILA 五数据集合并与框对应审计报告',
         '',
@@ -286,6 +287,21 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             '文件：`' + inv['metadata']['file'] + '`',
             '',
         ]
+        dataset_splits = report['dataset_split_stats'][dataset]
+        total_images = sum(v['images'] for v in dataset_splits.values())
+        lines += table(
+            ['划分', '最终图片', '数据集内比例', '负样本', '框数'],
+            [
+                [
+                    split,
+                    value['images'],
+                    f"{value['images']/total_images:.2%}" if total_images else '0.00%',
+                    value['negative_images'],
+                    value['boxes'],
+                ]
+                for split, value in dataset_splits.items()
+            ],
+        )
         lines += table(
             ['原 ID', '原名称', '图片级/物体标注记录', '关联图片', '框记录'],
             [
@@ -346,12 +362,10 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             [
                 class_id,
                 name,
-                sum(report['stats'][s]['boxes'][name] for s in ('train', 'val')),
-                report['stats']['train']['boxes'][name],
-                report['stats']['val']['boxes'][name],
-                sum(report['class_images'][split][name] for split in ('train', 'val')),
-                report['class_images']['train'][name],
-                report['class_images']['val'][name],
+                sum(report['stats'][s]['boxes'][name] for s in splits),
+                *[report['stats'][split]['boxes'][name] for split in splits],
+                sum(report['class_images'][split][name] for split in splits),
+                *[report['class_images'][split][name] for split in splits],
                 '; '.join(contributors),
             ]
         )
@@ -360,11 +374,9 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             'YOLO ID',
             '类别',
             '总框数',
-            'train 框',
-            'val 框',
+            *[split + ' 框' for split in splits],
             '总图片',
-            'train 图片',
-            'val 图片',
+            *[split + ' 图片' for split in splits],
             '原始类别来源',
         ],
         rows,
@@ -376,16 +388,42 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
         '',
     ]
     lines += table(
-        ['划分', '图片', '负样本', '框数', '缺席类别'],
+        [
+            '划分',
+            '目标比例',
+            '实际比例',
+            '图片',
+            '负样本',
+            '连通组',
+            '框数',
+            '缺席类别',
+        ],
         [
             [
                 s,
+                f"{report['requested_split_fractions'][s]:.2%}",
+                f"{report['actual_split_fractions'][s]:.2%}",
                 report['stats'][s]['images'],
                 report['stats'][s]['negative_images'],
+                report['split_groups'][s],
                 sum(report['stats'][s]['boxes'].values()),
                 ', '.join(report['missing_classes'][s]) or '无',
             ]
-            for s in ('train', 'val')
+            for s in splits
+        ],
+    )
+    lines += table(
+        ['划分对', '相机交集', '序列交集', '组交集', '连通分量交集', 'SHA-256 交集'],
+        [
+            [
+                pair,
+                values['camera'],
+                values['sequence'],
+                values['group'],
+                values['component'],
+                values['digest'],
+            ]
+            for pair, values in audit['cross_split_overlap'].items()
         ],
     )
     lines += [
@@ -409,7 +447,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
         '',
         '## 框图对应证据',
         '',
-        '左图红框直接来自已经与原文件核对的 COCO xywh；右图绿框从实际保存的 YOLO txt 独立反算。以下样本覆盖每个保留的原始类别、各数据集可用的 train/val、负样本以及每数据集最多框/最小框样本。图片是抽样展示，数值核验覆盖全量。',
+        '左图红框直接来自已经与原文件核对的 COCO xywh；右图绿框从实际保存的 YOLO txt 独立反算。以下样本覆盖每个保留的原始类别、各数据集可用的 train/val/test、负样本以及每数据集最多框/最小框样本。图片是抽样展示，数值核验覆盖全量。',
         '',
     ]
     for item in previews:
@@ -501,30 +539,15 @@ def make_auditor(
         (output / 'taxonomy_decisions.json').write_text(
             json.dumps(details, ensure_ascii=False, indent=2), encoding='utf-8'
         )
-        class_images = {s: Counter() for s in ('train', 'val')}
+        splits = tuple(report['stats'])
+        class_images = {s: Counter() for s in splits}
         retained = {
             d: {'images': 0, 'negative': 0, 'boxes': 0, 'source_boxes': Counter()}
             for d in inventories
         }
-        overlaps = {}
-        for field in ('group', 'component', 'digest'):
-            a = {r[field] for r in records if r['split'] == 'train'}
-            b = {r[field] for r in records if r['split'] == 'val'}
-            overlaps[field] = len(a & b)
-        overlaps['sequence'] = len(
-            {
-                (r['dataset'], r['sequence'])
-                for r in records
-                if r['split'] == 'train' and r['sequence'] is not None
-            }
-            & {
-                (r['dataset'], r['sequence'])
-                for r in records
-                if r['split'] == 'val' and r['sequence'] is not None
-            }
-        )
-        if any(overlaps.values()):
-            raise ValueError(f'Train/val grouping overlap: {overlaps}')
+        overlaps = split_overlap(records)
+        if any(n for pair in overlaps.values() for n in pair.values()):
+            raise ValueError(f'Cross-split grouping overlap: {overlaps}')
         choices = defaultdict(set)
         chosen_per_key = Counter()
         # Seeded ordering is stable across platform; retain a few samples from every original class.
@@ -721,13 +744,15 @@ def merge(
     taxonomy_file=TAXONOMY,
     original_files=None,
     exclusions=(),
-    val_fraction=0.2,
+    val_fraction=0.05,
+    test_fraction=0.05,
     seed=42,
     copy_mode='auto',
     previews_per_class=1,
     allow_clipping=False,
     group_map=None,
 ):
+    split_fractions(val_fraction, test_fraction)
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError('Output must be empty; choose a new --output directory')
@@ -745,6 +770,7 @@ def merge(
         output,
         datasets=datasets or DEFAULT_DATASETS,
         val_fraction=val_fraction,
+        test_fraction=test_fraction,
         seed=seed,
         copy_mode=copy_mode,
         class_map=mapping,
@@ -774,7 +800,8 @@ def main():
         default=[],
         help='dataset:category_id; drop entire images containing this class',
     )
-    parser.add_argument('--val-fraction', type=float, default=0.2)
+    parser.add_argument('--val-fraction', type=float, default=0.05)
+    parser.add_argument('--test-fraction', type=float, default=0.05)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument(
         '--copy-mode', choices=['auto', 'hardlink', 'copy'], default='auto'
@@ -799,6 +826,7 @@ def main():
             exclusions=args.exclude_category,
             group_map=load(args.group_map),
             val_fraction=args.val_fraction,
+            test_fraction=args.test_fraction,
             seed=args.seed,
             copy_mode=args.copy_mode,
             previews_per_class=args.previews_per_class,
