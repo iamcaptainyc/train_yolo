@@ -1,0 +1,816 @@
+"""Merge the five downloaded LILA datasets with taxonomy and full coordinate provenance audits."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+import json
+import math
+from pathlib import Path
+from urllib.parse import quote
+
+from PIL import Image, ImageDraw
+from tqdm import tqdm
+
+from lila_audit import TAXONOMY, inspect_sources, sha256, taxonomy_mapping
+from prepare_lila import DEFAULT_DATASETS, prepare
+from lila_selection import items
+
+
+def output_paths(output, record):
+    key = hashlib.sha256(
+        (record['dataset'] + '/' + record['name']).encode()
+    ).hexdigest()
+    relative = Path(record['dataset']) / (key + record['source'].suffix.lower())
+    return output / 'images' / record['split'] / relative, output / 'labels' / record[
+        'split'
+    ] / relative.with_suffix('.txt')
+
+
+def decode_label(path, width, height, names):
+    result = []
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        tokens = line.split()
+        if len(tokens) != 5:
+            raise ValueError(f'Malformed YOLO row {path}:{number}')
+        category = int(tokens[0])
+        if not 0 <= category < len(names):
+            raise ValueError(f'Invalid YOLO class {path}:{number}')
+        cx, cy, w, h = map(float, tokens[1:])
+        if (
+            not all(math.isfinite(x) and 0 <= x <= 1 for x in (cx, cy, w, h))
+            or min(w, h) <= 0
+        ):
+            raise ValueError(f'Invalid YOLO coordinates {path}:{number}')
+        result.append(
+            {
+                'line': number,
+                'class_id': category,
+                'class_name': names[category],
+                'yolo': [cx, cy, w, h],
+                'xyxy': [
+                    (cx - w / 2) * width,
+                    (cy - h / 2) * height,
+                    (cx + w / 2) * width,
+                    (cy + h / 2) * height,
+                ],
+            }
+        )
+    return result
+
+
+def audit_one(record, output, names, mapping, allow_clipping=False):
+    """Independent reverse decoding of the written file, never using converter label tuples."""
+    image_path, label_path = output_paths(output, record)
+    if sha256(image_path) != record['digest']:
+        raise ValueError(f'Output image bytes differ from input: {image_path}')
+    with Image.open(image_path) as image:
+        width, height = image.size
+    decoded = decode_label(label_path, width, height, names)
+    class_ids = {name: i for i, name in enumerate(names)}
+    expected = defaultdict(list)
+    for ann in record['source_annotations']:
+        target = mapping[record['dataset'] + ':' + str(ann['category_id'])]
+        x, y, w, h = ann['bbox']
+        original = [x, y, x + w, y + h]
+        clipped = [max(0, x), max(0, y), min(width, x + w), min(height, y + h)]
+        if original != clipped and not allow_clipping:
+            raise ValueError(
+                f'Original bbox needs edge clipping: {record["dataset"]}/{record["name"]}; '
+                'review it or explicitly use --allow-one-pixel-clipping'
+            )
+        expected[(class_ids[target], tuple(clipped))].append(ann)
+    if len(decoded) != len(expected):
+        raise ValueError(
+            f'Written label count differs from distinct original boxes: {label_path}'
+        )
+    tolerance = max(width, height) * 1e-8 + 1e-7
+    max_error = 0.0
+    max_clipping = 0.0
+    for box in decoded:
+        matches = [
+            key
+            for key in expected
+            if key[0] == box['class_id']
+            and max(abs(a - b) for a, b in zip(key[1], box['xyxy'])) <= tolerance
+        ]
+        if not matches:
+            raise ValueError(
+                f'Written YOLO class/coordinates do not match original: {label_path}:{box["line"]}'
+            )
+        key = min(
+            matches, key=lambda k: max(abs(a - b) for a, b in zip(k[1], box['xyxy']))
+        )
+        originals = expected.pop(key)
+        error = max(abs(a - b) for a, b in zip(key[1], box['xyxy']))
+        max_error = max(max_error, error)
+        for ann in originals:
+            x, y, w, h = ann['bbox']
+            max_clipping = max(
+                max_clipping,
+                max(abs(a - b) for a, b in zip((x, y, x + w, y + h), key[1])),
+            )
+        box.update(
+            {
+                'source_selected_annotation_ids': [a['id'] for a in originals],
+                'source_category_ids': [a['category_id'] for a in originals],
+                'source_coco_xywh': [a['bbox'] for a in originals],
+                'expected_clipped_xyxy': list(key[1]),
+                'max_error_pixels': error,
+            }
+        )
+    if (record['role'] == 'negative') != (not decoded):
+        raise ValueError(f'Positive/negative output mismatch: {label_path}')
+    return {
+        'dataset': record['dataset'],
+        'source_file_name': record['name'],
+        'selected_image_id': record['image']['id'],
+        'original_image_id': record['image']['source_image_id'],
+        'split': record['split'],
+        'width': width,
+        'height': height,
+        'role': record['role'],
+        'source_sha256': record['digest'],
+        'output_image': image_path.relative_to(output).as_posix(),
+        'output_label': label_path.relative_to(output).as_posix(),
+        'label_sha256': sha256(label_path),
+        'duplicate_box_records_removed': len(record['source_annotations'])
+        - len(decoded),
+        'max_error_pixels': max_error,
+        'max_clipping_pixels': max_clipping,
+        'tolerance_pixels': tolerance,
+        'boxes': decoded,
+    }
+
+
+def preview(record, output, names, source_names, destination):
+    image_path, label_path = output_paths(output, record)
+    with Image.open(record['source']) as image:
+        left = image.convert('RGB')
+    with Image.open(image_path) as image:
+        right = image.convert('RGB')
+    width, height = left.size
+    scale = min(1000 / width, 750 / height)
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    left, right = left.resize(size), right.resize(size)
+    for ann in record['source_annotations']:
+        x, y, w, h = ann['bbox']
+        draw = ImageDraw.Draw(left)
+        draw.rectangle(
+            tuple(v * scale for v in (x, y, x + w, y + h)), outline='red', width=2
+        )
+        draw.text(
+            (max(0, x * scale), max(0, y * scale - 12)),
+            source_names[str(ann['category_id'])],
+            fill='red',
+            stroke_width=1,
+            stroke_fill='white',
+        )
+    for box in decode_label(label_path, width, height, names):
+        x1, y1, x2, y2 = [v * scale for v in box['xyxy']]
+        draw = ImageDraw.Draw(right)
+        draw.rectangle((x1, y1, x2, y2), outline='lime', width=2)
+        draw.text(
+            (max(0, x1), max(0, y1 - 12)),
+            box['class_name'],
+            fill='lime',
+            stroke_width=1,
+            stroke_fill='black',
+        )
+    canvas = Image.new('RGB', (2 * size[0] + 12, size[1] + 55), 'white')
+    canvas.paste(left, (0, 55))
+    canvas.paste(right, (size[0] + 12, 55))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((5, 5), 'COCO original (red)', fill='black')
+    draw.text((size[0] + 17, 5), 'YOLO saved (green)', fill='black')
+    draw.text(
+        (5, 23),
+        record['dataset'] + ' / ' + record['split'] + ' / ' + record['role'],
+        fill='black',
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(destination)
+
+
+def table(headers, rows):
+    def cell(value):
+        return str(value).replace('|', '\\|').replace('\n', ' ')
+
+    return [
+        '| ' + ' | '.join(map(cell, headers)) + ' |',
+        '| ' + ' | '.join(['---'] * len(headers)) + ' |',
+        *['| ' + ' | '.join(map(cell, row)) + ' |' for row in rows],
+        '',
+    ]
+
+
+def write_markdown(output, inventories, details, report, audit, previews, retained):
+    lines = [
+        '# LILA 五数据集合并与框对应审计报告',
+        '',
+        '生成时间（UTC）：' + datetime.now(timezone.utc).isoformat(),
+        '',
+        '**状态：转换审计通过。此状态证明已核验的输入→输出对应关系，不等于原始人工框、物种标签和空图标签绝对正确。**',
+        '',
+        '## 统计口径与处理规则',
+        '',
+        '分类来源：[LILA 官方映射说明](https://lila.science/taxonomy-mapping-for-camera-trap-data-sets/)。本次实际分类表及 SHA-256 见 audit_sources.json。',
+        '',
+        '- 原始全集来自本机下载的原始 metadata/bbox 文件，绝非页面概述或历史计数。两个文件的类别 ID 空间分别统计。',
+        '- 原始“标注数”包含图片级分类；“框记录”只统计 bbox 长度为 4 的记录，可能仍有无效框，不能视为有效训练框。',
+        '- 每类图片数按 image_id 去重；一张图含多个类别时会重复计入各类，类别图片数之和不等于总图片数。',
+        '- 所有下载筛选图片都已与原始图片 ID、文件名、分类命名空间和完整框集合核对，负样本必须有明确且无矛盾的 empty 标签。',
+        '- 使用固定的 LILA 官方 iNaturalist 映射快照。同一科学分类合并；出现父类标签时，子类整体上卷到已标注父类，输出类别无祖先/后代并存。',
+        '- animalia、mammalia、superorder 等过宽类别默认排除；含这些类别的整图排除，避免部分动物成为无标签背景。',
+        '- 官方映射可能把复合类别近似到更大分类，例如 small antelope；这只能保证所采用分类树的一致性，不能证明生物分类绝对准确。需要细粒度任务时应人工复核或排除该来源类。',
+        '- 使用 rank:scientific_name 命名，避免把粗分类伪装成一个具体物种。分组方式沿用相机→序列→保守整数据集留训练规则，不使用官方原 split。',
+        '- 原图内容不缩放、不旋转、不重编码；默认硬链接，跨盘则复制。预览缩放仅用于展示。硬链接共享文件内容，转换后勿修改原图。',
+        '- 字节相同且标签一致的图片保留为独立记录并放在同一划分，报告另列唯一 SHA-256 数；精确重复框会去重并计数。默认拒绝任何边缘裁剪。若显式允许 1 像素裁剪，报告单独列出，误差核验以裁剪后的框为准。',
+        '',
+        '## 五数据集总览',
+        '',
+    ]
+    rows = []
+    for dataset, inv in inventories.items():
+        count = retained[dataset]
+        rows.append(
+            [
+                dataset,
+                inv['metadata']['images'],
+                inv['bbox']['bbox_records'],
+                inv['selected_positive_images'],
+                inv['selected_negative_images'],
+                count['images'],
+                count['negative'],
+                count['boxes'],
+                inv['selected_images'] - count['images'],
+            ]
+        )
+    rows.append(
+        [
+            '合计',
+            sum(i['metadata']['images'] for i in inventories.values()),
+            sum(i['bbox']['bbox_records'] for i in inventories.values()),
+            sum(i['selected_positive_images'] for i in inventories.values()),
+            sum(i['selected_negative_images'] for i in inventories.values()),
+            sum(c['images'] for c in retained.values()),
+            sum(c['negative'] for c in retained.values()),
+            sum(c['boxes'] for c in retained.values()),
+            sum(i['selected_images'] for i in inventories.values())
+            - sum(c['images'] for c in retained.values()),
+        ]
+    )
+    lines += table(
+        [
+            '数据集',
+            '原始图片',
+            '原始框记录',
+            '入选正图',
+            '入选负图',
+            '最终图片',
+            '最终负图',
+            '最终框',
+            '排除图片',
+        ],
+        rows,
+    )
+    details_by_key = {d['key']: d for d in details}
+    for dataset, inv in inventories.items():
+        lines += [
+            '## ' + dataset,
+            '',
+            '### 原始 metadata 全部类别',
+            '',
+            '文件：`' + inv['metadata']['file'] + '`',
+            '',
+        ]
+        lines += table(
+            ['原 ID', '原名称', '图片级/物体标注记录', '关联图片', '框记录'],
+            [
+                [c['id'], c['name'], c['annotations'], c['images'], c['bbox_records']]
+                for c in inv['metadata']['categories']
+            ],
+        )
+        lines += [
+            '### 原始 bbox 类别、下载子集与最终映射',
+            '',
+            '文件：`' + inv['bbox']['file'] + '`',
+            '',
+        ]
+        selected = {str(c['id']): c for c in inv['selected_categories']}
+        rows = []
+        for c in inv['bbox']['categories']:
+            key = dataset + ':' + str(c['id'])
+            d = details_by_key.get(key, {})
+            rows.append(
+                [
+                    c['id'],
+                    c['name'],
+                    c['bbox_records'],
+                    c['bbox_images'],
+                    selected.get(str(c['id']), {}).get('boxes', 0),
+                    retained[dataset]['source_boxes'][str(c['id'])],
+                    d.get('target') or '排除/无入选框',
+                    d.get('reason', '未进入筛选清单'),
+                ]
+            )
+        lines += table(
+            [
+                '原 ID',
+                '原名称',
+                '原始框记录',
+                '原始框图片',
+                '筛选框记录',
+                '保留原框记录*',
+                '合并后分类',
+                '原因',
+            ],
+            rows,
+        )
+        lines += [
+            '*保留原框记录在相同框去重前统计；最终 YOLO 框数见总览。整图排除也会损失同图其他类别的框。',
+            '',
+        ]
+    lines += ['## 合并后的连续 YOLO 类别', '']
+    rows = []
+    for class_id, name in enumerate(report['classes']):
+        contributors = [
+            d['key'] + ' ' + d['source_name']
+            for d in details
+            if d.get('target') == name
+            and retained[d['dataset']]['source_boxes'][str(d['source_id'])]
+        ]
+        rows.append(
+            [
+                class_id,
+                name,
+                sum(report['stats'][s]['boxes'][name] for s in ('train', 'val')),
+                report['stats']['train']['boxes'][name],
+                report['stats']['val']['boxes'][name],
+                sum(report['class_images'][split][name] for split in ('train', 'val')),
+                report['class_images']['train'][name],
+                report['class_images']['val'][name],
+                '; '.join(contributors),
+            ]
+        )
+    lines += table(
+        [
+            'YOLO ID',
+            '类别',
+            '总框数',
+            'train 框',
+            'val 框',
+            '总图片',
+            'train 图片',
+            'val 图片',
+            '原始类别来源',
+        ],
+        rows,
+    )
+    lines += [
+        '## 分组与泄漏检查',
+        '',
+        '相机、序列、连通分量和 SHA-256 的跨集交集已逐项检查。只保证已知组和字节相同文件的隔离，不保证未知相机或不同编码近似图的隔离。',
+        '',
+    ]
+    lines += table(
+        ['划分', '图片', '负样本', '框数', '缺席类别'],
+        [
+            [
+                s,
+                report['stats'][s]['images'],
+                report['stats'][s]['negative_images'],
+                sum(report['stats'][s]['boxes'].values()),
+                ', '.join(report['missing_classes'][s]) or '无',
+            ]
+            for s in ('train', 'val')
+        ],
+    )
+    lines += [
+        '缺乏可靠分组信息而整体留在训练集的数据集：`'
+        + str(report['train_only_datasets_missing_group_info'])
+        + '`',
+        '',
+        '## 全量框与文件对应证明',
+        '',
+        '转换：`cx=(x+w/2)/W, cy=(y+h/2)/H, bw=w/W, bh=h/H`；反算：`x1=(cx-bw/2)W, y1=(cy-bh/2)H, x2=(cx+bw/2)W, y2=(cy+bh/2)H`。',
+        '',
+        '审计独立读取磁盘上的 YOLO 文本与输出图片，逐框匹配原始类别和裁剪后的像素边界，不能用内存中的期望标签代替实际输出。8 位小数引入的像素容差为 `max(W,H)*1e-8+1e-7`。',
+        '',
+    ]
+    lines += table(
+        ['检查', '结果'],
+        [[k, json.dumps(v, ensure_ascii=False)] for k, v in audit.items()],
+    )
+    lines += [
+        '逐图片、逐框记录： [box_audit.jsonl](box_audit.jsonl)；整图排除清单：[excluded_images.jsonl](excluded_images.jsonl)；原始统计与来源指纹：[audit_sources.json](audit_sources.json)；类别层级决策：[taxonomy_decisions.json](taxonomy_decisions.json)。',
+        '',
+        '## 框图对应证据',
+        '',
+        '左图红框直接来自已经与原文件核对的 COCO xywh；右图绿框从实际保存的 YOLO txt 独立反算。以下样本覆盖每个保留的原始类别、各数据集可用的 train/val、负样本以及每数据集最多框/最小框样本。图片是抽样展示，数值核验覆盖全量。',
+        '',
+    ]
+    for item in previews:
+        lines += [
+            '### ' + item['dataset'] + ' / ' + item['source_file_name'],
+            '',
+            '`'
+            + item['split']
+            + '`；原类别：'
+            + (', '.join(item['source_classes']) or '明确空图')
+            + '；'
+            + item['reasons'],
+            '',
+            '[逐图标签]('
+            + quote(item['output_label'], safe='/')
+            + ')；`source_image_id='
+            + str(item['original_image_id'])
+            + '`',
+            '',
+            '![](' + quote(item['preview'], safe='/') + ')',
+            '',
+        ]
+    lines += [
+        '## 可复核指纹',
+        '',
+        '配置、原始文件、筛选清单、分类表和脚本的 SHA-256 见 audit_sources.json；每张输出图的 SHA-256 和标签指纹见逐图清单。',
+        '',
+        '这些检查能发现错图、错类别 ID、坐标单位/公式错误、漏框、损坏图片和不一致标签；无法从数学上证明人工框画对动物、物种命名正确、动物标注完整或空图确实没有动物。',
+        '',
+    ]
+    (output / 'AUDIT_REPORT.md').write_text('\n'.join(lines), encoding='utf-8')
+
+
+def make_auditor(
+    inventories, details, taxonomy_file, mapping, per_class=1, allow_clipping=False
+):
+    def audit(records, legacy_mapping, report, output):
+        if report['plan_only']:
+            raise ValueError('Audited merge requires actual image verification')
+        provenance = {
+            d: {k: v for k, v in inv.items() if k != 'raw_annotation_ids'}
+            for d, inv in inventories.items()
+        }
+        for dataset, inv in inventories.items():
+            source = (
+                Path(report['source']) / dataset / 'selection/selected_annotations.json'
+            )
+            if sha256(source) != inv['selection_sha256']:
+                raise ValueError(f'Selection changed during conversion: {source}')
+            for item in inv['source_files']:
+                if sha256(item['path']) != item['sha256']:
+                    raise ValueError(
+                        f'Original annotation changed during conversion: {item["path"]}'
+                    )
+            for kind in ('metadata', 'bbox'):
+                if sha256(inv[kind]['file']) != inv[kind]['sha256']:
+                    raise ValueError(
+                        f'Original decoded JSON changed during conversion: {inv[kind]["file"]}'
+                    )
+        (output / 'audit_sources.json').write_text(
+            json.dumps(
+                {
+                    'datasets': provenance,
+                    'taxonomy_file': str(taxonomy_file),
+                    'taxonomy_sha256': sha256(taxonomy_file),
+                    'taxonomy_reference': (
+                        json.loads(
+                            TAXONOMY.with_suffix('.source.json').read_text(
+                                encoding='utf-8'
+                            )
+                        )
+                        if Path(taxonomy_file).resolve() == TAXONOMY.resolve()
+                        else {'custom_taxonomy': True}
+                    ),
+                    'scripts': {
+                        p: sha256(Path(__file__).parent / p)
+                        for p in (
+                            'prepare_lila_audited.py',
+                            'prepare_lila.py',
+                            'lila_audit.py',
+                        )
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding='utf-8',
+        )
+        (output / 'taxonomy_decisions.json').write_text(
+            json.dumps(details, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
+        class_images = {s: Counter() for s in ('train', 'val')}
+        retained = {
+            d: {'images': 0, 'negative': 0, 'boxes': 0, 'source_boxes': Counter()}
+            for d in inventories
+        }
+        overlaps = {}
+        for field in ('group', 'component', 'digest'):
+            a = {r[field] for r in records if r['split'] == 'train'}
+            b = {r[field] for r in records if r['split'] == 'val'}
+            overlaps[field] = len(a & b)
+        overlaps['sequence'] = len(
+            {
+                (r['dataset'], r['sequence'])
+                for r in records
+                if r['split'] == 'train' and r['sequence'] is not None
+            }
+            & {
+                (r['dataset'], r['sequence'])
+                for r in records
+                if r['split'] == 'val' and r['sequence'] is not None
+            }
+        )
+        if any(overlaps.values()):
+            raise ValueError(f'Train/val grouping overlap: {overlaps}')
+        choices = defaultdict(set)
+        chosen_per_key = Counter()
+        # Seeded ordering is stable across platform; retain a few samples from every original class.
+        ordered = sorted(
+            records,
+            key=lambda r: hashlib.sha256(
+                (str(report['seed']) + r['dataset'] + '/' + r['name']).encode()
+            ).hexdigest(),
+        )
+        for r in ordered:
+            key = (r['dataset'], r['name'])
+            sample_keys = [('split', r['dataset'], r['split'], r['role'])]
+            sample_keys += [
+                ('category', r['dataset'], str(a['category_id']))
+                for a in r['source_annotations']
+            ]
+            for sample in set(sample_keys):
+                if chosen_per_key[sample] < per_class:
+                    choices[key].add('/'.join(sample))
+                    chosen_per_key[sample] += 1
+        for dataset in inventories:
+            positives = [
+                r
+                for r in records
+                if r['dataset'] == dataset and r['source_annotations']
+            ]
+            if positives:
+                crowded = max(positives, key=lambda r: len(r['source_annotations']))
+                tiny = min(
+                    positives,
+                    key=lambda r: min(
+                        a['bbox'][2] * a['bbox'][3] for a in r['source_annotations']
+                    ),
+                )
+                choices[(dataset, crowded['name'])].add('most boxes')
+                choices[(dataset, tiny['name'])].add('smallest box')
+        excluded_count = 0
+        reasons = {d['key']: d['reason'] for d in details}
+        with (output / 'excluded_images.jsonl').open('w', encoding='utf-8') as stream:
+            for dataset in inventories:
+                selected = (
+                    Path(report['source'])
+                    / dataset
+                    / 'selection/selected_annotations.json'
+                )
+                blocked = defaultdict(set)
+                for ann in items(selected, 'annotations'):
+                    category_key = dataset + ':' + str(ann['category_id'])
+                    if mapping[category_key] is None:
+                        blocked[str(ann['image_id'])].add(category_key)
+                for image in items(selected, 'images'):
+                    keys = blocked.get(str(image['id']))
+                    if keys:
+                        excluded_count += 1
+                        stream.write(
+                            json.dumps(
+                                {
+                                    'dataset': dataset,
+                                    'file_name': image['file_name'],
+                                    'original_image_id': image['source_image_id'],
+                                    'reasons': {
+                                        key: reasons[key] for key in sorted(keys)
+                                    },
+                                },
+                                ensure_ascii=False,
+                            )
+                            + '\n'
+                        )
+        if len(records) + excluded_count != sum(
+            i['selected_images'] for i in inventories.values()
+        ):
+            raise ValueError(
+                'Selected/retained/excluded image accounting does not balance'
+            )
+        max_error, max_clipping, duplicates, boxes = 0.0, 0.0, 0, 0
+        previews = []
+        with (output / 'box_audit.jsonl').open('w', encoding='utf-8') as stream:
+            for record in tqdm(records, desc='Independent output audit', unit='img'):
+                row = audit_one(
+                    record, output, report['classes'], mapping, allow_clipping
+                )
+                row['original_annotation_ids'] = inventories[record['dataset']][
+                    'raw_annotation_ids'
+                ].get(str(record['image']['id']), [])
+                original_ids = dict(
+                    zip(
+                        (a['id'] for a in record['source_annotations']),
+                        row['original_annotation_ids'],
+                    )
+                )
+                for box in row['boxes']:
+                    box['source_original_annotation_ids'] = [
+                        original_ids[key]
+                        for key in box['source_selected_annotation_ids']
+                    ]
+                max_clipping = max(max_clipping, row['max_clipping_pixels'])
+                if (
+                    row['max_clipping_pixels']
+                    and chosen_per_key[('clipped', record['dataset'])] < per_class
+                ):
+                    choices[(record['dataset'], record['name'])].add('edge clipped')
+                    chosen_per_key[('clipped', record['dataset'])] += 1
+                count = retained[record['dataset']]
+                count['images'] += 1
+                count['negative'] += record['role'] == 'negative'
+                count['boxes'] += len(row['boxes'])
+                class_images[record['split']].update(
+                    {b['class_name'] for b in row['boxes']}
+                )
+                count['source_boxes'].update(
+                    str(a['category_id']) for a in record['source_annotations']
+                )
+                boxes += len(row['boxes'])
+                duplicates += row['duplicate_box_records_removed']
+                max_error = max(max_error, row['max_error_pixels'])
+                if (record['dataset'], record['name']) in choices:
+                    image_path, _ = output_paths(output, record)
+                    name = image_path.stem + '.jpg'
+                    relative = Path('previews') / record['dataset'] / name
+                    source_names = {
+                        str(c['id']): c['name']
+                        for c in inventories[record['dataset']]['selected_categories']
+                    }
+                    preview(
+                        record,
+                        output,
+                        report['classes'],
+                        source_names,
+                        output / relative,
+                    )
+                    previews.append(
+                        {
+                            **{
+                                k: row[k]
+                                for k in (
+                                    'dataset',
+                                    'source_file_name',
+                                    'split',
+                                    'original_image_id',
+                                    'output_label',
+                                )
+                            },
+                            'preview': relative.as_posix(),
+                            'source_classes': sorted(
+                                {
+                                    source_names[str(a['category_id'])]
+                                    for a in record['source_annotations']
+                                }
+                            ),
+                            'reasons': '; '.join(
+                                sorted(choices[(record['dataset'], record['name'])])
+                            ),
+                        }
+                    )
+                stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+        audit = {
+            'images_verified': len(records),
+            'unique_image_sha256': len({r['digest'] for r in records}),
+            'duplicate_image_records': len(records)
+            - len({r['digest'] for r in records}),
+            'boxes_verified': boxes,
+            'maximum_roundtrip_error_pixels': max_error,
+            'maximum_input_clipping_pixels': max_clipping,
+            'excluded_images': excluded_count,
+            'duplicate_box_records_removed': duplicates,
+            'one_pixel_clipped_boxes': report['clipped_boxes_within_one_pixel'],
+            'original_selection_images_verified': sum(
+                i['selected_images'] for i in inventories.values()
+            ),
+            'original_selection_boxes_verified': sum(
+                i['selected_boxes'] for i in inventories.values()
+            ),
+            'cross_split_overlap': overlaps,
+            'preview_images': len(previews),
+            'all_output_image_hashes_match': True,
+            'taxonomy_ancestor_conflicts': 0,
+            'allow_one_pixel_clipping': allow_clipping,
+        }
+        report['audit'] = audit
+        report['class_images'] = class_images
+        (output / 'preview_index.json').write_text(
+            json.dumps(previews, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
+        write_markdown(output, inventories, details, report, audit, previews, retained)
+
+    return audit
+
+
+def merge(
+    source,
+    output,
+    *,
+    datasets=None,
+    taxonomy_file=TAXONOMY,
+    original_files=None,
+    exclusions=(),
+    val_fraction=0.2,
+    seed=42,
+    copy_mode='auto',
+    previews_per_class=1,
+    allow_clipping=False,
+    group_map=None,
+):
+    source, output = Path(source).resolve(), Path(output).resolve()
+    if output.exists() and any(output.iterdir()):
+        raise ValueError('Output must be empty; choose a new --output directory')
+    if source == output or source in output.parents or output in source.parents:
+        raise ValueError('Input and output directories must not contain each other')
+    if previews_per_class < 1:
+        raise ValueError('--previews-per-class must be at least 1')
+    inventories = inspect_sources(source, datasets or DEFAULT_DATASETS, original_files)
+    mapping, details = taxonomy_mapping(inventories, taxonomy_file, exclusions)
+    auditor = make_auditor(
+        inventories, details, taxonomy_file, mapping, previews_per_class, allow_clipping
+    )
+    return prepare(
+        source,
+        output,
+        datasets=datasets or DEFAULT_DATASETS,
+        val_fraction=val_fraction,
+        seed=seed,
+        copy_mode=copy_mode,
+        class_map=mapping,
+        group_map=group_map,
+        audit_hook=auditor,
+        strict_boxes=not allow_clipping,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, default=Path('datasets/lila'))
+    parser.add_argument(
+        '--output', type=Path, default=Path('datasets/lila_yolo_audited')
+    )
+    parser.add_argument('--datasets', nargs='+', default=DEFAULT_DATASETS)
+    parser.add_argument('--taxonomy-file', type=Path, default=TAXONOMY)
+    parser.add_argument(
+        '--original-files',
+        type=Path,
+        help='JSON: dataset -> metadata/bbox paths, for moved original files',
+    )
+    parser.add_argument('--group-map', type=Path)
+    parser.add_argument(
+        '--exclude-category',
+        action='append',
+        default=[],
+        help='dataset:category_id; drop entire images containing this class',
+    )
+    parser.add_argument('--val-fraction', type=float, default=0.2)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument(
+        '--copy-mode', choices=['auto', 'hardlink', 'copy'], default='auto'
+    )
+    parser.add_argument('--previews-per-class', type=int, default=1)
+    parser.add_argument('--allow-one-pixel-clipping', action='store_true')
+    args = parser.parse_args()
+    try:
+
+        def load(path):
+            value = json.loads(path.read_text(encoding='utf-8-sig')) if path else None
+            if value is not None and not isinstance(value, dict):
+                raise ValueError('JSON options must contain an object')
+            return value
+
+        merge(
+            args.source,
+            args.output,
+            datasets=args.datasets,
+            taxonomy_file=args.taxonomy_file,
+            original_files=load(args.original_files),
+            exclusions=args.exclude_category,
+            group_map=load(args.group_map),
+            val_fraction=args.val_fraction,
+            seed=args.seed,
+            copy_mode=args.copy_mode,
+            previews_per_class=args.previews_per_class,
+            allow_clipping=args.allow_one_pixel_clipping,
+        )
+        print('Audit passed. Report: ' + str(args.output.resolve() / 'AUDIT_REPORT.md'))
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        parser.exit(
+            1,
+            f'Error: {exc}\nConversion is NOT certified; do not train on partial output. Use a new output directory after fixing inputs.\n',
+        )
+
+
+if __name__ == '__main__':
+    main()

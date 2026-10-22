@@ -284,3 +284,7 @@ python -m unittest discover -s tests -v
 ```
 
 测试用临时合成图片检查坐标转换、多词类名、重复图合并、划分复现、跨 split 泄漏拦截和缺失标签行为，不需要下载数据或模型。真实数据训练和 GPU 性能需在下载数据、安装 Ultralytics 与对应 PyTorch 后验证。
+
+### LILA 五数据集合并与审计
+
+下载完成后使用 `prepare_lila_audited.py`：按官方分类树处理父子类别，核对原始标注与下载清单，独立反算所有输出框，并生成类别数量、合并规则和框图的 `AUDIT_REPORT.md`。运行与审计口径见 [五数据集审计合并说明](docs/lila_audited_merge.md)。

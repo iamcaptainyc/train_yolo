@@ -84,7 +84,7 @@ def read_records(source, datasets, class_map=None, group_map=None):
                 raise ValueError(f'Empty target category for {dataset}:{category["id"]}')
             categories[str(category['id'])] = target
             mapping.append({'dataset': dataset, 'source_id': category['id'], 'source_name': category['name'], 'target': target})
-        boxes, forbidden = defaultdict(list), set()
+        boxes, source_annotations, forbidden = defaultdict(list), defaultdict(list), set()
         for ann in items(annotation, 'annotations'):
             key, category = str(ann['image_id']), str(ann['category_id'])
             if category not in categories:
@@ -93,6 +93,7 @@ def read_records(source, datasets, class_map=None, group_map=None):
                 forbidden.add(key)  # Drop the whole image rather than turn an object into background.
             else:
                 boxes[key].append((categories[category], ann['bbox']))
+                source_annotations[key].append(ann)
         current = []
         for image in items(annotation, 'images'):
             key = str(image['id'])
@@ -111,7 +112,7 @@ def read_records(source, datasets, class_map=None, group_map=None):
             sequence = first_value(image, SEQUENCE_FIELDS)
             current.append({'dataset': dataset, 'name': name, 'image': image, 'boxes': annotations,
                             'role': role, 'location': location, 'sequence': sequence,
-                            'source': source/dataset/'images'/name})
+                            'source': source/dataset/'images'/name, 'source_annotations': source_annotations[key]})
         # If a location is missing, sequence alone cannot prove camera disjointness.
         # With only sequence information for a dataset, use sequence disjointness.
         has_locations = any(r['location'] is not None for r in current)
@@ -204,7 +205,7 @@ def split_records(records, val_fraction, seed):
 
 
 def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mode='auto',
-            plan_only=False, class_map=None, group_map=None):
+            plan_only=False, class_map=None, group_map=None, audit_hook=None, strict_boxes=False):
     if not math.isfinite(val_fraction) or not 0 < val_fraction < 1:
         raise ValueError('--val-fraction must be in (0, 1)')
     source, output = Path(source).resolve(), Path(output).resolve()
@@ -229,6 +230,9 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
                             (height is not None and height != image.height)):
                         raise ValueError(f'Image dimensions {image.size} differ from metadata {(width, height)}')
                     width, height = image.size
+                    image.load()
+                # PNG EXIF reads can consume the stream; verify a freshly opened image.
+                with Image.open(r['source']) as image:
                     image.verify()
                 with r['source'].open('rb') as stream:
                     r['digest'] = hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -238,6 +242,8 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
                 r['labels'], count = [(class_ids[name], 0, 0, 0, 0) for name, _ in r['boxes']], 0
             else:
                 r['labels'], count = yolo_boxes(r, width, height, class_ids)
+                if count and strict_boxes:
+                    raise ValueError('Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping')
             clipped += count
         except (OSError, ValueError) as exc:
             if len(missing) < 20:
@@ -301,6 +307,9 @@ def prepare(source, output, *, datasets=None, val_fraction=0.2, seed=42, copy_mo
             label.write_text(''.join(str(b[0])+' '+' '.join(f'{v:.8f}' for v in b[1:])+'\n' for b in r['labels']), encoding='utf-8')
         report['image_storage_modes'] = dict(used_modes)
         (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
+        if audit_hook is not None:
+            audit_hook(records, mapping, report, output)
+            (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
         (output/'data.yaml').write_text(yaml.safe_dump({'path': output.as_posix(), 'train': 'images/train',
             'val': 'images/val', 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True), encoding='utf-8')
     print(f'{len(records):,} images; {len(names)} classes; {components} disjoint groups; '

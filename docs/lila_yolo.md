@@ -1,5 +1,7 @@
 # LILA 合并为 YOLO 并按相机/序列划分
 
+需要自动解决父子类别混淆、原始类别全量统计与逐框审计时，请使用新的 [审计合并入口](lila_audited_merge.md)。下文旧入口仅做名称合并，仍保留不同粒度类别。
+
 `prepare_lila.py` 读取五个数据集的 `selection/selected_annotations.json`，统一类别、转换归一化检测框、生成可直接传给 `train.py` 的 `data.yaml`。不会使用筛选清单外的图片。
 
 ## 命令
