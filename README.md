@@ -288,3 +288,12 @@ python -m unittest discover -s tests -v
 ### LILA 五数据集合并与审计
 
 下载完成后使用 `prepare_lila_audited.py`：按官方分类树处理父子类别，默认按相机/序列连通组划分 train/val/test = 90%/5%/5%，支持 `--workers 16` 并发校验/哈希/写出/输出审计，核对原始标注与下载清单，独立反算所有输出框，并生成类别数量、合并规则和框图的 `AUDIT_REPORT.md`。运行与审计口径见 [五数据集审计合并说明](docs/lila_audited_merge.md)。
+
+### LILA 自动清理与断点恢复
+
+`prepare_lila_audited.py` 默认排除损坏图片和无法安全修复的整图标注，自动修正至多 1 像素的越界框，完成后生成 `AUDIT_REPORT.md`、完整剔除清单和可训练的 `data.yaml`。原始图片保留。中断后重跑相同命令与输出目录，会复用通过且未变化的图片、框与输出审计缓存；失败或变化的文件重新检查。旧版未保存的校验无法恢复，升级后首次需建立缓存。详见 [自动处理与恢复说明](docs/lila_audited_merge.md#默认自动处理与恢复)。
+
+```bash
+python -m pip install -r requirements-lila.txt
+python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yolo_auto --copy-mode hardlink --workers 16
+```

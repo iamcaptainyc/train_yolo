@@ -20,6 +20,57 @@ from lila_audit import TAXONOMY, inspect_sources, sha256, taxonomy_mapping
 from prepare_lila import DEFAULT_DATASETS, prepare, split_fractions, split_overlap
 from lila_selection import items
 from lila_parallel import bounded_map
+from lila_state import managed_run, fingerprint, signature, record_key
+
+
+def cached_audit(record, output, names, mapping, allow_clipping=False, state=None):
+    if state is None:
+        return audit_one(record, output, names, mapping, allow_clipping)
+    image, label = output_paths(output, record)
+    try:
+        state.refresh_source(record)
+        stamp = signature(
+            [
+                fingerprint(record["source"]),
+                fingerprint(image),
+                fingerprint(label),
+                record["digest"],
+                record["source_annotations"],
+                names,
+                mapping,
+                allow_clipping,
+                record["split"],
+                record["image"],
+                "independent-audit-v1",
+            ]
+        )
+        row = state.get("audit", record_key(record), stamp)
+        if row is None:
+            row = audit_one(record, output, names, mapping, allow_clipping)
+            after = signature(
+                [
+                    fingerprint(record["source"]),
+                    fingerprint(image),
+                    fingerprint(label),
+                    record["digest"],
+                    record["source_annotations"],
+                    names,
+                    mapping,
+                    allow_clipping,
+                    record["split"],
+                    record["image"],
+                    "independent-audit-v1",
+                ]
+            )
+            if after != stamp:
+                raise ValueError("File changed during independent audit")
+            state.put("audit", record_key(record), stamp, row)
+        state.refresh_output_stamp(record)
+        state.clear_error("audit", record)
+        return row
+    except (OSError, ValueError) as exc:
+        state.error("audit", record, exc)
+        raise
 
 
 def output_paths(output, record):
@@ -199,13 +250,13 @@ def preview(record, output, names, source_names, destination):
 
 def table(headers, rows):
     def cell(value):
-        return str(value).replace('|', '\\|').replace('\n', ' ')
+        return str(value).replace("|", "\\|").replace("\n", " ")
 
     return [
-        '| ' + ' | '.join(map(cell, headers)) + ' |',
-        '| ' + ' | '.join(['---'] * len(headers)) + ' |',
-        *['| ' + ' | '.join(map(cell, row)) + ' |' for row in rows],
-        '',
+        "| " + " | ".join(map(cell, headers)) + " |",
+        "| " + " | ".join(["---"] * len(headers)) + " |",
+        *["| " + " | ".join(map(cell, row)) + " |" for row in rows],
+        "",
     ]
 
 
@@ -494,207 +545,220 @@ def make_auditor(
     workers=8,
 ):
     def audit(records, legacy_mapping, report, output):
-        if report['plan_only']:
-            raise ValueError('Audited merge requires actual image verification')
+        if report["plan_only"]:
+            raise ValueError("Audited merge requires actual image verification")
         provenance = {
-            d: {k: v for k, v in inv.items() if k != 'raw_annotation_ids'}
+            d: {k: v for k, v in inv.items() if k != "raw_annotation_ids"}
             for d, inv in inventories.items()
         }
         for dataset, inv in inventories.items():
             source = (
-                Path(report['source']) / dataset / 'selection/selected_annotations.json'
+                Path(report["source"]) / dataset / "selection/selected_annotations.json"
             )
-            if sha256(source) != inv['selection_sha256']:
-                raise ValueError(f'Selection changed during conversion: {source}')
-            for item in inv['source_files']:
-                if sha256(item['path']) != item['sha256']:
+            if sha256(source) != inv["selection_sha256"]:
+                raise ValueError(f"Selection changed during conversion: {source}")
+            for item in inv["source_files"]:
+                if sha256(item["path"]) != item["sha256"]:
                     raise ValueError(
                         f'Original annotation changed during conversion: {item["path"]}'
                     )
-            for kind in ('metadata', 'bbox'):
-                if sha256(inv[kind]['file']) != inv[kind]['sha256']:
+            for kind in ("metadata", "bbox"):
+                if sha256(inv[kind]["file"]) != inv[kind]["sha256"]:
                     raise ValueError(
                         f'Original decoded JSON changed during conversion: {inv[kind]["file"]}'
                     )
-        (output / 'audit_sources.json').write_text(
+        (output / "audit_sources.json").write_text(
             json.dumps(
                 {
-                    'datasets': provenance,
-                    'taxonomy_file': str(taxonomy_file),
-                    'taxonomy_sha256': sha256(taxonomy_file),
-                    'taxonomy_reference': (
+                    "datasets": provenance,
+                    "taxonomy_file": str(taxonomy_file),
+                    "taxonomy_sha256": sha256(taxonomy_file),
+                    "taxonomy_reference": (
                         json.loads(
-                            TAXONOMY.with_suffix('.source.json').read_text(
-                                encoding='utf-8'
+                            TAXONOMY.with_suffix(".source.json").read_text(
+                                encoding="utf-8"
                             )
                         )
                         if Path(taxonomy_file).resolve() == TAXONOMY.resolve()
-                        else {'custom_taxonomy': True}
+                        else {"custom_taxonomy": True}
                     ),
-                    'scripts': {
+                    "scripts": {
                         p: sha256(Path(__file__).parent / p)
                         for p in (
-                            'prepare_lila_audited.py',
-                            'prepare_lila.py',
-                            'lila_audit.py',
-                            'lila_parallel.py',
+                            "prepare_lila_audited.py",
+                            "prepare_lila.py",
+                            "lila_audit.py",
+                            "lila_parallel.py",
+                            "lila_state.py",
                         )
                     },
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
-            encoding='utf-8',
+            encoding="utf-8",
         )
-        (output / 'taxonomy_decisions.json').write_text(
-            json.dumps(details, ensure_ascii=False, indent=2), encoding='utf-8'
+        (output / "taxonomy_decisions.json").write_text(
+            json.dumps(details, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        splits = tuple(report['stats'])
+        splits = tuple(report["stats"])
         class_images = {s: Counter() for s in splits}
         retained = {
-            d: {'images': 0, 'negative': 0, 'boxes': 0, 'source_boxes': Counter()}
+            d: {"images": 0, "negative": 0, "boxes": 0, "source_boxes": Counter()}
             for d in inventories
         }
         overlaps = split_overlap(records)
         if any(n for pair in overlaps.values() for n in pair.values()):
-            raise ValueError(f'Cross-split grouping overlap: {overlaps}')
+            raise ValueError(f"Cross-split grouping overlap: {overlaps}")
         choices = defaultdict(set)
         chosen_per_key = Counter()
         # Seeded ordering is stable across platform; retain a few samples from every original class.
         ordered = sorted(
             records,
             key=lambda r: hashlib.sha256(
-                (str(report['seed']) + r['dataset'] + '/' + r['name']).encode()
+                (str(report["seed"]) + r["dataset"] + "/" + r["name"]).encode()
             ).hexdigest(),
         )
         for r in ordered:
-            key = (r['dataset'], r['name'])
-            sample_keys = [('split', r['dataset'], r['split'], r['role'])]
+            key = (r["dataset"], r["name"])
+            sample_keys = [("split", r["dataset"], r["split"], r["role"])]
             sample_keys += [
-                ('category', r['dataset'], str(a['category_id']))
-                for a in r['source_annotations']
+                ("category", r["dataset"], str(a["category_id"]))
+                for a in r["source_annotations"]
             ]
             for sample in set(sample_keys):
                 if chosen_per_key[sample] < per_class:
-                    choices[key].add('/'.join(sample))
+                    choices[key].add("/".join(sample))
                     chosen_per_key[sample] += 1
         for dataset in inventories:
             positives = [
                 r
                 for r in records
-                if r['dataset'] == dataset and r['source_annotations']
+                if r["dataset"] == dataset and r["source_annotations"]
             ]
             if positives:
-                crowded = max(positives, key=lambda r: len(r['source_annotations']))
+                crowded = max(positives, key=lambda r: len(r["source_annotations"]))
                 tiny = min(
                     positives,
                     key=lambda r: min(
-                        a['bbox'][2] * a['bbox'][3] for a in r['source_annotations']
+                        a["bbox"][2] * a["bbox"][3] for a in r["source_annotations"]
                     ),
                 )
-                choices[(dataset, crowded['name'])].add('most boxes')
-                choices[(dataset, tiny['name'])].add('smallest box')
+                choices[(dataset, crowded["name"])].add("most boxes")
+                choices[(dataset, tiny["name"])].add("smallest box")
         excluded_count = 0
-        reasons = {d['key']: d['reason'] for d in details}
-        with (output / 'excluded_images.jsonl').open('w', encoding='utf-8') as stream:
+        reasons = {d["key"]: d["reason"] for d in details}
+        with (output / "excluded_images.jsonl").open("w", encoding="utf-8") as stream:
             for dataset in inventories:
                 selected = (
-                    Path(report['source'])
+                    Path(report["source"])
                     / dataset
-                    / 'selection/selected_annotations.json'
+                    / "selection/selected_annotations.json"
                 )
                 blocked = defaultdict(set)
-                for ann in items(selected, 'annotations'):
-                    category_key = dataset + ':' + str(ann['category_id'])
+                for ann in items(selected, "annotations"):
+                    category_key = dataset + ":" + str(ann["category_id"])
                     if mapping[category_key] is None:
-                        blocked[str(ann['image_id'])].add(category_key)
-                for image in items(selected, 'images'):
-                    keys = blocked.get(str(image['id']))
+                        blocked[str(ann["image_id"])].add(category_key)
+                for image in items(selected, "images"):
+                    keys = blocked.get(str(image["id"]))
                     if keys:
                         excluded_count += 1
                         stream.write(
                             json.dumps(
                                 {
-                                    'dataset': dataset,
-                                    'file_name': image['file_name'],
-                                    'original_image_id': image['source_image_id'],
-                                    'reasons': {
+                                    "dataset": dataset,
+                                    "file_name": image["file_name"],
+                                    "original_image_id": image["source_image_id"],
+                                    "reasons": {
                                         key: reasons[key] for key in sorted(keys)
                                     },
                                 },
                                 ensure_ascii=False,
                             )
-                            + '\n'
+                            + "\n"
                         )
+        automatic = report.get("automatic_exclusions", [])
+        with (output / "excluded_images.jsonl").open("a", encoding="utf-8") as stream:
+            for entry in automatic:
+                stream.write(
+                    json.dumps(
+                        {**entry, "reasons": {"automatic_cleanup": entry["reason"]}},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        excluded_count += len(automatic)
         if len(records) + excluded_count != sum(
-            i['selected_images'] for i in inventories.values()
+            i["selected_images"] for i in inventories.values()
         ):
             raise ValueError(
-                'Selected/retained/excluded image accounting does not balance'
+                "Selected/retained/excluded image accounting does not balance"
             )
         max_error, max_clipping, duplicates, boxes = 0.0, 0.0, 0, 0
         previews = []
         function = partial(
-            audit_one,
+            cached_audit,
+            state=getattr(report, "state", None),
             output=output,
-            names=report['classes'],
+            names=report["classes"],
             mapping=mapping,
             allow_clipping=allow_clipping,
         )
         with (
-            (output / 'box_audit.jsonl').open('w', encoding='utf-8') as stream,
+            (output / "box_audit.jsonl").open("w", encoding="utf-8") as stream,
             tqdm(
-                total=len(records), desc='Independent output audit', unit='img'
+                total=len(records), desc="Independent output audit", unit="img"
             ) as progress,
             closing(bounded_map(function, records, workers, progress)) as results,
         ):
             for record, row in zip(records, results):
-                row['original_annotation_ids'] = inventories[record['dataset']][
-                    'raw_annotation_ids'
-                ].get(str(record['image']['id']), [])
+                row["original_annotation_ids"] = inventories[record["dataset"]][
+                    "raw_annotation_ids"
+                ].get(str(record["image"]["id"]), [])
                 original_ids = dict(
                     zip(
-                        (a['id'] for a in record['source_annotations']),
-                        row['original_annotation_ids'],
+                        (a["id"] for a in record["source_annotations"]),
+                        row["original_annotation_ids"],
                     )
                 )
-                for box in row['boxes']:
-                    box['source_original_annotation_ids'] = [
+                for box in row["boxes"]:
+                    box["source_original_annotation_ids"] = [
                         original_ids[key]
-                        for key in box['source_selected_annotation_ids']
+                        for key in box["source_selected_annotation_ids"]
                     ]
-                max_clipping = max(max_clipping, row['max_clipping_pixels'])
+                max_clipping = max(max_clipping, row["max_clipping_pixels"])
                 if (
-                    row['max_clipping_pixels']
-                    and chosen_per_key[('clipped', record['dataset'])] < per_class
+                    row["max_clipping_pixels"]
+                    and chosen_per_key[("clipped", record["dataset"])] < per_class
                 ):
-                    choices[(record['dataset'], record['name'])].add('edge clipped')
-                    chosen_per_key[('clipped', record['dataset'])] += 1
-                count = retained[record['dataset']]
-                count['images'] += 1
-                count['negative'] += record['role'] == 'negative'
-                count['boxes'] += len(row['boxes'])
-                class_images[record['split']].update(
-                    {b['class_name'] for b in row['boxes']}
+                    choices[(record["dataset"], record["name"])].add("edge clipped")
+                    chosen_per_key[("clipped", record["dataset"])] += 1
+                count = retained[record["dataset"]]
+                count["images"] += 1
+                count["negative"] += record["role"] == "negative"
+                count["boxes"] += len(row["boxes"])
+                class_images[record["split"]].update(
+                    {b["class_name"] for b in row["boxes"]}
                 )
-                count['source_boxes'].update(
-                    str(a['category_id']) for a in record['source_annotations']
+                count["source_boxes"].update(
+                    str(a["category_id"]) for a in record["source_annotations"]
                 )
-                boxes += len(row['boxes'])
-                duplicates += row['duplicate_box_records_removed']
-                max_error = max(max_error, row['max_error_pixels'])
-                if (record['dataset'], record['name']) in choices:
+                boxes += len(row["boxes"])
+                duplicates += row["duplicate_box_records_removed"]
+                max_error = max(max_error, row["max_error_pixels"])
+                if (record["dataset"], record["name"]) in choices:
                     image_path, _ = output_paths(output, record)
-                    name = image_path.stem + '.jpg'
-                    relative = Path('previews') / record['dataset'] / name
+                    name = image_path.stem + ".jpg"
+                    relative = Path("previews") / record["dataset"] / name
                     source_names = {
-                        str(c['id']): c['name']
-                        for c in inventories[record['dataset']]['selected_categories']
+                        str(c["id"]): c["name"]
+                        for c in inventories[record["dataset"]]["selected_categories"]
                     }
                     preview(
                         record,
                         output,
-                        report['classes'],
+                        report["classes"],
                         source_names,
                         output / relative,
                     )
@@ -703,62 +767,85 @@ def make_auditor(
                             **{
                                 k: row[k]
                                 for k in (
-                                    'dataset',
-                                    'source_file_name',
-                                    'split',
-                                    'original_image_id',
-                                    'output_label',
+                                    "dataset",
+                                    "source_file_name",
+                                    "split",
+                                    "original_image_id",
+                                    "output_label",
                                 )
                             },
-                            'preview': relative.as_posix(),
-                            'source_classes': sorted(
+                            "preview": relative.as_posix(),
+                            "source_classes": sorted(
                                 {
-                                    source_names[str(a['category_id'])]
-                                    for a in record['source_annotations']
+                                    source_names[str(a["category_id"])]
+                                    for a in record["source_annotations"]
                                 }
                             ),
-                            'reasons': '; '.join(
-                                sorted(choices[(record['dataset'], record['name'])])
+                            "reasons": "; ".join(
+                                sorted(choices[(record["dataset"], record["name"])])
                             ),
                         }
                     )
-                stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+                stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
         audit = {
-            'images_verified': len(records),
-            'processing_workers': workers,
-            'max_in_flight_tasks': 2 * workers if workers > 1 else 1,
-            'unique_image_sha256': len({r['digest'] for r in records}),
-            'duplicate_image_records': len(records)
-            - len({r['digest'] for r in records}),
-            'boxes_verified': boxes,
-            'maximum_roundtrip_error_pixels': max_error,
-            'maximum_input_clipping_pixels': max_clipping,
-            'excluded_images': excluded_count,
-            'duplicate_box_records_removed': duplicates,
-            'one_pixel_clipped_boxes': report['clipped_boxes_within_one_pixel'],
-            'original_selection_images_verified': sum(
-                i['selected_images'] for i in inventories.values()
+            "images_verified": len(records),
+            "processing_workers": workers,
+            "max_in_flight_tasks": 2 * workers if workers > 1 else 1,
+            "unique_image_sha256": len({r["digest"] for r in records}),
+            "duplicate_image_records": len(records)
+            - len({r["digest"] for r in records}),
+            "boxes_verified": boxes,
+            "maximum_roundtrip_error_pixels": max_error,
+            "maximum_input_clipping_pixels": max_clipping,
+            "excluded_images": excluded_count,
+            "duplicate_box_records_removed": duplicates,
+            "one_pixel_clipped_boxes": report["clipped_boxes_within_one_pixel"],
+            "original_selection_images_verified": sum(
+                i["selected_images"] for i in inventories.values()
             ),
-            'original_selection_boxes_verified': sum(
-                i['selected_boxes'] for i in inventories.values()
+            "original_selection_boxes_verified": sum(
+                i["selected_boxes"] for i in inventories.values()
             ),
-            'cross_split_overlap': overlaps,
-            'preview_images': len(previews),
-            'all_output_image_hashes_match': True,
-            'taxonomy_ancestor_conflicts': 0,
-            'allow_one_pixel_clipping': allow_clipping,
+            "cross_split_overlap": overlaps,
+            "preview_images": len(previews),
+            "all_output_image_hashes_match": True,
+            "taxonomy_ancestor_conflicts": 0,
+            "allow_one_pixel_clipping": allow_clipping,
         }
-        report['audit'] = audit
-        report['class_images'] = class_images
-        (output / 'preview_index.json').write_text(
-            json.dumps(previews, ensure_ascii=False, indent=2), encoding='utf-8'
+        if getattr(report, "state", None):
+            report["cache"] = dict(report.state.stats)
+        report["audit"] = audit
+        report["class_images"] = class_images
+        (output / "preview_index.json").write_text(
+            json.dumps(previews, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         write_markdown(output, inventories, details, report, audit, previews, retained)
+        with (output / "AUDIT_REPORT.md").open("a", encoding="utf-8") as stream:
+            stream.write("\n## Automatic cleanup and checkpoints\n\n")
+            stream.write(
+                f"Automatically excluded images: {len(automatic)}. One-pixel clipped boxes: {report['clipped_boxes_within_one_pixel']}.\n\n"
+            )
+            stream.write(
+                "Original image files are preserved. Invalid images/annotations are excluded as whole images; they are never converted into negative samples.\n\n"
+            )
+            stream.write(
+                "Full exclusions: `excluded_images.jsonl`; validation errors: `validation_errors.jsonl`.\n\n"
+            )
+            stream.write("| Dataset | Automatically excluded images |\n|---|---:|\n")
+            for dataset in inventories:
+                stream.write(
+                    f"| {dataset} | {sum(e['dataset'] == dataset for e in automatic)} |\n"
+                )
+            stream.write(
+                "\nCache counters: `"
+                + json.dumps(report.get("cache", {}), sort_keys=True)
+                + "`.\n"
+            )
 
     return audit
 
 
-def merge(
+def _merge(
     source,
     output,
     *,
@@ -769,24 +856,27 @@ def merge(
     val_fraction=0.05,
     test_fraction=0.05,
     seed=42,
-    copy_mode='auto',
+    copy_mode="auto",
     previews_per_class=1,
-    allow_clipping=False,
+    allow_clipping=True,
     group_map=None,
     workers=8,
+    auto_clean=True,
+    state=None,
 ):
     split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
-        raise ValueError('--workers must be a positive integer')
+        raise ValueError("--workers must be a positive integer")
     source, output = Path(source).resolve(), Path(output).resolve()
-    if output.exists() and any(output.iterdir()):
-        raise ValueError('Output must be empty; choose a new --output directory')
+
     if source == output or source in output.parents or output in source.parents:
-        raise ValueError('Input and output directories must not contain each other')
+        raise ValueError("Input and output directories must not contain each other")
     if previews_per_class < 1:
-        raise ValueError('--previews-per-class must be at least 1')
+        raise ValueError("--previews-per-class must be at least 1")
     inventories = inspect_sources(source, datasets or DEFAULT_DATASETS, original_files)
     mapping, details = taxonomy_mapping(inventories, taxonomy_file, exclusions)
+    if state:
+        state.configure({"class_map": mapping})
     auditor = make_auditor(
         inventories,
         details,
@@ -809,50 +899,86 @@ def merge(
         audit_hook=auditor,
         strict_boxes=not allow_clipping,
         workers=workers,
+        state=state,
+        auto_clean=auto_clean,
     )
+
+
+def merge(source, output, *, recheck_all=False, **options):
+    config = {
+        k: options.get(k, default)
+        for k, default in {
+            "datasets": DEFAULT_DATASETS,
+            "val_fraction": 0.05,
+            "test_fraction": 0.05,
+            "seed": 42,
+            "copy_mode": "auto",
+            "group_map": None,
+            "exclusions": (),
+        }.items()
+    }
+    # JSON canonical forms avoid tuple/list differences between runs.
+    config = json.loads(json.dumps(config))
+    with managed_run(source, output, config, force=recheck_all) as state:
+        return _merge(source, output, state=state, **options)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, default=Path('datasets/lila'))
+    parser.add_argument("--source", type=Path, default=Path("datasets/lila"))
     parser.add_argument(
-        '--output', type=Path, default=Path('datasets/lila_yolo_audited')
+        "--output", type=Path, default=Path("datasets/lila_yolo_audited")
     )
-    parser.add_argument('--datasets', nargs='+', default=DEFAULT_DATASETS)
-    parser.add_argument('--taxonomy-file', type=Path, default=TAXONOMY)
+    parser.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS)
+    parser.add_argument("--taxonomy-file", type=Path, default=TAXONOMY)
     parser.add_argument(
-        '--original-files',
+        "--original-files",
         type=Path,
-        help='JSON: dataset -> metadata/bbox paths, for moved original files',
+        help="JSON: dataset -> metadata/bbox paths, for moved original files",
     )
-    parser.add_argument('--group-map', type=Path)
+    parser.add_argument("--group-map", type=Path)
     parser.add_argument(
-        '--exclude-category',
-        action='append',
+        "--exclude-category",
+        action="append",
         default=[],
-        help='dataset:category_id; drop entire images containing this class',
+        help="dataset:category_id; drop entire images containing this class",
     )
-    parser.add_argument('--val-fraction', type=float, default=0.05)
-    parser.add_argument('--test-fraction', type=float, default=0.05)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument("--val-fraction", type=float, default=0.05)
+    parser.add_argument("--test-fraction", type=float, default=0.05)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        '--workers',
+        "--workers",
         type=int,
         default=8,
-        help='Concurrent validation, writing and audit tasks; 1 runs serially',
+        help="Concurrent validation, writing and audit tasks; 1 runs serially",
     )
     parser.add_argument(
-        '--copy-mode', choices=['auto', 'hardlink', 'copy'], default='auto'
+        "--copy-mode", choices=["auto", "hardlink", "copy"], default="auto"
     )
-    parser.add_argument('--previews-per-class', type=int, default=1)
-    parser.add_argument('--allow-one-pixel-clipping', action='store_true')
+    parser.add_argument("--previews-per-class", type=int, default=1)
+    parser.add_argument(
+        "--allow-one-pixel-clipping",
+        action="store_true",
+        default=True,
+        help="Compatibility option; one-pixel clipping is enabled by default",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Stop on invalid inputs and reject clipping",
+    )
+    parser.add_argument(
+        "--recheck-all",
+        action="store_true",
+        help="Ignore validation/audit cache and check all files again",
+    )
     args = parser.parse_args()
     try:
 
         def load(path):
-            value = json.loads(path.read_text(encoding='utf-8-sig')) if path else None
+            value = json.loads(path.read_text(encoding="utf-8-sig")) if path else None
             if value is not None and not isinstance(value, dict):
-                raise ValueError('JSON options must contain an object')
+                raise ValueError("JSON options must contain an object")
             return value
 
         merge(
@@ -869,15 +995,17 @@ def main():
             workers=args.workers,
             copy_mode=args.copy_mode,
             previews_per_class=args.previews_per_class,
-            allow_clipping=args.allow_one_pixel_clipping,
+            allow_clipping=not args.strict,
+            auto_clean=not args.strict,
+            recheck_all=args.recheck_all,
         )
-        print('Audit passed. Report: ' + str(args.output.resolve() / 'AUDIT_REPORT.md'))
+        print("Audit passed. Report: " + str(args.output.resolve() / "AUDIT_REPORT.md"))
     except (ValueError, OSError, KeyError, TypeError) as exc:
         parser.exit(
             1,
-            f'Error: {exc}\nConversion is NOT certified; do not train on partial output. Use a new output directory after fixing inputs.\n',
+            f"Error: {exc}\nConversion is NOT certified; do not train on partial output. Check the saved error/checkpoint files; rerun the same command to resume.\n",
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

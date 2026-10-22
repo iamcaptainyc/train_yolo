@@ -219,6 +219,7 @@ class AuditedLilaTests(unittest.TestCase):
                     datasets=['caltech-camera-traps'],
                     copy_mode='copy',
                     workers=4,
+                    auto_clean=False,
                 )
             self.assertFalse((root / 'out/data.yaml').exists())
 
@@ -473,6 +474,8 @@ class AuditedLilaTests(unittest.TestCase):
                     root / 'strict',
                     datasets=['caltech-camera-traps'],
                     copy_mode='copy',
+                    allow_clipping=False,
+                    auto_clean=False,
                 )
             self.assertFalse((root / 'strict/data.yaml').exists())
             report = merge(

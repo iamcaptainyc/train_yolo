@@ -1,4 +1,5 @@
 """Merge selected LILA COCO annotations into YOLO, splitting whole cameras/sequences."""
+
 from __future__ import annotations
 
 import argparse
@@ -15,24 +16,45 @@ import random
 import re
 import shutil
 
-from PIL import Image
+from PIL import Image, __version__ as PIL_VERSION
+from lila_state import (
+    atomic_text,
+    ConversionReport,
+    fingerprint,
+    signature,
+    record_key,
+    relative_paths,
+    label_text,
+)
 import yaml
 from tqdm import tqdm
 
 from lila_selection import EMPTY_NAMES, EXCLUDED_NAMES, items, safe_name
 from lila_parallel import bounded_map
 
-DEFAULT_DATASETS = ['swg-camera-traps', 'caltech-camera-traps', 'ena24',
-                    'oregon-critters', 'nkhotakota-camera-traps']
+DEFAULT_DATASETS = [
+    "swg-camera-traps",
+    "caltech-camera-traps",
+    "ena24",
+    "oregon-critters",
+    "nkhotakota-camera-traps",
+]
 # Keep species and broad groups distinct; only explicit aliases are merged.
-ALIASES = {'domestic dog': 'dog', 'domestic cat': 'cat', 'domestic cattle': 'cow',
-           'mountain lion': 'cougar', 'bat species': 'bat'}
+ALIASES = {
+    "domestic dog": "dog",
+    "domestic cat": "cat",
+    "domestic cattle": "cow",
+    "mountain lion": "cougar",
+    "bat species": "bat",
+}
 # Dataset-specific common names resolve only the species used in these datasets.
-DATASET_ALIASES = {('caltech-camera-traps', 'opossum'): 'virginia opossum',
-                   ('caltech-camera-traps', 'raccoon'): 'northern raccoon',
-                   ('oregon-critters', 'black bear'): 'american black bear'}
-LOCATION_FIELDS = ('location', 'camera_id', 'camera', 'location_id', 'site_id')
-SEQUENCE_FIELDS = ('seq_id', 'sequence_id', 'sequence')
+DATASET_ALIASES = {
+    ("caltech-camera-traps", "opossum"): "virginia opossum",
+    ("caltech-camera-traps", "raccoon"): "northern raccoon",
+    ("oregon-critters", "black bear"): "american black bear",
+}
+LOCATION_FIELDS = ("location", "camera_id", "camera", "location_id", "site_id")
+SEQUENCE_FIELDS = ("seq_id", "sequence_id", "sequence")
 
 
 def normalize(name):
@@ -134,24 +156,48 @@ def read_records(source, datasets, class_map=None, group_map=None):
 
 
 def yolo_boxes(record, width, height, class_ids):
-    if not record['boxes']:
+    if not record["boxes"]:
         return [], 0
-    if not all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in (width, height)):
-        raise ValueError('Invalid image dimensions')
+    if not all(
+        isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+        for v in (width, height)
+    ):
+        raise ValueError("Invalid image dimensions")
     labels, clipped = set(), 0
-    for category, box in record['boxes']:
-        if not isinstance(box, (list, tuple)) or len(box) != 4 or not all(
-                isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v) for v in box):
-            raise ValueError('Invalid bbox coordinates')
+    for category, box in record["boxes"]:
+        if (
+            not isinstance(box, (list, tuple))
+            or len(box) != 4
+            or not all(
+                isinstance(v, (float, int))
+                and not isinstance(v, bool)
+                and math.isfinite(v)
+                for v in box
+            )
+        ):
+            raise ValueError("Invalid bbox coordinates")
         x, y, w, h = box
-        if w <= 0 or h <= 0 or min(x, y) < -1e-6 or x+w > width+1 or y+h > height+1:
-            raise ValueError(f'Invalid/out-of-image bbox {box} for {width}x{height}')
-        x1, y1, x2, y2 = max(0, x), max(0, y), min(width, x+w), min(height, y+h)
+        if (
+            w <= 0
+            or h <= 0
+            or min(x, y) < -1
+            or x + w > width + 1
+            or y + h > height + 1
+        ):
+            raise ValueError(f"Invalid/out-of-image bbox {box} for {width}x{height}")
+        x1, y1, x2, y2 = max(0, x), max(0, y), min(width, x + w), min(height, y + h)
         if x2 <= x1 or y2 <= y1:
-            raise ValueError('Degenerate clipped bbox')
-        clipped += (x1, y1, x2, y2) != (x, y, x+w, y+h)
-        labels.add((class_ids[category], (x1+x2)/(2*width), (y1+y2)/(2*height),
-                    (x2-x1)/width, (y2-y1)/height))
+            raise ValueError("Degenerate clipped bbox")
+        clipped += (x1, y1, x2, y2) != (x, y, x + w, y + h)
+        labels.add(
+            (
+                class_ids[category],
+                (x1 + x2) / (2 * width),
+                (y1 + y2) / (2 * height),
+                (x2 - x1) / width,
+                (y2 - y1) / height,
+            )
+        )
     return sorted(labels), clipped
 
 
@@ -317,74 +363,156 @@ def split_records(records, val_fraction, seed, test_fraction=0):
     return len(components)
 
 
-def validate_record(record, class_ids, plan_only=False, strict_boxes=False):
+def validate_record(record, class_ids, plan_only=False, strict_boxes=False, state=None):
     """One task owns one record; images are closed before returning to the coordinator."""
     unknown_dimensions = 0
-    width, height = record['image'].get('width'), record['image'].get('height')
+    width, height = record["image"].get("width"), record["image"].get("height")
     try:
         if not plan_only:
-            with Image.open(record['source']) as image:
-                if image.getexif().get(274, 1) != 1:
-                    raise ValueError(
-                        'EXIF orientation must be normalized before conversion'
-                    )
-                if (width is not None and width != image.width) or (
-                    height is not None and height != image.height
-                ):
-                    raise ValueError(
-                        f'Image dimensions {image.size} differ from metadata {(width, height)}'
-                    )
-                width, height = image.size
-                image.load()
-            # PNG EXIF reads can consume the stream; verify a freshly opened image.
-            with Image.open(record['source']) as image:
-                image.verify()
-            with record['source'].open('rb') as stream:
-                record['digest'] = hashlib.file_digest(stream, 'sha256').hexdigest()
-        if plan_only and record['boxes'] and (not width or not height):
+            before = fingerprint(record["source"])
+            version = "decode-exif-verify-sha256-v1:" + PIL_VERSION
+            stamp = {"file": before, "version": version}
+            cached = state.get("image", str(record["source"]), stamp) if state else None
+            if cached is None:
+                with Image.open(record["source"]) as image:
+                    if image.getexif().get(274, 1) != 1:
+                        raise ValueError(
+                            "EXIF orientation must be normalized before conversion"
+                        )
+                    actual = image.size
+                    image.load()
+                with Image.open(record["source"]) as image:
+                    image.verify()
+                with record["source"].open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if fingerprint(record["source"]) != before:
+                    raise ValueError("Source changed during validation")
+                cached = {"width": actual[0], "height": actual[1], "digest": digest}
+                if state:
+                    state.put("image", str(record["source"]), stamp, cached)
+            if (width is not None and width != cached["width"]) or (
+                height is not None and height != cached["height"]
+            ):
+                raise ValueError(
+                    f"Image dimensions {(cached['width'], cached['height'])} differ from metadata {(width, height)}"
+                )
+            width, height = cached["width"], cached["height"]
+            record.update(
+                digest=cached["digest"],
+                validation_fingerprint=before,
+                image_cache_version=version,
+                actual_dimensions=(width, height),
+            )
+        if plan_only and record["boxes"] and (not width or not height):
             # A plan needs class counts, not usable labels; actual conversion reads the image.
             unknown_dimensions = 1
-            record['labels'], count = [
-                (class_ids[name], 0, 0, 0, 0) for name, _ in record['boxes']
+            record["labels"], count = [
+                (class_ids[name], 0, 0, 0, 0) for name, _ in record["boxes"]
             ], 0
         else:
-            record['labels'], count = yolo_boxes(record, width, height, class_ids)
+            geometry_stamp = signature(
+                [width, height, record["boxes"], class_ids, "geometry-v2"]
+            )
+            geometry = (
+                state.get("geometry", record_key(record), geometry_stamp)
+                if state
+                else None
+            )
+            if geometry is None:
+                labels, count = yolo_boxes(record, width, height, class_ids)
+                geometry = {"labels": labels, "count": count}
+                if state:
+                    state.put("geometry", record_key(record), geometry_stamp, geometry)
+            record["labels"] = [tuple(b) for b in geometry["labels"]]
+            count = geometry["count"]
             if count and strict_boxes:
                 raise ValueError(
-                    'Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping'
+                    "Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping"
                 )
+        if state:
+            state.clear_error("validation", record)
         return count, unknown_dimensions, None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        record["validation_error"] = str(exc)
+        if state:
+            state.error("validation", record, exc)
         return 0, 0, f'{record["dataset"]}/{record["name"]}: {exc}'
 
 
-def write_record(record, output, copy_mode):
+def write_record(record, output, copy_mode, state=None):
+    if state:
+        expected = signature(
+            [
+                record["digest"],
+                record["labels"],
+                relative_paths(record),
+                copy_mode,
+                record["validation_fingerprint"]["device"],
+                record["validation_fingerprint"]["inode"],
+            ]
+        )
+        hit = state.output_hit(record, expected)
+        if hit:
+            return hit
+        image_rel, label_rel = relative_paths(record)
+        image, label = state.safe_path(image_rel), state.safe_path(label_rel)
+        image.parent.mkdir(parents=True, exist_ok=True)
+        label.parent.mkdir(parents=True, exist_ok=True)
+        state.begin_output(record, expected)
+        temporary = image.with_name(image.name + ".lila-part")
+        temporary_label = label.with_name(label.name + ".lila-part")
+        try:
+            mode = copy_mode
+            if mode in ("auto", "hardlink"):
+                try:
+                    os.link(record["source"], temporary)
+                    mode = "hardlink"
+                except OSError:
+                    if copy_mode == "hardlink":
+                        raise
+                    mode = "copy"
+            if mode == "copy":
+                shutil.copy2(record["source"], temporary)
+            os.replace(temporary, image)
+            temporary_label.write_text(label_text(record), encoding="utf-8")
+            os.replace(temporary_label, label)
+            state.refresh_source(record)
+            state.save_output(record, expected, mode)
+            state.clear_error("write", record)
+            return mode
+        except (OSError, ValueError) as exc:
+            state.error("write", record, exc)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+            temporary_label.unlink(missing_ok=True)
+
     # Flatten with a stable digest so JPEG/PNG stems and cross-dataset names cannot collide.
     key = hashlib.sha256(
-        (record['dataset'] + '/' + record['name']).encode()
+        (record["dataset"] + "/" + record["name"]).encode()
     ).hexdigest()
-    relative = Path(record['dataset']) / (key + record['source'].suffix.lower())
-    image = output / 'images' / record['split'] / relative
-    label = output / 'labels' / record['split'] / relative.with_suffix('.txt')
+    relative = Path(record["dataset"]) / (key + record["source"].suffix.lower())
+    image = output / "images" / record["split"] / relative
+    label = output / "labels" / record["split"] / relative.with_suffix(".txt")
     image.parent.mkdir(parents=True, exist_ok=True)
     label.parent.mkdir(parents=True, exist_ok=True)
     mode = copy_mode
-    if mode in ('auto', 'hardlink'):
+    if mode in ("auto", "hardlink"):
         try:
-            os.link(record['source'], image)
-            mode = 'hardlink'
+            os.link(record["source"], image)
+            mode = "hardlink"
         except OSError:
-            if copy_mode == 'hardlink':
+            if copy_mode == "hardlink":
                 raise
-            mode = 'copy'
-    if mode == 'copy':
-        shutil.copy2(record['source'], image)
+            mode = "copy"
+    if mode == "copy":
+        shutil.copy2(record["source"], image)
     label.write_text(
-        ''.join(
-            str(b[0]) + ' ' + ' '.join(f'{v:.8f}' for v in b[1:]) + '\n'
-            for b in record['labels']
+        "".join(
+            str(b[0]) + " " + " ".join(f"{v:.8f}" for v in b[1:]) + "\n"
+            for b in record["labels"]
         ),
-        encoding='utf-8',
+        encoding="utf-8",
     )
     return mode
 
@@ -396,7 +524,7 @@ def prepare(
     datasets=None,
     val_fraction=0.2,
     seed=42,
-    copy_mode='auto',
+    copy_mode="auto",
     plan_only=False,
     class_map=None,
     group_map=None,
@@ -404,23 +532,27 @@ def prepare(
     strict_boxes=False,
     test_fraction=0,
     workers=8,
+    state=None,
+    auto_clean=False,
 ):
     fractions = split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
-        raise ValueError('--workers must be a positive integer')
+        raise ValueError("--workers must be a positive integer")
     source, output = Path(source).resolve(), Path(output).resolve()
     if source == output or source in output.parents or output in source.parents:
-        raise ValueError('Input and output directories must not contain each other')
-    if output.exists() and any(output.iterdir()):
+        raise ValueError("Input and output directories must not contain each other")
+    if state is None and output.exists() and any(output.iterdir()):
         raise ValueError(
-            f'Output is non-empty: {output}; choose a new output directory'
+            f"Output is non-empty: {output}; choose a new output directory"
         )
     records, mapping, skipped, fallback = read_records(
         source, datasets or DEFAULT_DATASETS, class_map, group_map
     )
-    names = sorted({name for r in records for name, _ in r['boxes']})
+    if state:
+        state.active_keys = {record_key(r) for r in records}
+    names = sorted({name for r in records for name, _ in r["boxes"]})
     if not names:
-        raise ValueError('No positive classes remain')
+        raise ValueError("No positive classes remain")
     class_ids = {name: index for index, name in enumerate(names)}
     clipped, missing, unknown_dimensions = 0, [], 0
     function = partial(
@@ -428,84 +560,209 @@ def prepare(
         class_ids=class_ids,
         plan_only=plan_only,
         strict_boxes=strict_boxes,
+        state=state,
     )
-    with tqdm(
-        total=len(records),
-        desc='Validate and hash' if not plan_only else 'Plan labels',
-        unit='img',
-    ) as progress, closing(
-        bounded_map(function, records, 1 if plan_only else workers, progress)
-    ) as results:
-        for count, unknown, issue in results:
-            clipped += count
-            unknown_dimensions += unknown
-            if issue is not None and len(missing) < 20:
-                missing.append(issue)
-    if missing:
+    try:
+        with tqdm(
+            total=len(records),
+            desc="Validate and hash" if not plan_only else "Plan labels",
+            unit="img",
+        ) as progress, closing(
+            bounded_map(function, records, 1 if plan_only else workers, progress)
+        ) as results:
+            for count, unknown, issue in results:
+                clipped += count
+                unknown_dimensions += unknown
+                if issue is not None:
+                    missing.append(issue)
+    finally:
+        if state:
+            state.export_errors("validation", records)
+    rejected = [r for r in records if r.get("validation_error")]
+    if missing and not auto_clean:
         raise ValueError(
-            'Input files or annotations invalid; finish downloads before conversion. First issues:\n'
-            + '\n'.join(missing)
+            "Input files or annotations invalid; finish downloads before conversion. First issues:\n"
+            + "\n".join(missing[:20])
+            + "\nFull list: validation_errors.jsonl"
         )
+    if auto_clean:
+        records = [r for r in records if not r.get("validation_error")]
+        # An exact duplicate with conflicting annotations has no defensible winner.
+        variants = defaultdict(set)
+        for r in records:
+            variants[r["digest"]].add(signature(r["labels"]))
+        conflicts = {key for key, values in variants.items() if len(values) > 1}
+        for r in records:
+            if r["digest"] in conflicts:
+                r["validation_error"] = (
+                    "Identical image with conflicting annotations; excluded all versions"
+                )
+                rejected.append(r)
+                if state:
+                    state.error("validation", r, r["validation_error"])
+        records = [r for r in records if not r.get("validation_error")]
+        if state:
+            state.export_errors("validation", records + rejected)
+    if not records or not any(r["labels"] for r in records):
+        raise ValueError("No valid positive images remain after filtering")
     components = split_records(records, val_fraction, seed, test_fraction)
     overlaps = split_overlap(records)
     if any(n for pair in overlaps.values() for n in pair.values()):
-        raise ValueError(f'Cross-split grouping overlap: {overlaps}')
+        raise ValueError(f"Cross-split grouping overlap: {overlaps}")
     # Identical image bytes with differing labels need manual review, even within one split.
     duplicates = {}
     for r in records:
-        digest = r.get('digest')
+        digest = r.get("digest")
         if digest is not None:
-            if digest in duplicates and duplicates[digest] != r['labels']:
+            if digest in duplicates and duplicates[digest] != r["labels"]:
                 raise ValueError(
                     f'Identical image with conflicting annotations: {r["dataset"]}/{r["name"]}'
                 )
-            duplicates[digest] = r['labels']
-    stats = {split: {'images': 0, 'negative_images': 0, 'boxes': Counter(), 'datasets': Counter()} for split in fractions}
-    dataset_stats = {d: {s: {'images': 0, 'negative_images': 0, 'boxes': 0} for s in stats} for d in sorted(datasets or DEFAULT_DATASETS)}
+            duplicates[digest] = r["labels"]
+    stats = {
+        split: {
+            "images": 0,
+            "negative_images": 0,
+            "boxes": Counter(),
+            "datasets": Counter(),
+        }
+        for split in fractions
+    }
+    dataset_stats = {
+        d: {s: {"images": 0, "negative_images": 0, "boxes": 0} for s in stats}
+        for d in sorted(datasets or DEFAULT_DATASETS)
+    }
     for r in records:
-        s = stats[r['split']]
-        s['images'] += 1
-        s['negative_images'] += r['role'] == 'negative'
-        s['datasets'][r['dataset']] += 1
-        s['boxes'].update(names[label[0]] for label in r['labels'])
-        ds = dataset_stats[r['dataset']][r['split']]
-        ds['images'] += 1
-        ds['negative_images'] += r['role'] == 'negative'
-        ds['boxes'] += len(r['labels'])
-    if not all(stats[s]['boxes'] for s in stats):
-        raise ValueError('Every split must contain positive boxes; adjust grouping or split fractions')
-    report = {'source': str(source), 'seed': seed, 'processing_workers': 1 if plan_only else workers, 'requested_val_fraction': val_fraction,
-              'actual_val_fraction': stats['val']['images']/len(records), 'groups': components,
-              'requested_test_fraction': test_fraction, 'requested_split_fractions': fractions,
-              'actual_split_fractions': {s: stats[s]['images']/len(records) for s in stats},
-              'cross_split_overlap': overlaps, 'dataset_split_stats': dataset_stats,
-              'split_groups': {s: len({r['component'] for r in records if r['split'] == s}) for s in stats},
-              'train_only_datasets_missing_group_info': fallback, 'excluded_images': skipped,
-              'classes': names, 'stats': stats, 'clipped_boxes_within_one_pixel': clipped,
-              'plan_only': plan_only, 'image_files_verified': not plan_only,
-              'plan_positive_images_needing_dimensions': unknown_dimensions,
-              'sha256_overlap_checked': not plan_only,
-              'missing_classes': {s: sorted(set(names)-stats[s]['boxes'].keys()) for s in stats}}
+        s = stats[r["split"]]
+        s["images"] += 1
+        s["negative_images"] += r["role"] == "negative"
+        s["datasets"][r["dataset"]] += 1
+        s["boxes"].update(names[label[0]] for label in r["labels"])
+        ds = dataset_stats[r["dataset"]][r["split"]]
+        ds["images"] += 1
+        ds["negative_images"] += r["role"] == "negative"
+        ds["boxes"] += len(r["labels"])
+    if not all(stats[s]["boxes"] for s in stats):
+        raise ValueError(
+            "Every split must contain positive boxes; adjust grouping or split fractions"
+        )
+    report = ConversionReport(
+        {
+            "source": str(source),
+            "seed": seed,
+            "processing_workers": 1 if plan_only else workers,
+            "requested_val_fraction": val_fraction,
+            "actual_val_fraction": stats["val"]["images"] / len(records),
+            "groups": components,
+            "requested_test_fraction": test_fraction,
+            "requested_split_fractions": fractions,
+            "actual_split_fractions": {
+                s: stats[s]["images"] / len(records) for s in stats
+            },
+            "cross_split_overlap": overlaps,
+            "dataset_split_stats": dataset_stats,
+            "split_groups": {
+                s: len({r["component"] for r in records if r["split"] == s})
+                for s in stats
+            },
+            "train_only_datasets_missing_group_info": fallback,
+            "excluded_images": skipped,
+            "classes": names,
+            "stats": stats,
+            "clipped_boxes_within_one_pixel": clipped,
+            "plan_only": plan_only,
+            "image_files_verified": not plan_only,
+            "plan_positive_images_needing_dimensions": unknown_dimensions,
+            "sha256_overlap_checked": not plan_only,
+            "missing_classes": {
+                s: sorted(set(names) - stats[s]["boxes"].keys()) for s in stats
+            },
+            "automatic_exclusions": [
+                {
+                    "dataset": r["dataset"],
+                    "file_name": r["name"],
+                    "reason": r["validation_error"],
+                }
+                for r in rejected
+            ],
+            "automatic_cleanup": auto_clean,
+        }
+    )
+    report.state = state
+    if state:
+        state.reconcile(records)
     output.mkdir(parents=True, exist_ok=True)
-    (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
-    (output/'class_mapping.json').write_text(json.dumps(mapping, indent=2, ensure_ascii=False), encoding='utf-8')
-    with (output/'split_manifest.jsonl').open('w', encoding='utf-8') as stream:
+    (output / "report.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    (output / "class_mapping.json").write_text(
+        json.dumps(mapping, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    with (output / "split_manifest.jsonl").open("w", encoding="utf-8") as stream:
         for r in records:
-            stream.write(json.dumps({k: r.get(k) for k in ('dataset', 'name', 'role', 'location', 'sequence', 'group', 'component', 'split', 'digest')})+'\n')
+            stream.write(
+                json.dumps(
+                    {
+                        k: r.get(k)
+                        for k in (
+                            "dataset",
+                            "name",
+                            "role",
+                            "location",
+                            "sequence",
+                            "group",
+                            "component",
+                            "split",
+                            "digest",
+                        )
+                    }
+                )
+                + "\n"
+            )
     if not plan_only:
         used_modes = Counter()
-        with tqdm(total=len(records), desc='Write YOLO', unit='img') as progress, closing(bounded_map(partial(write_record, output=output, copy_mode=copy_mode), records, workers, progress)) as results:
+        with tqdm(
+            total=len(records), desc="Write YOLO", unit="img"
+        ) as progress, closing(
+            bounded_map(
+                partial(write_record, output=output, copy_mode=copy_mode, state=state),
+                records,
+                workers,
+                progress,
+            )
+        ) as results:
             for mode in results:
                 used_modes[mode] += 1
-        report['image_storage_modes'] = dict(used_modes)
-        (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
+        report["image_storage_modes"] = dict(used_modes)
+        (output / "report.json").write_text(
+            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        if state:
+            state.export_errors("write", records)
+            report["cache"] = dict(state.stats)
         if audit_hook is not None:
             audit_hook(records, mapping, report, output)
-            (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
-        (output/'data.yaml').write_text(yaml.safe_dump({'path': output.as_posix(), 'train': 'images/train',
-            **{s: 'images/'+s for s in stats if s != 'train'}, 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True), encoding='utf-8')
-    counts = ', '.join(f'{s}={stats[s]["images"]:,}' for s in stats)
-    print(f'{len(records):,} images; {len(names)} classes; {components} disjoint groups; {counts}; plan_only={plan_only}')
+            (output / "report.json").write_text(
+                json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        atomic_text(
+            output / "data.yaml",
+            yaml.safe_dump(
+                {
+                    "path": output.as_posix(),
+                    "train": "images/train",
+                    **{s: "images/" + s for s in stats if s != "train"},
+                    "nc": len(names),
+                    "names": dict(enumerate(names)),
+                },
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+        )
+    counts = ", ".join(f'{s}={stats[s]["images"]:,}' for s in stats)
+    print(
+        f"{len(records):,} images; {len(names)} classes; {components} disjoint groups; {counts}; plan_only={plan_only}"
+    )
     return report
 
 
@@ -536,5 +793,5 @@ def main():
         p.exit(1, f'Error: {exc}\n')
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
