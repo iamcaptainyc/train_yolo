@@ -14,8 +14,10 @@ python merge_yolo_datasets.py \
   --lila yolo_datasets/lila_camping \
   --animals yolo_datasets/animals-detection-images-dataset \
   --lila-source datasets/lila \
-  --output yolo_datasets/camping_merged_resplit \
-  --min-class-boxes 100 \
+  --output yolo_datasets/camping_balanced \
+  --min-class-images 100 \
+  --max-class-images 10000 \
+  --cap-class-images 10000 \
   --workers 16
 ```
 
@@ -34,10 +36,24 @@ python merge_yolo_datasets.py \
 - `jackal`（胡狼）与 `coyote`（郊狼）统一为用户定义的 `wolf`，中文“狼类（含胡狼、郊狼）”。这是应用分组，不是灰狼物种标注，也不意味着新增了灰狼样本。统一在少样本阈值统计之前进行，报告保留各来源名称和 ID。
 - 未确定动物、哺乳动物、小型动物等宽泛类别整图排除。未审阅的新名称或旧科学分类会明确报错，不猜物种。类别仅为实际保留的有框样本分配 ID，缺失的狼等不会凭空加入。
 - 默认重新划分，不保留原 train/val/test。目标为 90%/5%/5%，通过 `--val-fraction .05 --test-fraction .05 --seed 42` 调整。完整相机/序列连通组不可拆；先争取少数类覆盖，再优化图片比例和类别分布，不保证精确比例或找到所有可行覆盖方案。原来只在 val/test 的类别也可以重新分配到 train。
-- 默认 `--min-class-boxes 100`：统计两个来源所有原划分的有效框，少于阈值的细类沿已审核父类合并；`0` 禁用。阈值依据是合并前原类别总框，不是训练框。框数不是独立场景数，报告另外列出每类独立分组数。
+- 默认 `--min-class-images 100 \
+  --max-class-images 10000 \
+  --cap-class-images 10000`：统计两个来源所有原划分的有效框，少于阈值的细类沿已审核父类合并；`0` 禁用。阈值依据是合并前原类别总框，不是训练框。框数不是独立场景数，报告另外列出每类独立分组数。
 - 例如竹鼠→`rodent`，巨蜥→`lizard`，水貂/鼬→`mustelid`，少量鸽子→`bird`，海马→`fish`，豹猫→`wild_cat`。无合理上级的蝙蝠、穿山甲等保持原类，在报告列出，不能错并为鼠或重新引入未知动物类别。`wild_boar`、`pig`、`warthog` 强制保持独立。提高阈值也可能合并棕熊等熟悉细类，应查看报告再训练。
 - 每个保留框的四个坐标 token 原样保留，包括小数位与科学计数法；只改变类别 ID。若别名合并造成同类同坐标的重复记录，保留第一条原始坐标文本，报告去重数量。
 - 既有空标签作为负样本保留。缺失标签、非法 ID、非法坐标或越界框会整图排除，绝不把丢失正标签当作负样本。继承两个来源既有的负样本，总负样本比例不重新抽成 5%。
+
+## 超过 10,000 张优先细分，再按整图控制数量
+
+`--max-class-images 10000` 在图片数严格大于 10,000 时触发。默认从 [细分规则](../configs/lila_refinements.json) 中的 74 条数据集专属映射恢复英文细类，例如白尾鹿、黑尾鹿、水鹿、不同松鼠、羚羊和鸟类。不把 `unidentified` 或仅有宽泛标签的图片猜成某个物种；`wild_boar` 继续统一，不恢复成多种野猪标签。
+
+细类恢复读取原始 selected_annotations.json，使用原图尺寸与原始框重算规范化坐标，与当前 YOLO 框逐一匹配（沿用 8 位小数精度）。匹配唯一才修改类别，保留现有坐标文本；缺尺寸、坐标不匹配、同框原类别有歧义时保留粗类并汇总原因。不重新解码图片，不全量读取图片内容，不生成逐图校验缓存。Animals 原始 YOLO 中没有更细的来源信息，保持其既有标注粒度。
+
+旧 LILA 策略错误地将黄喉貂归到了 bird；本次在处理超量 bird 时，对原始黄喉貂框匹配成功的记录改为黄喉貂，再按数量决定是否归入 mustelid。无法验证的记录保留并报告，不假称已修复全部源标注。
+
+`--cap-class-images 10000` 在重新划分后，对仍然过多的类别进行确定性的整图抽样，按相机/序列连通组轮流选择，保留完整标签。不会删除输入文件，不把被删除的框变成负样本，不把保留图移到别的集合；少样本类至少保留原有图片数与最低阈值中的较小者，各类原本存在的 train/val/test 至少保留一张。因此多类共现可能导致少量超限，报告列出原因及超限类别。抽样改变实际集合比例，不保证精确 90%/5%/5%。`--cap-class-images 0` 可只细分、保留全部有效图片。
+
+统计中的图片数是输入图片记录数，不是内容去重后的唯一图片数。多类图片计入多个类别，各类图片数之和可以超过总图片数。最终类别数和图片分布须以实际运行报告为准，不能用旧框数表直接推算。
 
 ## 重复图片与检查范围
 
@@ -47,7 +63,7 @@ LILA 从 `lila_camping/.lila-state/run.json` 恢复原下载目录，再读取�
 
 Animals 默认按单图分组，因为当前 YOLO 输入没有相机/序列元数据；不能声称其未知序列或近似图片已隔离。若有分组信息可传 `--group-map groups.json`，格式为 `{"animals/train/relative/image.jpg": "sequence-001"}`；键是来源/原划分/相对图片路径，值为全局分组 ID，相同值强制绑定。该参数也可以补充 LILA 分组，但不解除从官方元数据得到的相机约束。
 
-`--preserve-splits --min-class-boxes 0` 可使用保留旧划分且不合并稀有类的模式，此模式跨原划分同图才会全部排除。新策略与旧输出检查点不兼容，必须使用新的输出目录；脚本不会自动删除旧数据。
+`--preserve-splits --min-class-images 0 --max-class-images 0 --cap-class-images 0` 可使用保留旧划分且不合并稀有类的模式，此模式跨原划分同图才会全部排除。新策略与旧输出检查点不兼容，必须使用新的输出目录；脚本不会自动删除旧数据。
 
 **默认模式不能发现所有独立复制文件的内容重复**，也不声称不存在全部跨数据集内容泄漏。需要检查字节相同的独立文件时，首次运行就添加：
 
@@ -72,7 +88,7 @@ Ctrl+C 后重跑完全相同的命令，已写好且正确的硬链接和标签�
 仅全部检查完成才生成正式 `data.yaml` 和 `MERGE_REPORT.md`；中断/失败时输出 `PROCESSING_REPORT.md`，保留已写文件便于续跑。
 
 ```text
-yolo_datasets/camping_merged_resplit/
+yolo_datasets/camping_balanced/
   data.yaml
   images/{train,val,test}/{lila,animals}/...
   labels/{train,val,test}/{lila,animals}/...
@@ -84,12 +100,12 @@ yolo_datasets/camping_merged_resplit/
   .merge-state/run.json
 ```
 
-报告列出每个来源的原类别名/ID → 最终英文名/新 ID、少样本合并前数量/目标、无合适上级的稀有类、每类独立分组数与缺失集合、原划分→新划分流向、各来源/各划分图片数与框数、每类 train/val/test 框数、排除原因、坐标和硬链接检查结果。缺少独立分组时不会拆相邻帧来凑齐三集合；检查通过也不等于所有类别都有足够评估样本。文件名以 `SHA256(来源/原划分/图片相对路径)` 命名；这不是图片内容哈希。
+报告列出每个来源的原类别名/ID → 最终英文名/新 ID、少样本合并前图片数/目标、无合适上级的稀有类、每类独立分组数与缺失集合、原划分→新划分流向、各来源/各划分图片数与框数、每类 train/val/test 图片数和总框数、排除原因、坐标和硬链接检查结果。缺少独立分组时不会拆相邻帧来凑齐三集合；检查通过也不等于所有类别都有足够评估样本。文件名以 `SHA256(来源/原划分/图片相对路径)` 命名；这不是图片内容哈希。
 
 训练使用新 YAML，旧权重的分类头 ID 不能直接解释为新类别：
 
 ```bash
-python train.py --data yolo_datasets/camping_merged_resplit/data.yaml \
+python train.py --data yolo_datasets/camping_balanced/data.yaml \
   --model weights/yolo11s.pt --epochs 100 --batch 128 --workers 16 --device 0
 ```
 

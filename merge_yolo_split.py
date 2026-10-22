@@ -9,16 +9,29 @@ from prepare_lila import LOCATION_FIELDS, SEQUENCE_FIELDS, first_value, Union, i
 
 
 def fold_rare(records, datasets, metadata, minimum):
-    counts = Counter(name for r in records for name, _ in r['rows'])
+    from merge_yolo_refine import image_counts
+    counts = image_counts(records)
     # These application labels must stay distinct even with little data.
     protected = {'wild_boar', 'pig', 'warthog'}
     parents = {n: m.get('parent') for n, m in metadata.items()}
     parents['leopard_cat'] = 'wild_cat'
     metadata['leopard_cat']['parent'] = 'wild_cat'
+    support = Counter()
+    for r in records:
+        covered = set()
+        for name, _ in r['rows']:
+            lineage, node = set(), name
+            while node:
+                if node in lineage:
+                    raise ValueError('Cycle in class parents')
+                lineage.add(node)
+                covered.add(node)
+                node = parents.get(node)
+        support.update(covered)
     mapping = {}
     for name in counts:
         target, visited = name, set()
-        while counts[target] < minimum and target not in protected and parents.get(target):
+        while support[target] < minimum and target not in protected and parents.get(target):
             if target in visited:
                 raise ValueError('Cycle in class parents')
             visited.add(target)
@@ -27,12 +40,15 @@ def fold_rare(records, datasets, metadata, minimum):
     from merge_yolo_datasets import unique_rows
     for r in records:
         old = r['rows']
+        if 'target_names' in r:
+            r['target_names'] = [mapping.get(n, n) for n in r['target_names']]
         r['rows'] = unique_rows([(mapping[n], c) for n, c in old])
         r['duplicate_boxes_removed'] += len(old) - len(r['rows'])
     for d in datasets:
         d['mapping'] = {i: mapping.get(n, n) for i, n in d['mapping'].items()}
-    return {'minimum_total_boxes': minimum, 'basis': 'valid boxes across all original splits before duplicate-image exclusions',
-            'changes': [{'source': n, 'target': t, 'original_boxes': counts[n]} for n, t in sorted(mapping.items()) if n != t],
+    return {'minimum_total_images': minimum, 'basis': 'images containing the class, counted once per input image across all original splits',
+            'parent_support': 'Parent thresholds include descendant image coverage so a residual parent is not folded away merely because common children were restored.',
+            'changes': [{'source': n, 'target': t, 'original_images': counts[n]} for n, t in sorted(mapping.items()) if n != t],
             'rare_without_safe_parent': [n for n in sorted(counts) if counts[n] < minimum and mapping[n] == n]}
 
 

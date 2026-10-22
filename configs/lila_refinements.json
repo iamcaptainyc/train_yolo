@@ -1,0 +1,523 @@
+{
+  "schema": 1,
+  "rules": [
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "large_antlered_muntjac",
+      "target": "large_antlered_muntjac",
+      "parent": "deer",
+      "chinese": "大角麂"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "stump_tailed_macaque",
+      "target": "stump_tailed_macaque",
+      "parent": "monkey",
+      "chinese": "熊猴（短尾猴）"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "pig_tailed_macaque",
+      "target": "pig_tailed_macaque",
+      "parent": "monkey",
+      "chinese": "豚尾猴"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "red_cheeked_squirrel",
+      "target": "red_cheeked_squirrel",
+      "parent": "squirrel",
+      "chinese": "红颊长吻松鼠"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "sambar",
+      "target": "sambar",
+      "parent": "deer",
+      "chinese": "水鹿"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "red_junglefowl",
+      "target": "red_junglefowl",
+      "parent": "bird",
+      "chinese": "红原鸡"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "blue_pitta",
+      "target": "blue_pitta",
+      "parent": "bird",
+      "chinese": "蓝八色鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "pallass_squirrel",
+      "target": "pallass_squirrel",
+      "parent": "squirrel",
+      "chinese": "赤腹松鼠"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "white_crowned_forktail",
+      "target": "white_crowned_forktail",
+      "parent": "bird",
+      "chinese": "白冠燕尾"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "japanese_thrush",
+      "target": "japanese_thrush",
+      "parent": "bird",
+      "chinese": "乌灰鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "orange_headed_thrush",
+      "target": "orange_headed_thrush",
+      "parent": "bird",
+      "chinese": "橙头地鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "scaly_thrush",
+      "target": "scaly_thrush",
+      "parent": "bird",
+      "chinese": "虎斑地鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "gray_laughingthrush",
+      "target": "gray_laughingthrush",
+      "parent": "bird",
+      "chinese": "褐胸噪鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "eurasian_woodcock",
+      "target": "eurasian_woodcock",
+      "parent": "bird",
+      "chinese": "丘鹬"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "blue_whistling_thrush",
+      "target": "blue_whistling_thrush",
+      "parent": "bird",
+      "chinese": "紫啸鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "large_scimitar_babbler",
+      "target": "large_scimitar_babbler",
+      "parent": "bird",
+      "chinese": "长嘴钩嘴鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "rufous_cheeked_laughingthrush",
+      "target": "rufous_cheeked_laughingthrush",
+      "parent": "bird",
+      "chinese": "栗颊噪鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "red_shanked_douc",
+      "target": "red_shanked_douc",
+      "parent": "monkey",
+      "chinese": "白臀叶猴（红腿白臀叶猴）"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "annamite_striped_rabbit",
+      "target": "annamite_striped_rabbit",
+      "parent": "rabbit",
+      "chinese": "安南条纹兔"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "blue_fronted_robin",
+      "target": "blue_fronted_robin",
+      "parent": "bird",
+      "chinese": "蓝额长脚地鸲"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "orange_breasted_trogon",
+      "target": "orange_breasted_trogon",
+      "parent": "bird",
+      "chinese": "橙胸咬鹃"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "bar_bellied_pitta",
+      "target": "bar_bellied_pitta",
+      "parent": "bird",
+      "chinese": "斑腹八色鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "francois_langur",
+      "target": "francois_langur",
+      "parent": "monkey",
+      "chinese": "黑叶猴"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "black_giant_squirrel",
+      "target": "black_giant_squirrel",
+      "parent": "squirrel",
+      "chinese": "巨松鼠（黑巨松鼠）"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "hatinh_langur",
+      "target": "hatinh_langur",
+      "parent": "monkey",
+      "chinese": "河静叶猴"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "red_muntjac",
+      "target": "red_muntjac",
+      "parent": "deer",
+      "chinese": "赤麂（红麂）"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "phayres_langur",
+      "target": "phayres_langur",
+      "parent": "monkey",
+      "chinese": "菲氏叶猴"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "rufous_necked_hornbill",
+      "target": "rufous_necked_hornbill",
+      "parent": "bird",
+      "chinese": "棕颈犀鸟"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "rufous_eared_laughingthrush",
+      "target": "rufous_eared_laughingthrush",
+      "parent": "bird",
+      "chinese": "棕耳噪鹛（原英文暂译）"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "red_tailed_laughingthrush",
+      "target": "red_tailed_laughingthrush",
+      "parent": "bird",
+      "chinese": "赤尾噪鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "siberian_thrush",
+      "target": "siberian_thrush",
+      "parent": "bird",
+      "chinese": "白眉地鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "asian_fairy_bluebird",
+      "target": "asian_fairy_bluebird",
+      "parent": "bird",
+      "chinese": "和平鸟"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "striated_heron",
+      "target": "striated_heron",
+      "parent": "bird",
+      "chinese": "绿鹭"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "black_throated_laughingthrush",
+      "target": "black_throated_laughingthrush",
+      "parent": "bird",
+      "chinese": "黑喉噪鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "golden_babbler",
+      "target": "golden_babbler",
+      "parent": "bird",
+      "chinese": "金头穗鹛"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "white_tailed_robin",
+      "target": "white_tailed_robin",
+      "parent": "bird",
+      "chinese": "白尾蓝地鸲"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "eyebrowed_thrush",
+      "target": "eyebrowed_thrush",
+      "parent": "bird",
+      "chinese": "白眉鸫"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "silver_eared_mesia",
+      "target": "silver_eared_mesia",
+      "parent": "bird",
+      "chinese": "银耳相思鸟"
+    },
+    {
+      "dataset": "swg-camera-traps",
+      "source_name": "grey_headed_canary_flycatcher",
+      "target": "gray_headed_canary_flycatcher",
+      "parent": "bird",
+      "chinese": "方尾鹟"
+    },
+    {
+      "dataset": "ena24",
+      "source_name": "Eastern Gray Squirrel",
+      "target": "eastern_gray_squirrel",
+      "parent": "squirrel",
+      "chinese": "东部灰松鼠"
+    },
+    {
+      "dataset": "ena24",
+      "source_name": "White_Tailed_Deer",
+      "target": "white_tailed_deer",
+      "parent": "deer",
+      "chinese": "白尾鹿"
+    },
+    {
+      "dataset": "ena24",
+      "source_name": "Virginia Opossum",
+      "target": "virginia_opossum",
+      "parent": "opossum",
+      "chinese": "弗吉尼亚负鼠"
+    },
+    {
+      "dataset": "ena24",
+      "source_name": "Eastern Cottontail",
+      "target": "eastern_cottontail",
+      "parent": "rabbit",
+      "chinese": "东部棉尾兔（佛罗里达棉尾兔）"
+    },
+    {
+      "dataset": "ena24",
+      "source_name": "Eastern Fox Squirrel",
+      "target": "eastern_fox_squirrel",
+      "parent": "squirrel",
+      "chinese": "东部狐松鼠"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "ruffed grouse",
+      "target": "ruffed_grouse",
+      "parent": "bird",
+      "chinese": "披肩榛鸡"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "canada jay",
+      "target": "canada_jay",
+      "parent": "bird",
+      "chinese": "加拿大噪鸦"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "california ground squirrel",
+      "target": "california_ground_squirrel",
+      "parent": "squirrel",
+      "chinese": "加利福尼亚地松鼠"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "black-tailed deer",
+      "target": "black_tailed_deer",
+      "parent": "deer",
+      "chinese": "黑尾鹿"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "stellers jay",
+      "target": "stellers_jay",
+      "parent": "bird",
+      "chinese": "冠蓝鸦（斯特勒松鸦）"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "varied thrush",
+      "target": "varied_thrush",
+      "parent": "bird",
+      "chinese": "杂色鸫"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "dark-eyed junco",
+      "target": "dark_eyed_junco",
+      "parent": "bird",
+      "chinese": "暗眼灯草鹀"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "american robin",
+      "target": "american_robin",
+      "parent": "bird",
+      "chinese": "旅鸫（美洲知更鸟）"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "douglas squirrel",
+      "target": "douglas_squirrel",
+      "parent": "squirrel",
+      "chinese": "道格拉斯松鼠"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "virginia opossum",
+      "target": "virginia_opossum",
+      "parent": "opossum",
+      "chinese": "弗吉尼亚负鼠"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "mountain quail",
+      "target": "mountain_quail",
+      "parent": "bird",
+      "chinese": "山鹑（北美山鹑）"
+    },
+    {
+      "dataset": "oregon-critters",
+      "source_name": "western gray squirrel",
+      "target": "western_gray_squirrel",
+      "parent": "squirrel",
+      "chinese": "西部灰松鼠"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "sable",
+      "target": "sable_antelope",
+      "parent": "antelope",
+      "chinese": "黑马羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "yellow_baboon",
+      "target": "yellow_baboon",
+      "parent": "baboon",
+      "chinese": "黄狒狒"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "greater_kudu",
+      "target": "greater_kudu",
+      "parent": "antelope",
+      "chinese": "大捻角羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "southern_reedbuck",
+      "target": "southern_reedbuck",
+      "parent": "antelope",
+      "chinese": "南苇羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "cape_bushbuck",
+      "target": "cape_bushbuck",
+      "parent": "antelope",
+      "chinese": "开普薮羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "common_duiker",
+      "target": "common_duiker",
+      "parent": "antelope",
+      "chinese": "灰小羚羊"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "common_waterbuck",
+      "target": "common_waterbuck",
+      "parent": "antelope",
+      "chinese": "普通水羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "southern_ground_hornbill",
+      "target": "southern_ground_hornbill",
+      "parent": "bird",
+      "chinese": "南方地犀鸟"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "red_duiker",
+      "target": "red_duiker",
+      "parent": "antelope",
+      "chinese": "红小羚羊"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "common_eland",
+      "target": "common_eland",
+      "parent": "antelope",
+      "chinese": "大羚羊（伊兰羚羊）"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "impala",
+      "target": "impala",
+      "parent": "antelope",
+      "chinese": "黑斑羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "roan",
+      "target": "roan_antelope",
+      "parent": "antelope",
+      "chinese": "马羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "klipspringer",
+      "target": "klipspringer",
+      "parent": "antelope",
+      "chinese": "岩羚"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "vervet_monkey",
+      "target": "vervet_monkey",
+      "parent": "monkey",
+      "chinese": "黑长尾猴（绿猴）"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "sharpes_grysbok",
+      "target": "sharpes_grysbok",
+      "parent": "antelope",
+      "chinese": "夏氏小羚羊"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "helmeted_guineafowl",
+      "target": "helmeted_guineafowl",
+      "parent": "bird",
+      "chinese": "盔珠鸡"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "scrub_hare",
+      "target": "scrub_hare",
+      "parent": "rabbit",
+      "chinese": "灌丛野兔"
+    },
+    {
+      "dataset": "nkhotakota-camera-traps",
+      "source_name": "blue_monkey",
+      "target": "blue_monkey",
+      "parent": "monkey",
+      "chinese": "青长尾猴"
+    }
+  ]
+}

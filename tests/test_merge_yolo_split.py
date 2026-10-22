@@ -183,12 +183,12 @@ class ResplitTests(unittest.TestCase):
             splits = {s for s in merger.SPLITS for p in (root / 'out/images' / s / 'animals').glob('*.jpg') if p.read_bytes() == a.read_bytes()}
             self.assertEqual(len(splits), 1)
 
-    def test_threshold_uses_total_boxes_strictly_less_than_limit(self):
+    def test_threshold_uses_images_not_boxes_strictly_less_than_limit(self):
         coords = ('0.5', '0.5', '0.2', '0.2')
-        records = [{'rows': [('brown_bear', coords)] * 100 + [('polar_bear', coords)] * 99,
-                    'duplicate_boxes_removed': 0}]
+        records = [{'rows': [('brown_bear', coords)] * 5 + ([('polar_bear', coords)] * 8 if i < 99 else []),
+                    'duplicate_boxes_removed': 0} for i in range(100)]
         fold_rare(records, [], merger.class_metadata(), 100)
-        self.assertEqual({n for n, _ in records[0]['rows']}, {'brown_bear', 'bear'})
+        self.assertEqual({n for r in records for n, _ in r['rows']}, {'brown_bear', 'bear'})
 
 
 if __name__ == '__main__':

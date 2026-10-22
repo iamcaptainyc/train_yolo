@@ -317,6 +317,10 @@ def audit_one(record, output, ids, source_mapping):
     if not os.path.samefile(record['image'], output / record['image_rel']):
         raise ValueError(f'Output is not a source hardlink: {record["image_rel"]}')
     expected = unique_rows(parse_label(record['label'], source_mapping))
+    if 'source_rows' in record:
+        if expected != record['source_rows']:
+            raise ValueError(f'Source labels changed after refinement: {record["label"]}')
+        expected = unique_rows([(n, row[1]) for n, row in zip(record['target_names'], expected, strict=True)])
     actual = parse_label(output / record['label_rel'], {i: name for name, i in ids.items()})
     if expected != actual:
         raise ValueError(f'Written class/coordinate tokens do not match source: {record["label_rel"]}')
@@ -370,15 +374,19 @@ def markdown(report):
             lines.append(f"| {ds} | {s} | {value['images']} | {value['negative_images']} | {value['boxes']} |")
     for s, v in report['stats'].items():
         lines.append(f"| 合计 | {s} | {v['images']} | {v['negative_images']} | {sum(v['boxes'].values())} |")
-    lines += ['', '## 统一英文类别', '', '| 新 ID | 英文类别 | 中文含义 | 总框 | train | val | test |', '| --- | --- | --- | ---: | ---: | ---: | ---: |']
+    lines += ['', '## 统一英文类别（按图片数）', '',
+              '同一图片中同类有多个框也只计一张；多类图片分别计入各类别。图片数按输入图片记录计，不声称是内容去重后的唯一图片数。', '',
+              '| 新 ID | 英文类别 | 中文含义 | 总图片 | train 图片 | val 图片 | test 图片 | 总框 |', '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |']
     for i, name in enumerate(report['classes']):
-        counts = [report['stats'][s]['boxes'].get(name, 0) for s in SPLITS]
-        lines.append(f"| {i} | {name} | {report['hierarchy'][name].get('chinese', '')} | {sum(counts)} | " + ' | '.join(map(str, counts)) + ' |')
+        counts = [report['stats'][s]['class_images'].get(name, 0) for s in SPLITS]
+        boxes = sum(report['stats'][s]['boxes'].get(name, 0) for s in SPLITS)
+        lines.append(f"| {i} | {name} | {report['hierarchy'][name].get('chinese', '')} | {sum(counts)} | " + ' | '.join(map(str, counts)) + f' | {boxes} |')
     lines += ['', '## 原 ID → 新 ID', '', '| 来源 | 原 ID | 原名称 | 统一名称 | 新 ID |', '| --- | --- | --- | --- | --- |']
     for ds, rows in report['source_class_mapping'].items():
         for r in rows:
             name = r['source_name'].replace('|', '\\|')
-            lines.append(f"| {ds} | {r['source_id']} | {name} | {r['target'] or '排除'} | {r['target_id'] if r['target_id'] is not None else '无保留样本'} |")
+            new_ids = ', '.join(map(str, r.get('target_ids', []))) or (str(r['target_id']) if r['target_id'] is not None else '无保留样本')
+            lines.append(f"| {ds} | {r['source_id']} | {name} | {r['target'] or '排除'} | {new_ids} |")
     lines += ['', '## 检查范围与排除', '',
               '`pig` 保持家野未明确的猪；`wild_boar` 为约定的野生猪类，二者分开。`bull/cow/cattle` 合为 `cattle`；`moths and butterflies` 归 `insect`；不猜更细物种。', '',
               '`wolf` 为用户定义的“狼类”应用标签：合并 `jackal`（胡狼）与 `coyote`（郊狼），不代表已获得灰狼的训练样本。原名称和 ID 保留在上方映射表。', '',
@@ -389,11 +397,22 @@ def markdown(report):
               '源目录删除说明：完成且 data.yaml、report.json、MERGE_REPORT.md 已生成后，合并后的硬链接不依赖输入图片路径继续存在；源图删除不会删除合并图的内容。重跑合并仍依赖输入目录，因此删除后不能再从这些输入续跑。硬链接目录删除通常不会释放图片主体空间。', '']
     folding = report.get('rare_class_policy', {})
     lines += ['## 少样本类别合并', '',
-              f"阈值：合并前有效总框数 < {folding.get('minimum_total_boxes', 0)}；统计覆盖原 train/val/test。仅使用已审核上级；不把未知动物重新引入。", '',
-              '| 原类别 | 原总框 | 合并到 |', '| --- | ---: | --- |']
+              f"阈值：细分后、抽样前图片数 < {folding.get('minimum_total_images', 0)}；统计覆盖原 train/val/test。仅使用已审核上级；不把未知动物重新引入。", '',
+              '| 原类别 | 原图片数 | 合并到 |', '| --- | ---: | --- |']
     for change in folding.get('changes', []):
-        lines.append(f"| {change['source']} | {change['original_boxes']} | {change['target']} |")
+        lines.append(f"| {change['source']} | {change['original_images']} | {change['target']} |")
     lines += ['', '缺少合适上级或受保护、仍保留的稀有类：' + ', '.join(folding.get('rare_without_safe_parent', [])), '']
+    refinement = report.get('refinement', {})
+    lines += ['## 大类细分与整图抽样', '',
+              f"细分触发：图片数 > {refinement.get('threshold_images', 0)}。细类来自已审核的原始类别名称，并与现有 YOLO 框坐标逐框匹配；不能匹配或存在歧义时保留粗类。", '',
+              '| 输入类别 | 最终类别 | 最终保留图片数 |', '| --- | --- | ---: |']
+    for t in refinement.get('transitions', []):
+        lines.append(f"| {t['source']} | {t['target']} | {t['images']} |")
+    lines += ['', '细分未成功的原因计数：' + json.dumps(refinement.get('issues', {}), ensure_ascii=False), '',
+              '旧规则把黄喉貂误归鸟类；只有原始黄喉貂标注与框匹配成功时才纠正到黄喉貂/鼬科。', '',
+              '抽样只移除输出中的整张图，不删原文件、不隐藏框、不改变保留图片所属集合；优先保留少样本证据及已有的各类集合覆盖。不能保证所有类别严格低于上限。', '',
+              '```json', json.dumps(report.get('sampling', {}), ensure_ascii=False, indent=2), '```', '',
+              '最终仍超过细分阈值的类别：' + json.dumps(refinement.get('still_above_threshold', {}), ensure_ascii=False), '']
     if not preserved:
         split = report['resplit']
         lines += ['## 分组与类别覆盖', '',
@@ -410,15 +429,20 @@ def markdown(report):
 
 
 def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
-          preserve_splits=False, min_class_boxes=100, val_fraction=.05,
-          test_fraction=.05, seed=42, lila_source=None, group_map=None):
+          preserve_splits=False, min_class_boxes=None, val_fraction=.05,
+          test_fraction=.05, seed=42, lila_source=None, group_map=None,
+          min_class_images=100, max_class_images=10000, cap_class_images=10000):
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
-    if not isinstance(min_class_boxes, int) or isinstance(min_class_boxes, bool) or min_class_boxes < 0:
-        raise ValueError('--min-class-boxes must be a nonnegative integer')
+    if min_class_boxes is not None:  # Deprecated spelling; now always counts images.
+        min_class_images = min_class_boxes
+    for name, value in (('min-class-images', min_class_images), ('max-class-images', max_class_images), ('cap-class-images', cap_class_images)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f'--{name} must be a nonnegative integer')
     if not (0 < val_fraction < 1 and 0 < test_fraction < 1 and val_fraction + test_fraction < 1):
         raise ValueError('Validation/test fractions must be positive and sum to less than one')
     output = Path(output).resolve()
+    from merge_yolo_refine import RULE_FILE
     metadata = class_metadata()
     datasets = [load_dataset(lila, 'lila', metadata), load_dataset(animals, 'animals', metadata)]
     for d in datasets:
@@ -434,7 +458,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
         output.mkdir(parents=True, exist_ok=True)
         config = {'inputs': {d['alias']: {'yaml': str(d['yaml']), 'sha256': d['yaml_sha256']} for d in datasets},
                   'content_hash_check': check_content_hashes, 'policy': signature([metadata, ALIASES, sorted(EXCLUDED)]),
-                  'split_policy_version': 1, 'preserve_splits': preserve_splits, 'min_class_boxes': min_class_boxes,
+                  'split_policy_version': 2, 'preserve_splits': preserve_splits, 'min_class_images': min_class_images,
+                  'max_class_images': max_class_images, 'cap_class_images': cap_class_images,
+                  'refinement_rules_sha256': hashlib.sha256(RULE_FILE.read_bytes()).hexdigest(),
                   'val_fraction': val_fraction, 'test_fraction': test_fraction, 'seed': seed,
                   'lila_source': str(Path(lila_source).resolve()) if lila_source else None,
                   'group_map_sha256': hashlib.sha256(Path(group_map).read_bytes()).hexdigest() if group_map else None}
@@ -460,17 +486,22 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                         for r in results:
                             (excluded if r.get('error') else records).append(r)
             from merge_yolo_split import fold_rare, attach_groups, resplit
-            folding = fold_rare(records, datasets, metadata, min_class_boxes)
+            from merge_yolo_refine import refine_large, finish_refinement_report, soft_cap
+            print('Refine large classes using original annotations (image-count thresholds)...', flush=True)
+            refinement = refine_large(records, datasets, metadata, max_class_images, lila_source)
             duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes, preserve_splits)
             for index, reason in duplicates.items():
                 records[index]['error'] = reason
                 excluded.append(records[index])
             records = [r for i, r in enumerate(records) if i not in duplicates]
+            folding = fold_rare(records, datasets, metadata, min_class_images)
             grouping, splitting = {}, {}
             if not preserve_splits:
                 print('Recover camera/sequence metadata and reallocate whole groups...', flush=True)
                 grouping = attach_groups(records, datasets, lila_source, group_map)
                 splitting = resplit(records, val_fraction, test_fraction, seed)
+            records, sampled_out, sampling = soft_cap(records, cap_class_images, min_class_images, seed)
+            excluded.extend(sampled_out)
             trained = {name for r in records if r['split'] == 'train' for name, _ in r['rows']}
             for r in records:
                 missing = {name for name, _ in r['rows']} - trained
@@ -485,7 +516,8 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
                 raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
             ids = {name: i for i, name in enumerate(names)}
-            inventory = signature([grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
+            refinement = finish_refinement_report(refinement, records)
+            inventory = signature([refinement, sampling, grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
             old_inventory = previous.get('inventory') if previous else None
             if old_inventory and old_inventory != inventory:
                 raise ValueError('Source files/labels or exclusions changed; use a new output directory')
@@ -498,7 +530,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 for hit in results:
                     reused += hit
             by_alias = {d['alias']: d for d in datasets}
-            with tqdm(total=len(records), desc='Audit links and label coordinates', unit='img') as progress, closing(bounded_map(lambda r: audit_one(r, output, ids, by_alias[r['dataset']]['mapping']), records, workers, progress)) as results:
+            with tqdm(total=len(records), desc='Audit links and label coordinates', unit='img') as progress, closing(bounded_map(lambda r: audit_one(r, output, ids, by_alias[r['dataset']]['original_mapping']), records, workers, progress)) as results:
                 for _ in results:
                     pass
             for kind, field in (('images', 'image_rel'), ('labels', 'label_rel')):
@@ -508,8 +540,30 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                     raise ValueError(f'Unexpected or missing files in output {kind}; no training YAML issued')
             report = make_report(datasets, records, excluded, ids, metadata, reused, hashes, check_content_hashes)
             report['rare_class_policy'] = folding
+            report['refinement'] = refinement
+            report['sampling'] = sampling
+            destinations = defaultdict(set)
+            for r in records:
+                for old, target in zip(r['source_rows'], r['target_names'], strict=True):
+                    destinations[(r['dataset'], old[0])].add(target)
+            for ds, rows in report['source_class_mapping'].items():
+                for row in rows:
+                    original = by_alias[ds]['original_mapping'][row['source_id']]
+                    targets = sorted(destinations[(ds, original)])
+                    row.update(target=', '.join(targets) or None, targets=targets,
+                               target_ids=[ids[t] for t in targets], target_id=ids[targets[0]] if len(targets) == 1 else None)
             report['grouping'] = grouping
             report['resplit'] = splitting
+            if not preserve_splits:
+                # Report retained group coverage after sampling, not the pre-cap population.
+                retained_groups = defaultdict(set)
+                for r in records:
+                    for name, _ in r['rows']:
+                        retained_groups[name].add(r['component'])
+                splitting['groups_before_sampling'] = splitting['groups']
+                splitting['groups'] = len({r['component'] for r in records})
+                splitting['class_independent_groups'] = {n: len(g) for n, g in sorted(retained_groups.items())}
+                splitting['missing_classes'] = report['missing_classes']
             report['audit']['source_splits_preserved'] = preserve_splits
             if not preserve_splits:
                 report['audit']['group_overlap'] = splitting['group_overlap']
@@ -543,10 +597,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lila', type=Path, default=Path('yolo_datasets/lila_camping'), help='Processed common-name LILA directory or data.yaml')
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'), help='Converted Animals Detection directory or data.yaml')
-    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_merged_resplit'))
+    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_balanced'))
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--preserve-splits', action='store_true', help='Legacy mode: retain original splits instead of grouped resplitting')
-    parser.add_argument('--min-class-boxes', type=int, default=100, help='Fold classes with fewer total boxes into reviewed parents; 0 disables folding')
+    parser.add_argument('--min-class-images', type=int, default=100, help='Fold classes present in fewer images into reviewed parents; 0 disables folding')
+    parser.add_argument('--min-class-boxes', type=int, help='Deprecated alias for --min-class-images; now counts images, not boxes')
+    parser.add_argument('--max-class-images', type=int, default=10000, help='Recover fine labels for classes above this image count; 0 disables refinement')
+    parser.add_argument('--cap-class-images', type=int, default=10000, help='Soft image cap after refinement and splitting; 0 disables sampling')
     parser.add_argument('--val-fraction', type=float, default=.05)
     parser.add_argument('--test-fraction', type=float, default=.05)
     parser.add_argument('--seed', type=int, default=42)
@@ -557,6 +614,7 @@ def main():
     try:
         merge(args.lila, args.animals, args.output, workers=args.workers, check_content_hashes=args.check_content_hashes,
               preserve_splits=args.preserve_splits, min_class_boxes=args.min_class_boxes,
+              min_class_images=args.min_class_images, max_class_images=args.max_class_images, cap_class_images=args.cap_class_images,
               val_fraction=args.val_fraction, test_fraction=args.test_fraction, seed=args.seed,
               lila_source=args.lila_source, group_map=args.group_map)
     except KeyboardInterrupt:
