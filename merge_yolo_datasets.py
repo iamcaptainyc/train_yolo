@@ -194,8 +194,15 @@ def scan_one(task):
         if record['image_stamp']['size'] <= 0:
             raise ValueError('empty image file')
         record['label_stamp'] = fingerprint(record['label'])
-        rows = parse_label(record['label'], dataset['mapping'])
+        raw_rows = parse_label(record['label'], {i: dataset['original_names'][i] if target is not None else None
+                                                 for i, target in dataset['mapping'].items()})
+        rows = [(normalized(name), coords) for name, coords in raw_rows]
         record['rows'] = unique_rows(rows)
+        origins = defaultdict(set)
+        for raw, coords in raw_rows:
+            origins[(normalized(raw), tuple(map(float, coords)))].add(raw)
+        record['original_row_names'] = {(n, coords): sorted(origins[(n, tuple(map(float, coords)))])
+                                        for n, coords in record['rows']}
         record['duplicate_boxes_removed'] = len(rows) - len(record['rows'])
         if not same_content_attributes(record['label_stamp'], fingerprint(record['label'])):
             raise ValueError('label changed while scanning')
@@ -404,16 +411,30 @@ def markdown(report):
     lines += ['', '缺少合适上级或受保护、仍保留的稀有类：' + ', '.join(folding.get('rare_without_safe_parent', [])), '']
     refinement = report.get('refinement', {})
     lines += ['## 大类细分与图片保留', '',
-              f"细分触发：图片数 > {refinement.get('threshold_images', 0)}。细类来自已审核的原始类别名称，并与现有 YOLO 框坐标逐框匹配；不能匹配或存在歧义时保留粗类。", '',
+              '检查所有输入类别，不再以 10,000 张作为细分门槛。细类和中间类别来自已审核的原始名称；逐框匹配，达到图片数门槛独立，否则归上级。无法匹配时保留原类并明确记录。', '',
               '| 输入类别 | 最终类别 | 最终保留图片数 |', '| --- | --- | ---: |']
     for t in refinement.get('transitions', []):
         lines.append(f"| {t['source']} | {t['target']} | {t['images']} |")
     lines += ['', '细分未成功的原因计数：' + json.dumps(refinement.get('issues', {}), ensure_ascii=False), '',
               '旧规则把黄喉貂误归鸟类；只有原始黄喉貂标注与框匹配成功时才纠正到黄喉貂/鼬科。', '',
               ('已显式启用整图抽样；保留少样本证据及已有的各类集合覆盖。' if report.get('sampling', {}).get('maximum_images', 0) else
-               '未启用数量抽样：10,000 张仅为细分触发阈值，不是数量上限。无法继续细分的物种即使超过阈值也保留全部有效图片。'), '',
+               '未启用数量抽样：10,000 张仅为报告参考值，不是细分门槛或数量上限。无法继续细分的物种即使超过参考值也保留全部有效图片。'), '',
               '```json', json.dumps(report.get('sampling', {}), ensure_ascii=False, indent=2), '```', '',
-              '最终仍超过细分阈值的类别：' + json.dumps(refinement.get('still_above_threshold', {}), ensure_ascii=False), '']
+              '最终仍超过图片数参考值的类别：' + json.dumps(refinement.get('still_above_threshold', {}), ensure_ascii=False), '']
+    reason_names = {'source_yolo_only': '仅有输入 YOLO 类名，未恢复原标注',
+                    'original_coarse_or_no_reviewed_rule': '原始粗类/别名或无更细的已审核规则',
+                    'refined': '恢复原始类别（含中间类）',
+                    'below_min_images_folded_to_parent': '不足图片数门槛，归入上级',
+                    'unmatched_or_ambiguous_original_category_unknown': '框未唯一匹配，原始类别无法确认；列名为输入类'}
+    lines += ['## 每个上级/输入类别的剩余图片来源', '',
+              '上级总图片数为去重后的图片并集。每个来源类别在同一图中只计一次；同图可能含多个来源类别，因此明细相加可能大于总数。来源列保留作者原文，不是训练标签；无法确认原始类别的图片明确列为未知来源，不冒充已匹配。', '']
+    for parent, info in refinement.get('parent_remainders', {}).items():
+        lines += [f"### {parent}：{info['images']} 张", '',
+                  '| 来源数据集 | 原始 ID | 原始类别 | 图片数 | 保留/回并原因 |', '| --- | --- | --- | ---: | --- |']
+        for row in info['sources']:
+            raw = row['source_name'].replace('|', '\\|')
+            lines.append(f"| {row['dataset']} | {row['source_id'] or '未恢复'} | {raw} | {row['images']} | {reason_names.get(row['reason'], row['reason'])} |")
+        lines.append('')
     if not preserved:
         split = report['resplit']
         lines += ['## 分组与类别覆盖', '',
@@ -459,7 +480,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
         output.mkdir(parents=True, exist_ok=True)
         config = {'inputs': {d['alias']: {'yaml': str(d['yaml']), 'sha256': d['yaml_sha256']} for d in datasets},
                   'content_hash_check': check_content_hashes, 'policy': signature([metadata, ALIASES, sorted(EXCLUDED)]),
-                  'split_policy_version': 2, 'preserve_splits': preserve_splits, 'min_class_images': min_class_images,
+                  'split_policy_version': 3, 'preserve_splits': preserve_splits, 'min_class_images': min_class_images,
                   'max_class_images': max_class_images, 'cap_class_images': cap_class_images,
                   'refinement_rules_sha256': hashlib.sha256(RULE_FILE.read_bytes()).hexdigest(),
                   'val_fraction': val_fraction, 'test_fraction': test_fraction, 'seed': seed,
@@ -488,7 +509,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                             (excluded if r.get('error') else records).append(r)
             from merge_yolo_split import fold_rare, attach_groups, resplit
             from merge_yolo_refine import refine_large, finish_refinement_report, soft_cap
-            print('Refine large classes using original annotations (image-count thresholds)...', flush=True)
+            print('Check ALL classes against original annotations (no image sampling)...', flush=True)
             refinement = refine_large(records, datasets, metadata, max_class_images, lila_source)
             duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes, preserve_splits)
             for index, reason in duplicates.items():
@@ -517,7 +538,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
                 raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
             ids = {name: i for i, name in enumerate(names)}
-            refinement = finish_refinement_report(refinement, records)
+            refinement = finish_refinement_report(refinement, records, metadata)
             inventory = signature([refinement, sampling, grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
             old_inventory = previous.get('inventory') if previous else None
             if old_inventory and old_inventory != inventory:
@@ -598,12 +619,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lila', type=Path, default=Path('yolo_datasets/lila_camping'), help='Processed common-name LILA directory or data.yaml')
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'), help='Converted Animals Detection directory or data.yaml')
-    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_all'))
+    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_all_classes'))
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--preserve-splits', action='store_true', help='Legacy mode: retain original splits instead of grouped resplitting')
     parser.add_argument('--min-class-images', type=int, default=100, help='Fold classes present in fewer images into reviewed parents; 0 disables folding')
     parser.add_argument('--min-class-boxes', type=int, help='Deprecated alias for --min-class-images; now counts images, not boxes')
-    parser.add_argument('--max-class-images', type=int, default=10000, help='Recover fine labels for classes above this image count; 0 disables refinement')
+    parser.add_argument('--max-class-images', type=int, default=10000, help='Report-only size reference; ALL classes are now checked for refinement regardless of this value')
     parser.add_argument('--cap-class-images', type=int, default=0, help='Optional image sampling cap; disabled by default (0). Leave at 0 to retain all valid images')
     parser.add_argument('--val-fraction', type=float, default=.05)
     parser.add_argument('--test-fraction', type=float, default=.05)

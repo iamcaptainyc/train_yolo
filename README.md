@@ -287,10 +287,10 @@ python -m unittest discover -s tests -v
 
 ### LILA 五数据集合并与审计
 
-LILA 常用类别处理完成后，用 [YOLO 合并脚本](docs/merge_yolo.md) 与已转换的 Animals Detection 合并，统一英文名/ID；默认对超过 10,000 张的大类从原标注恢复细类，少于 100 张的细类并入合理上级，再按相机/序列重新划分（目标比例 90%/5%/5%）；不按数量抽样，单一物种超过 10,000 张也保留全部有效图片，图片只用硬链接：
+LILA 常用类别处理完成后，用 [YOLO 合并脚本](docs/merge_yolo.md) 与已转换的 Animals Detection 合并，统一英文名/ID；检查所有类别，从原标注恢复细类和中间类别，达到 100 张独立，少于 100 张逐级归入上级，再按相机/序列重新划分（目标比例 90%/5%/5%）；不按数量抽样，单一物种超过 10,000 张也保留全部有效图片，图片只用硬链接：
 
 ```bash
-python merge_yolo_datasets.py --lila yolo_datasets/lila_camping --animals yolo_datasets/animals-detection-images-dataset --lila-source datasets/lila --output yolo_datasets/camping_all --min-class-images 100 --max-class-images 10000 --cap-class-images 0 --workers 16
+python merge_yolo_datasets.py --lila yolo_datasets/lila_camping --animals yolo_datasets/animals-detection-images-dataset --lila-source datasets/lila --output yolo_datasets/camping_all_classes --min-class-images 100 --max-class-images 10000 --cap-class-images 0 --workers 16
 ```
 
 露营识别任务使用新的[常用英文类别策略](docs/lila_camping.md)：保留熟悉细类与大类、排除未确定动物类别，野生猪类统一为 `wild_boar`，与 `pig` 分开。已经通过审计的硬链接输出可用 `--remap-from` 从原始标注恢复细类、保留划分，避免再次全量解码和计算图片哈希：

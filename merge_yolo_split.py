@@ -16,26 +16,31 @@ def fold_rare(records, datasets, metadata, minimum):
     parents = {n: m.get('parent') for n, m in metadata.items()}
     parents['leopard_cat'] = 'wild_cat'
     metadata['leopard_cat']['parent'] = 'wild_cat'
-    support = Counter()
-    for r in records:
-        covered = set()
+    members = defaultdict(set)
+    for index, r in enumerate(records):
         for name, _ in r['rows']:
-            lineage, node = set(), name
-            while node:
-                if node in lineage:
-                    raise ValueError('Cycle in class parents')
-                lineage.add(node)
-                covered.add(node)
-                node = parents.get(node)
-        support.update(covered)
+            members[name].add(index)
+    def depth(name):
+        seen = set()
+        while name:
+            if name in seen:
+                raise ValueError('Cycle in class parents')
+            seen.add(name)
+            name = parents.get(name)
+        return len(seen)
+    folded = {}
+    # Keep sufficiently populated children separate, then count the actual
+    # residual parent plus small children by image-set union, not box sums.
+    for name in sorted(metadata, key=lambda n: (-depth(n), n)):
+        parent = parents.get(name)
+        if len(members[name]) < minimum and parent and name not in protected:
+            members[parent].update(members[name])
+            folded[name] = parent
     mapping = {}
     for name in counts:
-        target, visited = name, set()
-        while support[target] < minimum and target not in protected and parents.get(target):
-            if target in visited:
-                raise ValueError('Cycle in class parents')
-            visited.add(target)
-            target = parents[target]
+        target = name
+        while target in folded:
+            target = folded[target]
         mapping[name] = target
     from merge_yolo_datasets import unique_rows
     for r in records:
@@ -47,7 +52,7 @@ def fold_rare(records, datasets, metadata, minimum):
     for d in datasets:
         d['mapping'] = {i: mapping.get(n, n) for i, n in d['mapping'].items()}
     return {'minimum_total_images': minimum, 'basis': 'images containing the class, counted once per input image across all original splits',
-            'parent_support': 'Parent thresholds include descendant image coverage so a residual parent is not folded away merely because common children were restored.',
+            'parent_support': 'Bottom-up image-set unions: independently retained children do not inflate residual parent counts; small children and original coarse images contribute once per image.',
             'changes': [{'source': n, 'target': t, 'original_images': counts[n]} for n, t in sorted(mapping.items()) if n != t],
             'rare_without_safe_parent': [n for n in sorted(counts) if counts[n] < minimum and mapping[n] == n]}
 

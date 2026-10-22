@@ -14,7 +14,7 @@ python merge_yolo_datasets.py \
   --lila yolo_datasets/lila_camping \
   --animals yolo_datasets/animals-detection-images-dataset \
   --lila-source datasets/lila \
-  --output yolo_datasets/camping_all \
+  --output yolo_datasets/camping_all_classes \
   --min-class-images 100 \
   --max-class-images 10000 \
   --cap-class-images 0 \
@@ -36,20 +36,24 @@ python merge_yolo_datasets.py \
 - `jackal`（胡狼）与 `coyote`（郊狼）统一为用户定义的 `wolf`，中文“狼类（含胡狼、郊狼）”。这是应用分组，不是灰狼物种标注，也不意味着新增了灰狼样本。统一在少样本阈值统计之前进行，报告保留各来源名称和 ID。
 - 未确定动物、哺乳动物、小型动物等宽泛类别整图排除。未审阅的新名称或旧科学分类会明确报错，不猜物种。类别仅为实际保留的有框样本分配 ID，缺失的狼等不会凭空加入。
 - 默认重新划分，不保留原 train/val/test。目标为 90%/5%/5%，通过 `--val-fraction .05 --test-fraction .05 --seed 42` 调整。完整相机/序列连通组不可拆；先争取少数类覆盖，再优化图片比例和类别分布，不保证精确比例或找到所有可行覆盖方案。原来只在 val/test 的类别也可以重新分配到 train。
-- 默认 `--min-class-images 100`：按图片数统计，同图同类多个框只计一张。少于 100 张的细类归入合理上级；上级支持量包含子类覆盖图片，避免因细分而错误上卷。`0` 禁用少样本合并。旧参数 `--min-class-boxes` 是兼容拼写，也按图片数计。
+- 默认 `--min-class-images 100`：按图片数统计，同图同类多个框只计一张。少于 100 张的细类归入合理上级；先保留达到门槛的细类，再把少样本回并，上级只统计其实际剩余图片的并集；多个小类同图出现不会重复计数。`0` 禁用少样本合并。旧参数 `--min-class-boxes` 是兼容拼写，也按图片数计。
 - 例如竹鼠→`rodent`，巨蜥→`lizard`，水貂/鼬→`mustelid`，少量鸽子→`bird`，海马→`fish`，豹猫→`wild_cat`。无合理上级的蝙蝠、穿山甲等保持原类，在报告列出，不能错并为鼠或重新引入未知动物类别。`wild_boar`、`pig`、`warthog` 强制保持独立。提高阈值也可能合并棕熊等熟悉细类，应查看报告再训练。
 - 每个保留框的四个坐标 token 原样保留，包括小数位与科学计数法；只改变类别 ID。若别名合并造成同类同坐标的重复记录，保留第一条原始坐标文本，报告去重数量。
 - 既有空标签作为负样本保留。缺失标签、非法 ID、非法坐标或越界框会整图排除，绝不把丢失正标签当作负样本。继承两个来源既有的负样本，总负样本比例不重新抽成 5%。
 
-## 超过 10,000 张优先细分，保留全部有效图片
+## 所有类别都检查细分，保留全部有效图片
 
-`--max-class-images 10000` 在图片数严格大于 10,000 时触发。默认从 [细分规则](../configs/lila_refinements.json) 中的 74 条数据集专属映射恢复英文细类，例如白尾鹿、黑尾鹿、水鹿、不同松鼠、羚羊和鸟类。不把 `unidentified` 或仅有宽泛标签的图片猜成某个物种；`wild_boar` 继续统一，不恢复成多种野猪标签。
+**不再使用 10,000 张作为细分门槛：检查所有输入类别。** [细分规则](../configs/lila_refinements.json) 包含 160 条来源映射，涵盖细物种和中间类别，例如 `macaque`、`muntjac`、`partridge`、`pitta`、`laughingthrush`、`thrush`、`new_world_warbler`、`chickadee`、`wren`、`woodrat`。输出名称不带 `unidentified`、`family`、`species` 或 `sp`；原始名称只保留在报告来源列。
+
+阈值为至少 100 张（恰好 100 张也独立）。按层级从细到粗处理：先保留足量细类，少量细类回并，再按上级实际剩余图片的并集判断是否足量；多个小类在同图出现只计一张。原始标注没有更细信息时，不猜具体物种。`wild_boar`、`pig`、`wolf` 等用户约定分组仍保留。
+
+`--max-class-images 10000` 现在仅用于报告提示仍然很大的类别，不影响细分资格；单一物种超过该数也全部保留。
 
 细类恢复读取原始 selected_annotations.json，使用原图尺寸与原始框重算规范化坐标，与当前 YOLO 框逐一匹配（沿用 8 位小数精度）。匹配唯一才修改类别，保留现有坐标文本；缺尺寸、坐标不匹配、同框原类别有歧义时保留粗类并汇总原因。不重新解码图片，不全量读取图片内容，不生成逐图校验缓存。Animals 原始 YOLO 中没有更细的来源信息，保持其既有标注粒度。
 
-旧 LILA 策略错误地将黄喉貂归到了 bird；本次在处理超量 bird 时，对原始黄喉貂框匹配成功的记录改为黄喉貂，再按数量决定是否归入 mustelid。无法验证的记录保留并报告，不假称已修复全部源标注。
+旧 LILA 策略错误地将黄喉貂归到了 bird；本次在检查 bird 时，对原始黄喉貂框匹配成功的记录改为黄喉貂，再按数量决定是否归入 mustelid。无法验证的记录保留并报告，不假称已修复全部源标注。
 
-**默认 `--cap-class-images 0`，不按类别数量抽样。** 10,000 张仅为细分触发阈值，不是上限。已是单一物种、缺少更细原标注或无法可靠恢复细类时，即使超过 10,000 张也保留全部有效图片，只在报告列出。少样本合并只改类别，不减少图片。
+**默认 `--cap-class-images 0`，不按类别数量抽样。** 10,000 张仅为报告参考值，不是细分门槛或数量上限。已是单一物种、缺少更细原标注或无法可靠恢复细类时，即使超过 10,000 张也保留全部有效图片，只在报告列出。少样本合并只改类别，不减少图片。
 
 旧版命令中的 `--cap-class-images 10000` 会主动抽样，必须删除该参数或改为 `0`。正在运行旧命令可 Ctrl+C，更新代码后使用新输出目录 `camping_all` 重跑；输入图片没有被删除，新的输出能重新纳入之前仅因数量被抽样排除的图片。无需重新解码或全量哈希。
 
@@ -90,7 +94,7 @@ Ctrl+C 后重跑完全相同的命令，已写好且正确的硬链接和标签�
 仅全部检查完成才生成正式 `data.yaml` 和 `MERGE_REPORT.md`；中断/失败时输出 `PROCESSING_REPORT.md`，保留已写文件便于续跑。
 
 ```text
-yolo_datasets/camping_all/
+yolo_datasets/camping_all_classes/
   data.yaml
   images/{train,val,test}/{lila,animals}/...
   labels/{train,val,test}/{lila,animals}/...
@@ -107,7 +111,7 @@ yolo_datasets/camping_all/
 训练使用新 YAML，旧权重的分类头 ID 不能直接解释为新类别：
 
 ```bash
-python train.py --data yolo_datasets/camping_all/data.yaml \
+python train.py --data yolo_datasets/camping_all_classes/data.yaml \
   --model weights/yolo11s.pt --epochs 100 --batch 128 --workers 16 --device 0
 ```
 
@@ -118,3 +122,9 @@ python train.py --data yolo_datasets/camping_all/data.yaml \
 删除旧 `lila` 目录只移除该目录的文件链接；原始下载目录、`lila_camping`、最终合并目录持有的硬链接仍可读取同一份图片内容。不过原重映射命令的 `--remap-from yolo_datasets/lila` 将不能再恢复，需保留旧统计报告、配置和审计来源文件以供追溯；也应保留原始下载标注，便于后续调整类别。
 
 不要在重映射尚未成功时删除旧目录。不要把 `datasets/lila`（原始下载数据与标注）和 `yolo_datasets/lila`（旧转换输出）混淆。后者删除通常不会释放一整份图片空间，因为其他硬链接仍持有图片；主要减少旧标签、预览和目录项占用。本脚本不自动删除任何输入目录。
+
+## 上级剩余图片的来源明细
+
+MERGE_REPORT.md 与 report.json 的 refinement.parent_remainders 列出每个最终类别（包含全部上级）的去重图片总数，以及原数据集、原始类别 ID、原始类名、图片数和原因。原因区分：原始粗类/无更细规则、少样本回并、细分类恢复、仅有输入 YOLO 类名、原始框无法唯一匹配。后两种明确说明原始类别未恢复，不冒充已匹配来源。
+
+同图同来源类别的多个框只计一次；同图有多个原始类别时，各来源行都计入，所以明细相加可以大于上级图片并集。报告保留原作者名称用于追溯，但这些名称不会直接作为训练标签。细分类与来源统计只读取标注，不重新解码或全量哈希图片，不写逐图校验缓存。新规则请使用新的 camping_all_classes 输出目录。

@@ -14,9 +14,8 @@ from test_merge_yolo_datasets import fixture
 
 
 class RefineTests(unittest.TestCase):
-    def make_lila(self, root, categories, assignments):
+    def make_lila(self, root, categories, assignments, slug='ena24', label='squirrel'):
         """Each assignment is a list of original category IDs in the same image."""
-        slug = 'ena24'
         images, annotations = [], []
         for i, cats in enumerate(assignments):
             split = ('train', 'val', 'test')[i % 3]
@@ -36,8 +35,8 @@ class RefineTests(unittest.TestCase):
             lp.write_text('\n'.join(lines) + '\n')
             images.append({'id': i, 'file_name': filename, 'width': 100, 'height': 100, 'location': f'camera-{i}'})
         (root / 'lila/data.yaml').write_text(yaml.safe_dump({'path': str(root / 'lila'),
-             'names': {0: 'squirrel'}, **{s: 'images/' + s for s in merger.SPLITS}}))
-        ann = root / 'source/ena24/selection/selected_annotations.json'
+             'names': {0: label}, **{s: 'images/' + s for s in merger.SPLITS}}))
+        ann = root / 'source' / slug / 'selection/selected_annotations.json'
         ann.parent.mkdir(parents=True)
         ann.write_text(json.dumps({'images': images, 'annotations': annotations, 'categories': categories}))
         fixture(root / 'animals', ['snake'], 'animals')
@@ -87,9 +86,9 @@ class RefineTests(unittest.TestCase):
                            [[1], [1], [1], [1], [1], [2]])
             result = self.run_merge(root)
             self.assertIn('eastern_gray_squirrel', result['classes'])
-            self.assertIn('squirrel', result['classes'])
+            self.assertIn('rodent', result['classes'])
             self.assertNotIn('eastern_fox_squirrel', result['classes'])
-            self.assertIn({'source': 'eastern_fox_squirrel', 'target': 'squirrel', 'original_images': 1}, result['rare_class_policy']['changes'])
+            self.assertIn({'source': 'eastern_fox_squirrel', 'target': 'rodent', 'original_images': 1}, result['rare_class_policy']['changes'])
 
     def test_missing_dimensions_and_unmatched_boxes_keep_coarse(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -103,6 +102,10 @@ class RefineTests(unittest.TestCase):
             self.assertEqual(result['refinement']['after_class_images']['squirrel'], 2)
             self.assertEqual(result['refinement']['after_class_images']['eastern_gray_squirrel'], 4)
             self.assertGreater(result['refinement']['issues']['ambiguous_or_unmatched_box_kept_coarse'], 0)
+            remainder = result['refinement']['parent_remainders']['squirrel']
+            self.assertEqual(remainder['images'], 2)
+            self.assertEqual(remainder['sources'][0]['source_id'], '')
+            self.assertEqual(remainder['sources'][0]['reason'], 'unmatched_or_ambiguous_original_category_unknown')
 
     def test_coincident_original_species_are_not_guessed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,12 +117,12 @@ class RefineTests(unittest.TestCase):
             result = self.run_merge(root, minimum=0)
             self.assertEqual(result['refinement']['after_class_images']['squirrel'], 1)
 
-    def test_no_refinement_at_exact_image_threshold_despite_many_boxes(self):
+    def test_all_classes_refined_even_below_old_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.make_lila(root, [{'id': 1, 'name': 'Eastern Gray Squirrel'}], [[1, 1, 1]] * 6)
-            result = self.run_merge(root, maximum=6, minimum=0)
-            self.assertNotIn('eastern_gray_squirrel', result['classes'])
+            result = self.run_merge(root, maximum=10000, minimum=0)
+            self.assertIn('eastern_gray_squirrel', result['classes'])
             self.assertEqual(result['refinement']['before_class_images']['squirrel'], 6)
 
     def test_cap_counts_images_keeps_rare_boxes_and_split_membership(self):
@@ -180,10 +183,48 @@ class RefineTests(unittest.TestCase):
 
     def test_all_refinement_rules_have_english_names_and_known_parents(self):
         metadata = merger.class_metadata()
-        for rule in json.loads(RULE_FILE.read_text(encoding='utf-8'))['rules']:
+        rules = json.loads(RULE_FILE.read_text(encoding='utf-8'))['rules']
+        known = set(metadata) | {r['target'] for r in rules}
+        for rule in rules:
             self.assertEqual(merger.normalized(rule['target']), rule['target'])
-            self.assertIn(rule['parent'], metadata)
+            self.assertIn(rule['parent'], known)
+            self.assertFalse({'unidentified', 'family', 'species', 'sp'} & set(rule['target'].split('_')))
             self.assertNotIn(rule['parent'], {'wild_boar', 'pig', 'wolf'})
+
+    def test_intermediate_at_100_retained_and_parent_remainder_sources_count_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_lila(root, [{'id': 1, 'name': 'unidentified_partridge'},
+                                  {'id': 2, 'name': 'unidentified_pitta'}, {'id': 3, 'name': 'unidentified_bird'}],
+                           [[1]] * 100 + [[2, 2, 3], [2], [3]], slug='swg-camera-traps', label='bird')
+            result = self.run_merge(root, minimum=100, maximum=10000)
+            self.assertIn('partridge', result['classes'])
+            self.assertNotIn('pitta', result['classes'])
+            self.assertEqual(result['audit']['images_verified'], 109)
+            bird = result['refinement']['parent_remainders']['bird']
+            self.assertEqual(bird['images'], 3)
+            sources = {r['source_name']: r for r in bird['sources']}
+            self.assertEqual(sources['unidentified_pitta']['images'], 2)  # Two boxes in one image count once.
+            self.assertEqual(sources['unidentified_bird']['images'], 2)
+            self.assertEqual(sources['unidentified_pitta']['reason'], 'below_min_images_folded_to_parent')
+            self.assertEqual(sum(r['images'] for r in bird['sources']), 4)  # Multi-class overlap explicitly reported.
+            self.assertTrue(result['refinement']['check_all_classes'])
+            self.assertEqual(result['sampling']['removed_images'], 0)
+
+    def test_nested_small_children_union_reaches_parent_threshold_without_double_counting(self):
+        metadata = merger.class_metadata()
+        metadata.update({'pitta': {'parent': 'bird'}, 'blue_pitta': {'parent': 'pitta'},
+                         'bar_bellied_pitta': {'parent': 'pitta'}})
+        coords = ('0.5', '0.5', '0.2', '0.2')
+        records = [{'rows': [('blue_pitta' if i < 60 else 'bar_bellied_pitta', coords)],
+                    'duplicate_boxes_removed': 0} for i in range(120)]
+        fold_rare(records, [], metadata, 100)
+        self.assertEqual({n for r in records for n, _ in r['rows']}, {'pitta'})
+        # Same 60 images contain both children: union remains 60, not 120.
+        records = [{'rows': [('blue_pitta', coords), ('bar_bellied_pitta', coords)],
+                    'duplicate_boxes_removed': 0} for i in range(60)]
+        fold_rare(records, [], metadata, 100)
+        self.assertEqual({n for r in records for n, _ in r['rows']}, {'bird'})
 
 
 if __name__ == '__main__':
