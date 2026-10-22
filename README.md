@@ -287,6 +287,12 @@ python -m unittest discover -s tests -v
 
 ### LILA 五数据集合并与审计
 
+露营识别任务使用新的[常用英文类别策略](docs/lila_camping.md)：保留熟悉细类与大类、排除未确定动物类别，野生猪类统一为 `wild_boar`，与 `pig` 分开。已经通过审计的硬链接输出可用 `--remap-from` 从原始标注恢复细类、保留划分，避免再次全量解码和计算图片哈希：
+
+```bash
+python prepare_lila_audited.py --remap-from yolo_datasets/lila --output yolo_datasets/lila_camping --workers 16
+```
+
 下载完成后使用 `prepare_lila_audited.py`：按官方分类树处理父子类别，默认按相机/序列连通组划分 train/val/test = 90%/5%/5%，支持 `--workers 16` 并发校验/哈希/写出/输出审计，核对原始标注与下载清单，独立反算所有输出框，并生成类别数量、合并规则和框图的 `AUDIT_REPORT.md`。运行与审计口径见 [五数据集审计合并说明](docs/lila_audited_merge.md)。
 
 ### LILA 自动清理与断点恢复

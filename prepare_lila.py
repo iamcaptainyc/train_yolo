@@ -91,7 +91,7 @@ class Union:
         self.size[a] += self.size[b]
 
 
-def read_records(source, datasets, class_map=None, group_map=None):
+def read_records(source, datasets, class_map=None, group_map=None, preserve_class_names=False):
     records, mapping, skipped, fallback = [], [], Counter(), []
     class_map, group_map = class_map or {}, group_map or {}
     for dataset in datasets:
@@ -106,7 +106,8 @@ def read_records(source, datasets, class_map=None, group_map=None):
             override = class_map.get(dataset+':'+str(category['id']), class_map.get(original, default))
             if override is not None and not isinstance(override, str):
                 raise ValueError(f'Category target must be a string or null: {dataset}:{category["id"]}')
-            target = None if override is None or original in EMPTY_NAMES | EXCLUDED_NAMES else normalize(override)
+            blocked = original in EMPTY_NAMES or (not preserve_class_names and original in EXCLUDED_NAMES)
+            target = None if override is None or blocked else (override if preserve_class_names else normalize(override))
             if target == '':
                 raise ValueError(f'Empty target category for {dataset}:{category["id"]}')
             categories[str(category['id'])] = target
@@ -540,6 +541,8 @@ def prepare(
     state=None,
     auto_clean=False,
     resume_output=False,
+    remap_from=None,
+    preserve_class_names=False,
 ):
     fractions = split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -552,7 +555,7 @@ def prepare(
             f"Output is non-empty: {output}; choose a new output directory"
         )
     records, mapping, skipped, fallback = read_records(
-        source, datasets or DEFAULT_DATASETS, class_map, group_map
+        source, datasets or DEFAULT_DATASETS, class_map, group_map, preserve_class_names
     )
     if state:
         state.active_keys = {record_key(r) for r in records}
@@ -574,7 +577,13 @@ def prepare(
         strict_boxes=strict_boxes,
         state=state,
     )
-    if resume_output:
+    reuse_verified = resume_output or remap_from is not None
+    if remap_from is not None:
+        from lila_reclassify import restore_reclassified
+
+        clipped, missing = restore_reclassified(records, state, class_ids, remap_from, strict_boxes)
+        state.export_errors('validation', records)
+    elif resume_output:
         from lila_resume_output import restore_written
 
         clipped, missing = restore_written(records, state, class_ids, strict_boxes)
@@ -607,7 +616,7 @@ def prepare(
         )
     if auto_clean:
         records = [r for r in records if not r.get("validation_error")]
-        if not resume_output:
+        if not reuse_verified:
             # An exact duplicate with conflicting annotations has no defensible winner.
             variants = defaultdict(set)
             for r in records:
@@ -629,9 +638,32 @@ def prepare(
             # A validation exclusion supersedes an earlier failed write/output audit.
             state.clear_error('write', r)
             state.clear_error('audit', r)
+    untrained_classes = []
+    if remap_from and records:
+        # A formerly broad class may split into a rare fine class occurring only in
+        # val/test. Keep inherited splits, but do not publish an untrainable class
+        # or hide its boxes as background: exclude the affected images in full.
+        trained = {name for r in records if r['split'] == 'train' for name, _ in r['boxes']}
+        untrained_classes = sorted(set(names) - trained)
+        if untrained_classes:
+            blocked = set(untrained_classes)
+            for r in records:
+                if any(name in blocked for name, _ in r['boxes']):
+                    r['validation_error'] = 'No training samples after preserving audited splits: ' + ', '.join(sorted({name for name, _ in r['boxes']} & blocked))
+                    rejected.append(r)
+                    if state:
+                        state.error('validation', r, r['validation_error'])
+            records = [r for r in records if not r.get('validation_error')]
+            old_names = names
+            names = sorted({name for r in records for name, _ in r['boxes']})
+            class_ids = {name: i for i, name in enumerate(names)}
+            for r in records:
+                r['labels'] = sorted((class_ids[old_names[b[0]]], *b[1:]) for b in r['labels'])
+            if state:
+                state.export_errors('validation', records + rejected)
     if not records or not any(r["labels"] for r in records):
         raise ValueError("No valid positive images remain after filtering")
-    if resume_output:
+    if reuse_verified:
         from lila_resume_output import restore_components
 
         components = restore_components(records)
@@ -704,17 +736,19 @@ def prepare(
             "plan_only": plan_only,
             "image_files_verified": not plan_only,
             "plan_positive_images_needing_dimensions": unknown_dimensions,
-            "sha256_overlap_checked": not plan_only and not resume_output,
-            "resumed_written_output": resume_output,
-            "prior_sha256_grouping_preserved": resume_output,
+            "sha256_overlap_checked": not plan_only and not reuse_verified,
+            "resumed_written_output": bool(reuse_verified),
+            "reclassified_from": str(Path(remap_from).resolve()) if remap_from else None,
+            "untrained_classes_excluded": untrained_classes,
+            "prior_sha256_grouping_preserved": bool(reuse_verified),
             "group_component_basis": (
                 'camera_sequence_only'
-                if resume_output
+                if reuse_verified
                 else 'camera_sequence_and_content_hash'
             ),
             "previous_grouping_evidence": (
                 state.previous_written_report['cross_split_overlap']
-                if resume_output
+                if reuse_verified
                 else None
             ),
             "missing_classes": {

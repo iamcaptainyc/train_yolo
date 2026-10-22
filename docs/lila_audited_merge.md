@@ -1,5 +1,7 @@
 # 五个 LILA 数据集：合并、类别层级处理和框图审计
 
+露营任务现在支持[常用英文类别策略](lila_camping.md)，允许熟悉细类与大类共存；已审计完成的输出可用 `--remap-from` 重建标签，避免再次全量图片校验。下面的科学分类上卷规则适用于默认旧策略 `--category-policy taxonomy`；露营新策略使用 `--category-policy camping`。
+
 正式入口是 `prepare_lila_audited.py`。它复用原有转换器的相机/序列分组，新增原始标注全量统计、官方分类树合并、逐图逐框独立审计和 Markdown 框图报告。原来的 `prepare_lila.py` 仍保留旧的名称合并行为；需要解决层级混淆时请用新入口。
 
 ## 直接运行

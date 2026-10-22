@@ -292,6 +292,8 @@ class CompactState(RunState):
                 return None
             mode = 'hardlink' if os.path.samefile(image, record['source']) else 'copy'
             if mode == 'copy':
+                if getattr(self, 'reclassifying', False):
+                    return None
                 with image.open('rb') as stream:
                     if (
                         hashlib.file_digest(stream, 'sha256').hexdigest()

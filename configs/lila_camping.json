@@ -1,0 +1,2201 @@
+{
+  "schema": 1,
+  "name": "camping_common_names_v1",
+  "scope": "LILA only; familiar fine classes coexist with broader residual categories; no automatic hierarchy coarsening",
+  "excluded_generic_names": [
+    "unidentified animal",
+    "unidentified mammal",
+    "unidentified small mammal",
+    "unidentified small animal",
+    "other animal",
+    "small mammal"
+  ],
+  "notes": [
+    "wild_boar is an application group for Eurasian wild pig and African bushpig; original species retained in source provenance.",
+    "pig is ambiguous pig; never assume domestic from an unspecified source label.",
+    "Small antelope maps to the common antelope group without using the old Antilopinae mapping.",
+    "No wolf source class is available.",
+    "Keep tree_shrew, chevrotain, galago, buffalo and hyena: these were missing from the initial overview and cannot safely be renamed as rodents, antelopes, monkeys, domestic cattle or dogs.",
+    "Civet and pheasant are application common-name groups, not assertions of a single biological species."
+  ],
+  "classes": {
+    "aardvark": {
+      "chinese": "土豚",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "antelope": {
+      "chinese": "羚羊类",
+      "group": "ungulate",
+      "parent": null
+    },
+    "baboon": {
+      "chinese": "狒狒",
+      "group": "primate",
+      "parent": "monkey"
+    },
+    "badger": {
+      "chinese": "獾类（含鼬獾、蜜獾）",
+      "group": "small_carnivore",
+      "parent": null
+    },
+    "bamboo_rat": {
+      "chinese": "竹鼠",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "bat": {
+      "chinese": "蝙蝠",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "bear": {
+      "chinese": "熊（不细分）",
+      "group": "bear",
+      "parent": null
+    },
+    "bird": {
+      "chinese": "鸟类（不细分）",
+      "group": "bird",
+      "parent": null
+    },
+    "black_bear": {
+      "chinese": "黑熊",
+      "group": "bear",
+      "parent": "bear"
+    },
+    "buffalo": {
+      "chinese": "非洲水牛",
+      "group": "ungulate",
+      "parent": null
+    },
+    "cat": {
+      "chinese": "家猫",
+      "group": "cat_family",
+      "parent": null
+    },
+    "cattle": {
+      "chinese": "家牛",
+      "group": "ungulate",
+      "parent": null
+    },
+    "chevrotain": {
+      "chinese": "鼷鹿类",
+      "group": "ungulate",
+      "parent": null
+    },
+    "chicken": {
+      "chinese": "家鸡",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "chipmunk": {
+      "chinese": "花鼠",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "civet": {
+      "chinese": "灵猫类（通俗分组）",
+      "group": "small_carnivore",
+      "parent": null
+    },
+    "cougar": {
+      "chinese": "美洲狮",
+      "group": "cat_family",
+      "parent": null
+    },
+    "coyote": {
+      "chinese": "郊狼",
+      "group": "canid",
+      "parent": null
+    },
+    "crow": {
+      "chinese": "乌鸦",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "deer": {
+      "chinese": "鹿类",
+      "group": "ungulate",
+      "parent": null
+    },
+    "dog": {
+      "chinese": "家犬",
+      "group": "canid",
+      "parent": null
+    },
+    "eagle": {
+      "chinese": "鹰类",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "elephant": {
+      "chinese": "象",
+      "group": "ungulate",
+      "parent": null
+    },
+    "elk": {
+      "chinese": "北美马鹿",
+      "group": "ungulate",
+      "parent": "deer"
+    },
+    "flying_squirrel": {
+      "chinese": "鼯鼠",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "fox": {
+      "chinese": "狐（不细分）",
+      "group": "canid",
+      "parent": null
+    },
+    "galago": {
+      "chinese": "婴猴类",
+      "group": "primate",
+      "parent": null
+    },
+    "gibbon": {
+      "chinese": "长臂猿",
+      "group": "primate",
+      "parent": null
+    },
+    "goat": {
+      "chinese": "家山羊",
+      "group": "ungulate",
+      "parent": null
+    },
+    "horse": {
+      "chinese": "马",
+      "group": "ungulate",
+      "parent": null
+    },
+    "hyena": {
+      "chinese": "鬣狗",
+      "group": "carnivore",
+      "parent": null
+    },
+    "insect": {
+      "chinese": "昆虫",
+      "group": "invertebrate",
+      "parent": null
+    },
+    "jackal": {
+      "chinese": "胡狼",
+      "group": "canid",
+      "parent": null
+    },
+    "leopard": {
+      "chinese": "豹",
+      "group": "cat_family",
+      "parent": null
+    },
+    "leopard_cat": {
+      "chinese": "豹猫",
+      "group": "cat_family",
+      "parent": null
+    },
+    "lizard": {
+      "chinese": "蜥蜴",
+      "group": "reptile",
+      "parent": null
+    },
+    "lynx": {
+      "chinese": "猞猁类（含短尾猫）",
+      "group": "cat_family",
+      "parent": null
+    },
+    "magpie": {
+      "chinese": "鹊类",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "marmot": {
+      "chinese": "旱獭",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "mink": {
+      "chinese": "水貂",
+      "group": "small_carnivore",
+      "parent": "mustelid"
+    },
+    "mongoose": {
+      "chinese": "獴类",
+      "group": "small_carnivore",
+      "parent": null
+    },
+    "monitor_lizard": {
+      "chinese": "巨蜥",
+      "group": "reptile",
+      "parent": "lizard"
+    },
+    "monkey": {
+      "chinese": "猴类",
+      "group": "primate",
+      "parent": null
+    },
+    "mouse": {
+      "chinese": "鼠类（含林鼠）",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "mustelid": {
+      "chinese": "其他鼬科动物（含貂）",
+      "group": "small_carnivore",
+      "parent": null
+    },
+    "opossum": {
+      "chinese": "负鼠",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "otter": {
+      "chinese": "水獭",
+      "group": "small_carnivore",
+      "parent": "mustelid"
+    },
+    "owl": {
+      "chinese": "鸮类",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "pangolin": {
+      "chinese": "穿山甲",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "person": {
+      "chinese": "人",
+      "group": "non_animal",
+      "parent": null
+    },
+    "pheasant": {
+      "chinese": "雉鸡类（通俗分组）",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "pig": {
+      "chinese": "猪（未明确家野）",
+      "group": "pig",
+      "parent": null
+    },
+    "pigeon": {
+      "chinese": "鸠鸽类",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "porcupine": {
+      "chinese": "豪猪",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "rabbit": {
+      "chinese": "兔类",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "raccoon": {
+      "chinese": "浣熊",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "red_fox": {
+      "chinese": "赤狐",
+      "group": "canid",
+      "parent": "fox"
+    },
+    "rodent": {
+      "chinese": "其他啮齿动物",
+      "group": "rodent",
+      "parent": null
+    },
+    "serow": {
+      "chinese": "鬣羚",
+      "group": "ungulate",
+      "parent": null
+    },
+    "skunk": {
+      "chinese": "臭鼬",
+      "group": "small_carnivore",
+      "parent": null
+    },
+    "snake": {
+      "chinese": "蛇",
+      "group": "reptile",
+      "parent": null
+    },
+    "squirrel": {
+      "chinese": "松鼠类",
+      "group": "rodent",
+      "parent": "rodent"
+    },
+    "tree_shrew": {
+      "chinese": "树鼩",
+      "group": "other_mammal",
+      "parent": null
+    },
+    "turkey": {
+      "chinese": "火鸡",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "turtle": {
+      "chinese": "龟鳖类",
+      "group": "reptile",
+      "parent": null
+    },
+    "vehicle": {
+      "chinese": "车辆",
+      "group": "non_animal",
+      "parent": null
+    },
+    "warthog": {
+      "chinese": "疣猪",
+      "group": "pig",
+      "parent": "pig"
+    },
+    "weasel": {
+      "chinese": "鼬类",
+      "group": "small_carnivore",
+      "parent": "mustelid"
+    },
+    "wild_boar": {
+      "chinese": "野猪（含非洲丛林猪）",
+      "group": "pig",
+      "parent": "pig"
+    },
+    "wild_cat": {
+      "chinese": "其他野生小型猫科",
+      "group": "cat_family",
+      "parent": null
+    },
+    "woodpecker": {
+      "chinese": "啄木鸟",
+      "group": "bird",
+      "parent": "bird"
+    },
+    "zebra": {
+      "chinese": "斑马",
+      "group": "ungulate",
+      "parent": null
+    }
+  },
+  "datasets": {
+    "swg-camera-traps": [
+      {
+        "source_id_reference": 0,
+        "source_name": "empty",
+        "source_chinese": "空图（未标记动物）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 1,
+        "source_name": "ignore",
+        "source_chinese": "忽略标签",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 2,
+        "source_name": "blurred",
+        "source_chinese": "模糊图像",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 4,
+        "source_name": "crab_eating_mongoose",
+        "source_chinese": "食蟹獴",
+        "target": "mongoose",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 5,
+        "source_name": "ferret_badger",
+        "source_chinese": "鼬獾类（未定种）",
+        "target": "badger",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 6,
+        "source_name": "large_antlered_muntjac",
+        "source_chinese": "大角麂",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 7,
+        "source_name": "stump_tailed_macaque",
+        "source_chinese": "熊猴（短尾猴）",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 8,
+        "source_name": "unidentified_macaque",
+        "source_chinese": "未识别猕猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 9,
+        "source_name": "unidentified_muntjac",
+        "source_chinese": "未识别麂类",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 10,
+        "source_name": "unidentified_small_mammal",
+        "source_chinese": "未识别小型哺乳动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 11,
+        "source_name": "unidentified_squirrel",
+        "source_chinese": "未识别松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 12,
+        "source_name": "eurasian_wild_pig",
+        "source_chinese": "欧亚野猪",
+        "target": "wild_boar",
+        "reason": "user-defined wild pig group: wild_boar; never merge into pig"
+      },
+      {
+        "source_id_reference": 13,
+        "source_name": "problem",
+        "source_chinese": "问题图像／异常标签",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 14,
+        "source_name": "common_palm_civet",
+        "source_chinese": "椰子狸",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 15,
+        "source_name": "silver_pheasant",
+        "source_chinese": "白鹇",
+        "target": "pheasant",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 16,
+        "source_name": "unidentified_palm_civet",
+        "source_chinese": "未识别棕榈狸类",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 17,
+        "source_name": "insect",
+        "source_chinese": "昆虫类",
+        "target": "insect",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 18,
+        "source_name": "masked_palm_civet",
+        "source_chinese": "果子狸（花面狸）",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 19,
+        "source_name": "pig_tailed_macaque",
+        "source_chinese": "豚尾猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 20,
+        "source_name": "red_cheeked_squirrel",
+        "source_chinese": "红颊长吻松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 21,
+        "source_name": "roosevelts_muntjac_group",
+        "source_chinese": "罗斯福麂类群",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 22,
+        "source_name": "sambar",
+        "source_chinese": "水鹿",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 23,
+        "source_name": "spotted_linsang",
+        "source_chinese": "斑林狸",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 24,
+        "source_name": "unidentified_animal",
+        "source_chinese": "未识别动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 25,
+        "source_name": "unidentified_bird",
+        "source_chinese": "未识别鸟类",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 26,
+        "source_name": "unidentified_partridge",
+        "source_chinese": "未识别鹧鸪类",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 27,
+        "source_name": "unidentified_ungulates",
+        "source_chinese": "未识别有蹄类",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 28,
+        "source_name": "unidentified_murid",
+        "source_chinese": "未识别鼠科动物",
+        "target": "mouse",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 29,
+        "source_name": "red_junglefowl",
+        "source_chinese": "红原鸡",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 30,
+        "source_name": "blue_pitta",
+        "source_chinese": "蓝八色鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 31,
+        "source_name": "pallass_squirrel",
+        "source_chinese": "赤腹松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 32,
+        "source_name": "yellow_throated_marten",
+        "source_chinese": "黄喉貂",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 33,
+        "source_name": "grey_peacock_pheasant",
+        "source_chinese": "灰孔雀雉",
+        "target": "pheasant",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 34,
+        "source_name": "white_crowned_forktail",
+        "source_chinese": "白冠燕尾",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 35,
+        "source_name": "emerald_dove",
+        "source_chinese": "绿翅金鸠",
+        "target": "pigeon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 36,
+        "source_name": "human",
+        "source_chinese": "人",
+        "target": "person",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 37,
+        "source_name": "unidentified_pitta",
+        "source_chinese": "未识别八色鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 38,
+        "source_name": "laughingthrush",
+        "source_chinese": "噪鹛类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 39,
+        "source_name": "asiatic_brush_tailed_porcupine",
+        "source_chinese": "亚洲帚尾豪猪",
+        "target": "porcupine",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 40,
+        "source_name": "large_indian_civet",
+        "source_chinese": "大灵猫",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 41,
+        "source_name": "unidentified_otter",
+        "source_chinese": "未识别水獭",
+        "target": "otter",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 42,
+        "source_name": "unidentified_owl",
+        "source_chinese": "未识别鸮类（猫头鹰）",
+        "target": "owl",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 43,
+        "source_name": "white-winged_magpie",
+        "source_chinese": "白翅蓝鹊",
+        "target": "magpie",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 44,
+        "source_name": "japanese_thrush",
+        "source_chinese": "乌灰鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 45,
+        "source_name": "orange_headed_thrush",
+        "source_chinese": "橙头地鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 46,
+        "source_name": "scaly_thrush",
+        "source_chinese": "虎斑地鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 47,
+        "source_name": "unidentified_mammal",
+        "source_chinese": "未识别哺乳动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 48,
+        "source_name": "gray_laughingthrush",
+        "source_chinese": "褐胸噪鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 49,
+        "source_name": "eurasian_woodcock",
+        "source_chinese": "丘鹬",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 50,
+        "source_name": "red_collared_woodpecker",
+        "source_chinese": "红领绿啄木鸟",
+        "target": "woodpecker",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 51,
+        "source_name": "blue_whistling_thrush",
+        "source_chinese": "紫啸鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 52,
+        "source_name": "large_scimitar_babbler",
+        "source_chinese": "长嘴钩嘴鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 53,
+        "source_name": "rufous_cheeked_laughingthrush",
+        "source_chinese": "栗颊噪鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 54,
+        "source_name": "chinese_serow",
+        "source_chinese": "中华鬣羚（按原英文名）",
+        "target": "serow",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 55,
+        "source_name": "gibbon",
+        "source_chinese": "长臂猿类（未定种）",
+        "target": "gibbon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 56,
+        "source_name": "red_shanked_douc",
+        "source_chinese": "白臀叶猴（红腿白臀叶猴）",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 57,
+        "source_name": "annamite_striped_rabbit",
+        "source_chinese": "安南条纹兔",
+        "target": "rabbit",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 58,
+        "source_name": "blue_fronted_robin",
+        "source_chinese": "蓝额长脚地鸲",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 59,
+        "source_name": "orange_breasted_trogon",
+        "source_chinese": "橙胸咬鹃",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 60,
+        "source_name": "chevrotain",
+        "source_chinese": "鼷鹿类（未定种）",
+        "target": "chevrotain",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 61,
+        "source_name": "unidentified_pheasant",
+        "source_chinese": "未识别雉类",
+        "target": "pheasant",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 62,
+        "source_name": "bar_bellied_pitta",
+        "source_chinese": "斑腹八色鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 63,
+        "source_name": "domestic_dog",
+        "source_chinese": "家犬",
+        "target": "dog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 64,
+        "source_name": "malayan_porcupine",
+        "source_chinese": "马来豪猪",
+        "target": "porcupine",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 65,
+        "source_name": "assam_or_rhesus_macaque",
+        "source_chinese": "阿萨姆猴或恒河猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 66,
+        "source_name": "unidentified_bat",
+        "source_chinese": "未识别蝙蝠",
+        "target": "bat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 67,
+        "source_name": "indochinese_green_magpie",
+        "source_chinese": "印支绿鹊",
+        "target": "magpie",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 68,
+        "source_name": "common_green_magpie",
+        "source_chinese": "蓝绿鹊",
+        "target": "magpie",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 69,
+        "source_name": "francois_langur",
+        "source_chinese": "黑叶猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 70,
+        "source_name": "leopard_cat",
+        "source_chinese": "豹猫",
+        "target": "leopard_cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 71,
+        "source_name": "binturong",
+        "source_chinese": "熊狸",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 72,
+        "source_name": "hog_badger",
+        "source_chinese": "猪獾",
+        "target": "badger",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 73,
+        "source_name": "crested_argus",
+        "source_chinese": "冠眼斑雉",
+        "target": "pheasant",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 74,
+        "source_name": "pangolin",
+        "source_chinese": "穿山甲类（未定种）",
+        "target": "pangolin",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 75,
+        "source_name": "bamboo_rat",
+        "source_chinese": "竹鼠类（未定种）",
+        "target": "bamboo_rat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 76,
+        "source_name": "asiatic_black_bear",
+        "source_chinese": "亚洲黑熊",
+        "target": "black_bear",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 77,
+        "source_name": "mountain_hawk_eagle",
+        "source_chinese": "鹰雕",
+        "target": "eagle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 78,
+        "source_name": "unidentified_bear",
+        "source_chinese": "未识别熊类",
+        "target": "bear",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 79,
+        "source_name": "unidentified_weasel",
+        "source_chinese": "未识别鼬类",
+        "target": "weasel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 80,
+        "source_name": "northern_treeshrew",
+        "source_chinese": "北树鼩",
+        "target": "tree_shrew",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 81,
+        "source_name": "bengal_monitor",
+        "source_chinese": "孟加拉巨蜥",
+        "target": "monitor_lizard",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 82,
+        "source_name": "black_giant_squirrel",
+        "source_chinese": "巨松鼠（黑巨松鼠）",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 83,
+        "source_name": "sun_bear",
+        "source_chinese": "马来熊",
+        "target": "bear",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 84,
+        "source_name": "marbled_cat",
+        "source_chinese": "云猫",
+        "target": "wild_cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 85,
+        "source_name": "unidentified_striped_squirrel",
+        "source_chinese": "未识别条纹松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 86,
+        "source_name": "hatinh_langur",
+        "source_chinese": "河静叶猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 87,
+        "source_name": "unidentified_turtles",
+        "source_chinese": "未识别龟鳖类",
+        "target": "turtle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 88,
+        "source_name": "red_muntjac",
+        "source_chinese": "赤麂（红麂）",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 89,
+        "source_name": "phayres_langur",
+        "source_chinese": "菲氏叶猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 90,
+        "source_name": "giant_flying_squirrel",
+        "source_chinese": "大鼯鼠类（未定种）",
+        "target": "flying_squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 91,
+        "source_name": "rufous_necked_hornbill",
+        "source_chinese": "棕颈犀鸟",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 92,
+        "source_name": "golden_cat",
+        "source_chinese": "亚洲金猫",
+        "target": "wild_cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 93,
+        "source_name": "owstons_civet",
+        "source_chinese": "缟灵猫",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 94,
+        "source_name": "invertebrate",
+        "source_chinese": "无脊椎动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 95,
+        "source_name": "chinese serow",
+        "source_chinese": "中华鬣羚（按原英文名）",
+        "target": "serow",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 96,
+        "source_name": "unidentified_lizard",
+        "source_chinese": "未识别蜥蜴",
+        "target": "lizard",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 97,
+        "source_name": "macaque_not_stump_tailed",
+        "source_chinese": "非熊猴的猕猴类",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 98,
+        "source_name": "unidentified_small_animal",
+        "source_chinese": "未识别小型动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 99,
+        "source_name": "yellow_bellied_weasel",
+        "source_chinese": "黄腹鼬",
+        "target": "weasel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 100,
+        "source_name": "brown_wood_owl",
+        "source_chinese": "褐林鸮",
+        "target": "owl",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 101,
+        "source_name": "necklaced_laughingthrush_sp",
+        "source_chinese": "领纹噪鹛类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 102,
+        "source_name": "mountain_imperial_pigeon",
+        "source_chinese": "山皇鸠",
+        "target": "pigeon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 103,
+        "source_name": "rufous_eared_laughingthrush",
+        "source_chinese": "棕耳噪鹛（原英文暂译）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 104,
+        "source_name": "lesser_yellownape",
+        "source_chinese": "黄冠啄木鸟",
+        "target": "woodpecker",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 105,
+        "source_name": "red_tailed_laughingthrush",
+        "source_chinese": "赤尾噪鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 106,
+        "source_name": "flying_squirrel",
+        "source_chinese": "鼯鼠类（飞鼠）",
+        "target": "flying_squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 107,
+        "source_name": "siberian_thrush",
+        "source_chinese": "白眉地鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 108,
+        "source_name": "asian_fairy_bluebird",
+        "source_chinese": "和平鸟",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 109,
+        "source_name": "forktail_sp",
+        "source_chinese": "燕尾类鸟（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 110,
+        "source_name": "striated_heron",
+        "source_chinese": "绿鹭",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 111,
+        "source_name": "crested_serpent_eagle",
+        "source_chinese": "蛇雕",
+        "target": "eagle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 112,
+        "source_name": "black_throated_laughingthrush",
+        "source_chinese": "黑喉噪鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 113,
+        "source_name": "golden_babbler",
+        "source_chinese": "金头穗鹛",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 114,
+        "source_name": "back_striped_weasel",
+        "source_chinese": "背纹鼬",
+        "target": "weasel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 115,
+        "source_name": "barred_cuckoo_dove",
+        "source_chinese": "斑尾鹃鸠",
+        "target": "pigeon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 116,
+        "source_name": "unidentified_snake",
+        "source_chinese": "未识别蛇类",
+        "target": "snake",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 117,
+        "source_name": "white_tailed_robin",
+        "source_chinese": "白尾蓝地鸲",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 118,
+        "source_name": "eyebrowed_thrush",
+        "source_chinese": "白眉鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 119,
+        "source_name": "silver_eared_mesia",
+        "source_chinese": "银耳相思鸟",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 120,
+        "source_name": "grey_headed_canary_flycatcher",
+        "source_chinese": "方尾鹟",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 121,
+        "source_name": "vehicle",
+        "source_chinese": "车辆",
+        "target": "vehicle",
+        "reason": "familiar common-name class; preserve original label scope"
+      }
+    ],
+    "caltech-camera-traps": [
+      {
+        "source_id_reference": 6,
+        "source_name": "bobcat",
+        "source_chinese": "短尾猫（山猫）",
+        "target": "lynx",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 1,
+        "source_name": "opossum",
+        "source_chinese": "负鼠类",
+        "target": "opossum",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 30,
+        "source_name": "empty",
+        "source_chinese": "空图（未标记动物）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 9,
+        "source_name": "coyote",
+        "source_chinese": "郊狼",
+        "target": "coyote",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 3,
+        "source_name": "raccoon",
+        "source_chinese": "浣熊",
+        "target": "raccoon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 11,
+        "source_name": "bird",
+        "source_chinese": "鸟类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 8,
+        "source_name": "dog",
+        "source_chinese": "家犬",
+        "target": "dog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 16,
+        "source_name": "cat",
+        "source_chinese": "家猫",
+        "target": "cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 5,
+        "source_name": "squirrel",
+        "source_chinese": "松鼠类（未定种）",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 10,
+        "source_name": "rabbit",
+        "source_chinese": "兔类（未定种）",
+        "target": "rabbit",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 7,
+        "source_name": "skunk",
+        "source_chinese": "臭鼬类（未定种）",
+        "target": "skunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 14,
+        "source_name": "lizard",
+        "source_chinese": "蜥蜴类（未定种）",
+        "target": "lizard",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 99,
+        "source_name": "rodent",
+        "source_chinese": "啮齿动物（未定种）",
+        "target": "rodent",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 21,
+        "source_name": "badger",
+        "source_chinese": "獾类",
+        "target": "badger",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 34,
+        "source_name": "deer",
+        "source_chinese": "鹿类（未定种）",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 37,
+        "source_name": "cow",
+        "source_chinese": "家牛",
+        "target": "cattle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 33,
+        "source_name": "car",
+        "source_chinese": "汽车",
+        "target": "vehicle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 51,
+        "source_name": "fox",
+        "source_chinese": "狐类",
+        "target": "fox",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 39,
+        "source_name": "pig",
+        "source_chinese": "猪类",
+        "target": "pig",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 40,
+        "source_name": "mountain_lion",
+        "source_chinese": "美洲狮",
+        "target": "cougar",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 66,
+        "source_name": "bat",
+        "source_chinese": "蝙蝠类（未定种）",
+        "target": "bat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 97,
+        "source_name": "insect",
+        "source_chinese": "昆虫类",
+        "target": "insect",
+        "reason": "familiar common-name class; preserve original label scope"
+      }
+    ],
+    "ena24": [
+      {
+        "source_id_reference": 0,
+        "source_name": "Bird",
+        "source_chinese": "鸟类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 1,
+        "source_name": "Eastern Gray Squirrel",
+        "source_chinese": "东部灰松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 2,
+        "source_name": "Eastern Chipmunk",
+        "source_chinese": "东部花栗鼠",
+        "target": "chipmunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 3,
+        "source_name": "Woodchuck",
+        "source_chinese": "美洲旱獭",
+        "target": "marmot",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 4,
+        "source_name": "Wild Turkey",
+        "source_chinese": "野火鸡",
+        "target": "turkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 5,
+        "source_name": "White_Tailed_Deer",
+        "source_chinese": "白尾鹿",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 6,
+        "source_name": "Virginia Opossum",
+        "source_chinese": "弗吉尼亚负鼠",
+        "target": "opossum",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 7,
+        "source_name": "Eastern Cottontail",
+        "source_chinese": "东部棉尾兔（佛罗里达棉尾兔）",
+        "target": "rabbit",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 8,
+        "source_name": "Human",
+        "source_chinese": "人",
+        "target": "person",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 9,
+        "source_name": "Vehicle",
+        "source_chinese": "车辆",
+        "target": "vehicle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 10,
+        "source_name": "Striped Skunk",
+        "source_chinese": "条纹臭鼬",
+        "target": "skunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 11,
+        "source_name": "Red Fox",
+        "source_chinese": "赤狐",
+        "target": "red_fox",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 12,
+        "source_name": "Eastern Fox Squirrel",
+        "source_chinese": "东部狐松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 13,
+        "source_name": "Northern Raccoon",
+        "source_chinese": "北美浣熊",
+        "target": "raccoon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 14,
+        "source_name": "Grey Fox",
+        "source_chinese": "灰狐",
+        "target": "fox",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 15,
+        "source_name": "Horse",
+        "source_chinese": "家马",
+        "target": "horse",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 16,
+        "source_name": "Dog",
+        "source_chinese": "家犬",
+        "target": "dog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 17,
+        "source_name": "American Crow",
+        "source_chinese": "短嘴鸦（美洲乌鸦）",
+        "target": "crow",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 18,
+        "source_name": "Chicken",
+        "source_chinese": "家鸡",
+        "target": "chicken",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 19,
+        "source_name": "Domestic Cat",
+        "source_chinese": "家猫",
+        "target": "cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 20,
+        "source_name": "Coyote",
+        "source_chinese": "郊狼",
+        "target": "coyote",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 21,
+        "source_name": "Bobcat",
+        "source_chinese": "短尾猫（山猫）",
+        "target": "lynx",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 22,
+        "source_name": "American Black Bear",
+        "source_chinese": "美洲黑熊",
+        "target": "black_bear",
+        "reason": "familiar common-name class; preserve original label scope"
+      }
+    ],
+    "oregon-critters": [
+      {
+        "source_id_reference": 0,
+        "source_name": "empty",
+        "source_chinese": "空图（未标记动物）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 1,
+        "source_name": "coyote",
+        "source_chinese": "郊狼",
+        "target": "coyote",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 2,
+        "source_name": "bat species",
+        "source_chinese": "蝙蝠类（未定种）",
+        "target": "bat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 3,
+        "source_name": "strigidae family",
+        "source_chinese": "鸱鸮科鸟类",
+        "target": "owl",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 4,
+        "source_name": "ruffed grouse",
+        "source_chinese": "披肩榛鸡",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 5,
+        "source_name": "red fox",
+        "source_chinese": "赤狐",
+        "target": "red_fox",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 6,
+        "source_name": "canada jay",
+        "source_chinese": "加拿大噪鸦",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 7,
+        "source_name": "pileated woodpecker",
+        "source_chinese": "北美黑啄木鸟",
+        "target": "woodpecker",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 8,
+        "source_name": "reptile or amphibian",
+        "source_chinese": "爬行动物或两栖动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 9,
+        "source_name": "bobcat",
+        "source_chinese": "短尾猫（山猫）",
+        "target": "lynx",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 10,
+        "source_name": "marten",
+        "source_chinese": "貂类",
+        "target": "mustelid",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 11,
+        "source_name": "california ground squirrel",
+        "source_chinese": "加利福尼亚地松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 12,
+        "source_name": "mink",
+        "source_chinese": "水貂类",
+        "target": "mink",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 13,
+        "source_name": "western spotted skunk",
+        "source_chinese": "西部斑臭鼬",
+        "target": "skunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 14,
+        "source_name": "mountain beaver",
+        "source_chinese": "山河狸",
+        "target": "rodent",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 15,
+        "source_name": "black bear",
+        "source_chinese": "黑熊",
+        "target": "black_bear",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 16,
+        "source_name": "black-tailed deer",
+        "source_chinese": "黑尾鹿",
+        "target": "deer",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 17,
+        "source_name": "cougar",
+        "source_chinese": "美洲狮",
+        "target": "cougar",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 18,
+        "source_name": "roosevelt elk",
+        "source_chinese": "罗斯福马鹿",
+        "target": "elk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 19,
+        "source_name": "stellers jay",
+        "source_chinese": "冠蓝鸦（斯特勒松鸦）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 20,
+        "source_name": "catharus species",
+        "source_chinese": "夜鸫属鸟类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 21,
+        "source_name": "varied thrush",
+        "source_chinese": "杂色鸫",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 22,
+        "source_name": "dark-eyed junco",
+        "source_chinese": "暗眼灯草鹀",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 23,
+        "source_name": "american robin",
+        "source_chinese": "旅鸫（美洲知更鸟）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 24,
+        "source_name": "leporidae family",
+        "source_chinese": "兔科动物",
+        "target": "rabbit",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 25,
+        "source_name": "douglas squirrel",
+        "source_chinese": "道格拉斯松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 26,
+        "source_name": "humboldt's flying squirrel",
+        "source_chinese": "洪堡鼯鼠",
+        "target": "flying_squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 27,
+        "source_name": "townsend's chipmunk",
+        "source_chinese": "汤氏花鼠",
+        "target": "chipmunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 28,
+        "source_name": "weasel family",
+        "source_chinese": "鼬科动物",
+        "target": "mustelid",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 29,
+        "source_name": "parulidae family",
+        "source_chinese": "森莺科鸟类",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 30,
+        "source_name": "invertebrate",
+        "source_chinese": "无脊椎动物",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 31,
+        "source_name": "picidae family",
+        "source_chinese": "啄木鸟科鸟类",
+        "target": "woodpecker",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 32,
+        "source_name": "neotoma species",
+        "source_chinese": "林鼠属动物（未定种）",
+        "target": "mouse",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 33,
+        "source_name": "poecile species",
+        "source_chinese": "山雀类（Poecile 属，未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 34,
+        "source_name": "virginia opossum",
+        "source_chinese": "弗吉尼亚负鼠",
+        "target": "opossum",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 35,
+        "source_name": "troglodytidae family",
+        "source_chinese": "鹪鹩科鸟类",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 36,
+        "source_name": "mountain quail",
+        "source_chinese": "山鹑（北美山鹑）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 37,
+        "source_name": "northern raccoon",
+        "source_chinese": "北美浣熊",
+        "target": "raccoon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 38,
+        "source_name": "striped skunk",
+        "source_chinese": "条纹臭鼬",
+        "target": "skunk",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 39,
+        "source_name": "western gray squirrel",
+        "source_chinese": "西部灰松鼠",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 40,
+        "source_name": "northern flicker",
+        "source_chinese": "金翼啄木鸟",
+        "target": "woodpecker",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 41,
+        "source_name": "domestic dog",
+        "source_chinese": "家犬",
+        "target": "dog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 42,
+        "source_name": "human",
+        "source_chinese": "人",
+        "target": "person",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 43,
+        "source_name": "small mammal",
+        "source_chinese": "小型哺乳动物（未定种）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 44,
+        "source_name": "gray fox",
+        "source_chinese": "灰狐",
+        "target": "fox",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 45,
+        "source_name": "other bird",
+        "source_chinese": "其他鸟类",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      }
+    ],
+    "nkhotakota-camera-traps": [
+      {
+        "source_id_reference": 0,
+        "source_name": "empty",
+        "source_chinese": "空图（未标记动物）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 1,
+        "source_name": "human",
+        "source_chinese": "人",
+        "target": "person",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 2,
+        "source_name": "other_animal",
+        "source_chinese": "其他动物（未定类）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 3,
+        "source_name": "african_savanna_elephant",
+        "source_chinese": "非洲草原象",
+        "target": "elephant",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 4,
+        "source_name": "sable",
+        "source_chinese": "黑马羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 5,
+        "source_name": "yellow_baboon",
+        "source_chinese": "黄狒狒",
+        "target": "baboon",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 6,
+        "source_name": "bushpig",
+        "source_chinese": "非洲丛林猪",
+        "target": "wild_boar",
+        "reason": "user-defined wild pig group: wild_boar; never merge into pig"
+      },
+      {
+        "source_id_reference": 7,
+        "source_name": "greater_kudu",
+        "source_chinese": "大捻角羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 8,
+        "source_name": "southern_reedbuck",
+        "source_chinese": "南苇羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 9,
+        "source_name": "bird",
+        "source_chinese": "鸟类（未定种）",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 10,
+        "source_name": "small_antelope",
+        "source_chinese": "小型羚羊（未定种）",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 11,
+        "source_name": "cape_bushbuck",
+        "source_chinese": "开普薮羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 12,
+        "source_name": "cape_porcupine",
+        "source_chinese": "南非豪猪（开普豪猪）",
+        "target": "porcupine",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 13,
+        "source_name": "common_duiker",
+        "source_chinese": "灰小羚羊",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 14,
+        "source_name": "common_warthog",
+        "source_chinese": "普通疣猪",
+        "target": "warthog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 15,
+        "source_name": "aardvark",
+        "source_chinese": "土豚",
+        "target": "aardvark",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 16,
+        "source_name": "common_waterbuck",
+        "source_chinese": "普通水羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 17,
+        "source_name": "southern_ground_hornbill",
+        "source_chinese": "南方地犀鸟",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 18,
+        "source_name": "cape_buffalo",
+        "source_chinese": "开普水牛",
+        "target": "buffalo",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 19,
+        "source_name": "african_civet",
+        "source_chinese": "非洲灵猫",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 20,
+        "source_name": "leopard",
+        "source_chinese": "豹",
+        "target": "leopard",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 21,
+        "source_name": "galago",
+        "source_chinese": "婴猴类（未定种）",
+        "target": "galago",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 22,
+        "source_name": "honey_badger",
+        "source_chinese": "蜜獾",
+        "target": "badger",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 23,
+        "source_name": "mongoose",
+        "source_chinese": "獴类（未定种）",
+        "target": "mongoose",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 24,
+        "source_name": "genet",
+        "source_chinese": "獛类（未定种）",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 25,
+        "source_name": "red_duiker",
+        "source_chinese": "红小羚羊",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 26,
+        "source_name": "common_eland",
+        "source_chinese": "大羚羊（伊兰羚羊）",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 27,
+        "source_name": "plains_zebra",
+        "source_chinese": "平原斑马",
+        "target": "zebra",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 28,
+        "source_name": "impala",
+        "source_chinese": "黑斑羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 29,
+        "source_name": "roan",
+        "source_chinese": "马羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 30,
+        "source_name": "klipspringer",
+        "source_chinese": "岩羚",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 31,
+        "source_name": "spotted_hyena",
+        "source_chinese": "斑鬣狗",
+        "target": "hyena",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 32,
+        "source_name": "serval",
+        "source_chinese": "薮猫",
+        "target": "wild_cat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 33,
+        "source_name": "vervet_monkey",
+        "source_chinese": "黑长尾猴（绿猴）",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 34,
+        "source_name": "domestic_dog",
+        "source_chinese": "家犬",
+        "target": "dog",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 35,
+        "source_name": "sharpes_grysbok",
+        "source_chinese": "夏氏小羚羊",
+        "target": "antelope",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 36,
+        "source_name": "helmeted_guineafowl",
+        "source_chinese": "盔珠鸡",
+        "target": "bird",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 37,
+        "source_name": "scrub_hare",
+        "source_chinese": "灌丛野兔",
+        "target": "rabbit",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 38,
+        "source_name": "small_mammal",
+        "source_chinese": "小型哺乳动物（未定种）",
+        "target": null,
+        "reason": "excluded uncertain animal, ambiguous mixed group, or non-training status; drop whole image"
+      },
+      {
+        "source_id_reference": 39,
+        "source_name": "side-striped_jackal",
+        "source_chinese": "侧纹胡狼",
+        "target": "jackal",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 40,
+        "source_name": "palm_civet",
+        "source_chinese": "棕榈狸类",
+        "target": "civet",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 41,
+        "source_name": "squirrel",
+        "source_chinese": "松鼠类（未定种）",
+        "target": "squirrel",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 42,
+        "source_name": "bat",
+        "source_chinese": "蝙蝠类（未定种）",
+        "target": "bat",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 43,
+        "source_name": "blue_monkey",
+        "source_chinese": "青长尾猴",
+        "target": "monkey",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 44,
+        "source_name": "domestic_cattle",
+        "source_chinese": "家牛",
+        "target": "cattle",
+        "reason": "familiar common-name class; preserve original label scope"
+      },
+      {
+        "source_id_reference": 45,
+        "source_name": "domestic_goat",
+        "source_chinese": "家山羊",
+        "target": "goat",
+        "reason": "familiar common-name class; preserve original label scope"
+      }
+    ]
+  }
+}

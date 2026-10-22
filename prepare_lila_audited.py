@@ -295,6 +295,8 @@ def table(headers, rows):
 
 def write_markdown(output, inventories, details, report, audit, previews, retained):
     splits = tuple(report['stats'])
+    policy = report.get('label_policy')
+    class_info = policy['classes'] if policy else {}
     lines = [
         '# LILA 五数据集合并与框对应审计报告',
         '',
@@ -320,6 +322,18 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
         '## 五数据集总览',
         '',
     ]
+    if policy:
+        replacements = {
+            '分类来源：': '分类来源：已审阅的露营常用英文类别策略，版本 `' + policy['name'] + '`；完整原类映射及 SHA-256 见 audit_sources.json、taxonomy_decisions.json 和 class_hierarchy.json。',
+            '- 使用固定的 LILA': '- 使用数据集命名空间 + 原始英文名的显式映射；常用细类与大类允许并存，不再随父类标签整体上卷。每框只标一个类别，展示父类关系不产生重复框。',
+            '- animalia、': '- 未识别动物、哺乳动物、小型动物及无法安全映射的混合粗类别整图排除；不生成 animal、mammal、small_mammal。空图仍须有明确 empty 证据。',
+            '- 官方映射可能': '- 本策略按原始标签定义通俗应用类别，不通过旧科学分类快照猜物种；如 black_bear 合并两种黑熊，civet 是通俗灵猫分组。不是每个输出类别都等于单一生物物种。',
+            '- 使用 rank:': '- 输出类别使用英文 snake_case。野生猪类统一为 wild_boar，pig 保留家野未明确的猪，warthog 保留疣猪。蛇类等原始存在但零入选框的类别不占训练 ID。',
+        }
+        lines = [next((value for prefix, value in replacements.items() if line.startswith(prefix)), line) for line in lines]
+        lines[-3:-3] = [
+            '**本次只处理 LILA，未合并其他 YOLO 数据集。** 各类统计均为本次实际保留结果；未提供的物种（如 wolf）不会凭空创建训练类别。', '',
+        ]
     rows = []
     for dataset, inv in inventories.items():
         count = retained[dataset]
@@ -366,6 +380,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
     )
     details_by_key = {d['key']: d for d in details}
     for dataset, inv in inventories.items():
+        source_chinese = {d['source_name']: d.get('source_chinese', '') for d in details if d['dataset'] == dataset}
         lines += [
             '## ' + dataset,
             '',
@@ -390,9 +405,9 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             ],
         )
         lines += table(
-            ['原 ID', '原名称', '图片级/物体标注记录', '关联图片', '框记录'],
+            ['原 ID', '原名称', *(['中文名称'] if policy else []), '图片级/物体标注记录', '关联图片', '框记录'],
             [
-                [c['id'], c['name'], c['annotations'], c['images'], c['bbox_records']]
+                [c['id'], c['name'], *([source_chinese.get(c['name'], '')] if policy else []), c['annotations'], c['images'], c['bbox_records']]
                 for c in inv['metadata']['categories']
             ],
         )
@@ -411,6 +426,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
                 [
                     c['id'],
                     c['name'],
+                    *([d.get('source_chinese', '')] if policy else []),
                     c['bbox_records'],
                     c['bbox_images'],
                     selected.get(str(c['id']), {}).get('boxes', 0),
@@ -423,6 +439,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             [
                 '原 ID',
                 '原名称',
+                *(['中文名称'] if policy else []),
                 '原始框记录',
                 '原始框图片',
                 '筛选框记录',
@@ -449,6 +466,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
             [
                 class_id,
                 name,
+                *([class_info[name]['chinese'], class_info[name]['group']] if policy else []),
                 sum(report['stats'][s]['boxes'][name] for s in splits),
                 *[report['stats'][split]['boxes'][name] for split in splits],
                 sum(report['class_images'][split][name] for split in splits),
@@ -460,6 +478,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
         [
             'YOLO ID',
             '类别',
+            *(['中文名称', '展示分组'] if policy else []),
             '总框数',
             *[split + ' 框' for split in splits],
             '总图片',
@@ -508,7 +527,7 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
                 values['sequence'],
                 values['group'],
                 values['component'],
-                values['digest'],
+                str(values['digest']) + '（继承证据；未重算）' if report.get('resumed_written_output') else values['digest'],
             ]
             for pair, values in audit['cross_split_overlap'].items()
         ],
@@ -565,6 +584,22 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
         '这些检查能发现错图、错类别 ID、坐标单位/公式错误、漏框、损坏图片和不一致标签；无法从数学上证明人工框画对动物、物种命名正确、动物标注完整或空图确实没有动物。',
         '',
     ]
+    if report.get('resumed_written_output'):
+        lines = [
+            '本次保留原 train/val/test 并继承先前的内容哈希隔离证据，重新检查相机/序列交集；没有重新计算图片哈希。'
+            if line.startswith('相机、序列、连通分量和 SHA-256') else
+            '配置、原始标注、筛选清单、类别策略及脚本指纹见 audit_sources.json。未保存正常图片的逐图哈希；先前图片校验结果由未变化的批次检查点继承。'
+            if line.startswith('配置、原始文件、筛选清单、分类表和脚本的 SHA-256') else line
+            for line in lines
+        ]
+    if report.get('reclassified_from'):
+        lines += [
+            '## 从已审计输出重建类别', '',
+            '原输出：`' + report['reclassified_from'] + '`。本次根据原始标注恢复细类，逐图核对旧标签、逐框反算新标签；图片通过硬链接文件身份核对，零全量图片解码、零图片内容哈希、无重新划分。框图预览只解码抽样图片。', '',
+            '只保留先前已验证的图片子集；不复活旧损坏图或旧规则下未验证的图片。源图属性、原标注或旧标签变化时拒绝继承，绝不自动回退全量校验。', '',
+            '图片内容去重分组继承旧审计；未重新以新类别计算不同文件间的重复内容标签冲突，原始标注仍可能存在物种分歧。', '',
+            '保留旧划分后没有训练样本的细类：`' + ', '.join(report.get('untrained_classes_excluded', [])) + '`。这些类别涉及的图片整图排除，不挪到训练集、不当负样本；实际保留类均有训练样本。', '',
+        ]
     (output / 'AUDIT_REPORT.md').write_text('\n'.join(lines), encoding='utf-8')
 
 
@@ -576,10 +611,17 @@ def make_auditor(
     per_class=1,
     allow_clipping=False,
     workers=8,
+    policy_file=None,
 ):
     def audit(records, legacy_mapping, report, output):
         if report["plan_only"]:
             raise ValueError("Audited merge requires actual image verification")
+        if policy_file:
+            from lila_camping import describe_policy
+            report['label_policy'] = describe_policy(report, policy_file)
+            (output / 'class_hierarchy.json').write_text(
+                json.dumps(report['label_policy'], ensure_ascii=False, indent=2), encoding='utf-8'
+            )
         provenance = {
             d: {k: v for k, v in inv.items() if k != "raw_annotation_ids"}
             for d, inv in inventories.items()
@@ -606,6 +648,9 @@ def make_auditor(
                     "datasets": provenance,
                     "taxonomy_file": str(taxonomy_file),
                     "taxonomy_sha256": sha256(taxonomy_file),
+                    "label_policy": report.get('label_policy'),
+                    "policy_file": str(policy_file) if policy_file else None,
+                    "policy_sha256": sha256(policy_file) if policy_file else None,
                     "taxonomy_reference": (
                         json.loads(
                             TAXONOMY.with_suffix(".source.json").read_text(
@@ -625,6 +670,8 @@ def make_auditor(
                             "lila_state.py",
                             "lila_compact.py",
                             "lila_resume_output.py",
+                            "lila_camping.py",
+                            "lila_reclassify.py",
                         )
                     },
                 },
@@ -898,7 +945,8 @@ def make_auditor(
             "prior_sha256_grouping_preserved": report.get(
                 'resumed_written_output', False
             ),
-            "taxonomy_ancestor_conflicts": 0,
+            "taxonomy_ancestor_conflicts": None if policy_file else 0,
+            "ancestor_descendant_labels_allowed": bool(policy_file),
             "allow_one_pixel_clipping": allow_clipping,
         }
         if getattr(report, "state", None):
@@ -980,6 +1028,9 @@ def _merge(
     auto_clean=True,
     state=None,
     resume_output=False,
+    category_policy='taxonomy',
+    policy_file=None,
+    remap_from=None,
 ):
     split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -991,9 +1042,22 @@ def _merge(
     if previews_per_class < 1:
         raise ValueError("--previews-per-class must be at least 1")
     inventories = inspect_sources(source, datasets or DEFAULT_DATASETS, original_files)
-    mapping, details = taxonomy_mapping(inventories, taxonomy_file, exclusions)
+    if category_policy == 'camping':
+        from lila_camping import POLICY, camping_mapping
+        policy_file = Path(policy_file or POLICY)
+        mapping, details = camping_mapping(inventories, policy_file, exclusions)
+    elif category_policy == 'taxonomy':
+        if policy_file:
+            raise ValueError('--policy-file requires --category-policy camping')
+        if remap_from:
+            raise ValueError('--remap-from requires --category-policy camping')
+        mapping, details = taxonomy_mapping(inventories, taxonomy_file, exclusions)
+    else:
+        raise ValueError('Unknown category policy')
     if state:
         state.configure({"class_map": mapping})
+        if policy_file:
+            state.configure({'policy_sha256': sha256(policy_file)})
     auditor = make_auditor(
         inventories,
         details,
@@ -1002,6 +1066,7 @@ def _merge(
         previews_per_class,
         allow_clipping,
         workers=workers,
+        policy_file=policy_file,
     )
     return prepare(
         source,
@@ -1019,10 +1084,17 @@ def _merge(
         state=state,
         auto_clean=auto_clean,
         resume_output=resume_output,
+        remap_from=remap_from,
+        preserve_class_names=category_policy == 'camping',
     )
 
 
 def merge(source, output, *, recheck_all=False, checkpoint_mode='compact', **options):
+    remap_from = options.get('remap_from')
+    if remap_from and (recheck_all or checkpoint_mode != 'compact' or options.get('resume_output')):
+        raise ValueError('--remap-from cannot combine with recheck, detailed audit or --resume-output')
+    if remap_from and options.get('copy_mode', 'auto') != 'hardlink':
+        raise ValueError('--remap-from requires --copy-mode hardlink; images are never copied')
     if options.get('resume_output') and (recheck_all or checkpoint_mode != 'compact'):
         raise ValueError(
             '--resume-output cannot use --recheck-all or --detailed-audit; full validation will not run'
@@ -1041,9 +1113,18 @@ def merge(source, output, *, recheck_all=False, checkpoint_mode='compact', **opt
     }
     # JSON canonical forms avoid tuple/list differences between runs.
     config = json.loads(json.dumps(config))
+    if options.get('category_policy') == 'camping':
+        config['category_policy'] = 'camping'
+    if remap_from:
+        config['remap_from'] = str(Path(remap_from).resolve())
     if checkpoint_mode not in ('compact', 'detailed'):
         raise ValueError('checkpoint_mode must be compact or detailed')
-    with managed_run(
+    from filelock import FileLock
+    prior_lock = (
+        FileLock(str(Path(remap_from).resolve().parent / ('.' + Path(remap_from).name + '.lila.lock')), timeout=0)
+        if remap_from else nullcontext()
+    )
+    with prior_lock, managed_run(
         source, output, config, force=recheck_all, compact=checkpoint_mode == 'compact'
     ) as state:
         return _merge(source, output, state=state, **options)
@@ -1057,6 +1138,9 @@ def main():
     )
     parser.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS)
     parser.add_argument("--taxonomy-file", type=Path, default=TAXONOMY)
+    parser.add_argument('--category-policy', choices=['taxonomy', 'camping'], default='taxonomy')
+    parser.add_argument('--policy-file', type=Path, help='Reviewed camping common-name mapping JSON')
+    parser.add_argument('--remap-from', type=Path, help='Reuse a completed hardlinked audited LILA output; never decode/hash the image corpus')
     parser.add_argument(
         "--original-files",
         type=Path,
@@ -1118,8 +1202,9 @@ def main():
             return value
 
         restored_group_map = load(args.group_map)
-        if args.resume_output:
-            saved = load(args.output / '.lila-state/run.json')['config']
+        if args.resume_output or args.remap_from:
+            restore_directory = args.remap_from or args.output
+            saved = load(restore_directory / '.lila-state/run.json')['config']
 
             def provided(flag):
                 return any(
@@ -1134,6 +1219,8 @@ def main():
                 'seed',
                 'copy_mode',
             ):
+                if field == 'copy_mode' and args.remap_from:
+                    continue
                 if not provided('--' + field.replace('_', '-')) and field in saved:
                     setattr(
                         args,
@@ -1144,9 +1231,19 @@ def main():
                 restored_group_map = saved.get('group_map')
             if not provided('--exclude-category'):
                 args.exclude_category = saved.get('exclusions', [])
-            provenance_path = args.output / 'audit_sources.json'
+            provenance_path = restore_directory / 'audit_sources.json'
             if not provided('--taxonomy-file') and provenance_path.is_file():
                 args.taxonomy_file = Path(load(provenance_path)['taxonomy_file'])
+            if args.remap_from:
+                args.category_policy = 'camping'
+                if not provided('--copy-mode'):
+                    args.copy_mode = 'hardlink'
+            elif not provided('--category-policy'):
+                args.category_policy = saved.get('category_policy', 'taxonomy')
+            if args.category_policy == 'camping' and not provided('--policy-file') and provenance_path.is_file():
+                prior_policy = load(provenance_path).get('policy_file')
+                if prior_policy:
+                    args.policy_file = Path(prior_policy)
             print(
                 'Restored source, class/split settings and copy mode from the existing output.',
                 flush=True,
@@ -1171,6 +1268,9 @@ def main():
             recheck_all=args.recheck_all,
             resume_output=args.resume_output,
             checkpoint_mode='detailed' if args.detailed_audit else 'compact',
+            category_policy=args.category_policy,
+            policy_file=args.policy_file,
+            remap_from=args.remap_from,
         )
         print("Audit passed. Report: " + str(args.output.resolve() / "AUDIT_REPORT.md"))
     except (ValueError, OSError, KeyError, TypeError) as exc:
