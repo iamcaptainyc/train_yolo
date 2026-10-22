@@ -31,6 +31,8 @@ ALIASES = {
     'mountain_lion': 'cougar', 'puma': 'cougar',
     'wild_pig': 'wild_boar', 'eurasian_wild_pig': 'wild_boar', 'bushpig': 'wild_boar',
     'moths_and_butterflies': 'insect', 'human': 'person', 'car': 'vehicle',
+    # User-defined application group, not a claim that jackals/coyotes are gray wolves.
+    'jackal': 'wolf', 'coyote': 'wolf',
 }
 EXCLUDED = {'animal', 'mammal', 'small_mammal', 'unidentified_animal',
             'unidentified_mammal', 'unidentified_small_mammal', 'unidentified_small_animal', 'other_animal'}
@@ -46,6 +48,8 @@ def normalized(name):
 
 def class_metadata():
     result = dict(load_policy()['classes'])
+    result['wolf'] = {'chinese': '狼类（含胡狼、郊狼）', 'group': 'canid', 'parent': None,
+                      'scope': 'User-defined application group for jackal and coyote; not a gray-wolf species label.'}
     for raw in ANIMALS_NAMES:
         name = normalized(raw)
         result.setdefault(name, {'chinese': '', 'group': 'animal', 'parent': None})
@@ -377,6 +381,7 @@ def markdown(report):
             lines.append(f"| {ds} | {r['source_id']} | {name} | {r['target'] or '排除'} | {r['target_id'] if r['target_id'] is not None else '无保留样本'} |")
     lines += ['', '## 检查范围与排除', '',
               '`pig` 保持家野未明确的猪；`wild_boar` 为约定的野生猪类，二者分开。`bull/cow/cattle` 合为 `cattle`；`moths and butterflies` 归 `insect`；不猜更细物种。', '',
+              '`wolf` 为用户定义的“狼类”应用标签：合并 `jackal`（胡狼）与 `coyote`（郊狼），不代表已获得灰狼的训练样本。原名称和 ID 保留在上方映射表。', '',
               '原始空标签保留为负样本；缺失标签、非法标签、排除类别和标签冲突均整图排除，完整清单见 excluded_images.jsonl。已知同图在重新划分时绑定为同一分组；保留旧划分模式才排除跨划分同图。', '',
               ('保留原划分。' if preserved else '重新分配完整分组，不拆相机/序列以强行凑比例。') + '同图同标签重复记录保留；标签冲突整图排除。', '',
               '内容重复检查：' + ('已对等大小候选图片计算 SHA-256，检查字节相同的跨划分重复；不能发现不同编码的近似图。' if report['audit']['independent_copied_image_duplicates_checked'] else '仅检查相同设备/inode 的文件身份，未检查独立复制文件的字节重复；不能声称不存在全部跨数据集内容泄漏。需要时使用 --check-content-hashes。'), '',

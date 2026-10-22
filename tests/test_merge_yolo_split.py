@@ -12,6 +12,23 @@ from test_merge_yolo_datasets import fixture
 
 
 class ResplitTests(unittest.TestCase):
+    def test_wolf_application_group_merges_coyote_and_jackal_before_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture(root / 'lila', ['jackal', 'coyote'], 'lila')
+            fixture(root / 'animals', ['snake'], 'animals')
+            result = merger.merge(root / 'lila', root / 'animals', root / 'out')
+            self.assertIn('wolf', result['classes'])
+            self.assertNotIn('jackal', result['classes'])
+            self.assertNotIn('coyote', result['classes'])
+            mapping = result['source_class_mapping']['lila']
+            self.assertEqual([m['target'] for m in mapping], ['wolf', 'wolf'])
+            self.assertEqual([m['source_name'] for m in mapping], ['jackal', 'coyote'])
+            # Same class/same box after alias merging is deduplicated, not counted twice.
+            self.assertEqual(result['stats']['train']['boxes']['wolf'], 6)
+            self.assertEqual(result['audit']['duplicate_box_records_removed'], 6)
+            self.assertIn('不代表已获得灰狼', (root / 'out/MERGE_REPORT.md').read_text(encoding='utf-8'))
+
     def inputs(self, root):
         fixture(root / 'lila', ['monitor_lizard', 'wild_boar', 'pig'], 'lila')
         fixture(root / 'animals', ['brown bear', 'snake'], 'animals')
