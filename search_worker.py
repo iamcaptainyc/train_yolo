@@ -87,6 +87,8 @@ def execute(job):
         started = time.monotonic()
         if last.is_file():
             model = YOLO(str(last))
+            from training_diagnostics import install_phase_logging
+            install_phase_logging(model)
             checkpoint = model.ckpt or {}
             # A completed run may have been killed just before stage-result JSON was saved.
             finished = checkpoint.get('epoch', 0) < 0 or checkpoint.get('epoch', -1) >= job['epochs']-1
@@ -94,6 +96,8 @@ def execute(job):
                 model.train(resume=True, device=job['device'], workers=job['workers'])
         else:
             model = YOLO(job['initial_checkpoint'])
+            from training_diagnostics import install_phase_logging
+            install_phase_logging(model)
             model.train(data=job['data'], epochs=job['epochs'], imgsz=job['imgsz'],
                         workers=job['workers'], device=job['device'], seed=job['seed'], deterministic=True,
                         patience=job['patience'], amp=job['amp'], cache=False, save=True, val=True,
@@ -114,6 +118,8 @@ def execute(job):
     if phase not in ('val', 'test'):
         raise ValueError(f'Unknown phase: {phase}')
     model = YOLO(job['checkpoint'])
+    from training_diagnostics import install_phase_logging
+    install_phase_logging(model)
     metrics = model.val(data=job['data'], split=phase, imgsz=job['imgsz'], batch=job['eval_batch'],
                         device=job['device'], workers=job['workers'],
                         project=str(Path(job['trial_dir'])/'evaluation'), name=phase, exist_ok=True,

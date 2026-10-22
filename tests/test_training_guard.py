@@ -11,6 +11,12 @@ from training_guard import GUARD_ENV, cleanup_group, entrypoint, supervise
 
 
 class GuardTests(unittest.TestCase):
+    def setUp(self):
+        observer = patch('training_guard.Diagnostics')
+        self.diagnostics = observer.start().return_value
+        self.diagnostics.directory = Path('/tmp/diagnostics-test')
+        self.addCleanup(observer.stop)
+
     def test_cleanup_escalates_only_the_recorded_process_group(self):
         with patch('training_guard.signal_group', side_effect=[True, True, False]) as send, \
                 patch('training_guard.reap_group'):

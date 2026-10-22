@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 
+from training_diagnostics import Diagnostics, LOG_ENV
+
 GUARD_ENV = 'TRAIN_YOLO_SUPERVISOR_PID'
 KILL_SIGNAL = getattr(signal, 'SIGKILL', 9)
 
@@ -68,6 +70,8 @@ def supervise(command, *, env=None, stop_grace=5.0):
     become_subreaper()
     child, stopped, stop_time = None, None, None
     old_handlers = {}
+    diagnostics = Diagnostics(command)
+    forced = False
 
     def on_signal(sig, _frame):
         nonlocal stopped, stop_time
@@ -81,20 +85,32 @@ def supervise(command, *, env=None, stop_grace=5.0):
             old_handlers[sig] = signal.signal(sig, on_signal)
         if stopped is not None:
             return 128+stopped
-        child = subprocess.Popen(command, env=env, start_new_session=True)
+        worker_env = dict(os.environ if env is None else env)
+        worker_env[LOG_ENV] = str(diagnostics.directory)
+        worker_env['PYTHONUNBUFFERED'] = '1'
+        child = subprocess.Popen(command, env=worker_env, start_new_session=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        diagnostics.attach(child)
+        diagnostics.sample(child.pid, force=True)
         print(f'[Guard] Worker PID/process group: {child.pid}; '
               'this run\'s remaining workers will be stopped when it exits.', flush=True)
         if stopped is not None:
             signal_group(child.pid, stopped)
         while True:
+            diagnostics.sample(child.pid)
             if stopped is not None:
                 if time.monotonic()-stop_time >= stop_grace:
                     signal_group(child.pid, KILL_SIGNAL)
+                    forced = True
             try:
                 status = child.wait(timeout=0.2)
                 break
             except subprocess.TimeoutExpired:
                 continue
+        try:
+            diagnostics.finish(child.pid, status, stopped, forced)
+        except Exception as exc:
+            print(f'[Guard] Cannot finalize diagnostics: {exc}', file=sys.stderr, flush=True)
         if status == -KILL_SIGNAL:
             print('[Guard] Training worker was killed by SIGKILL. Check host/container RAM limits '
                   'and OOM logs or external termination. This is not proof of CUDA out-of-memory.',
@@ -104,6 +120,7 @@ def supervise(command, *, env=None, stop_grace=5.0):
         if child is not None:
             cleanup_group(child.pid)
             child.wait()
+        diagnostics.close(child.pid if child is not None else None)
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
 

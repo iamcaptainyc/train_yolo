@@ -316,3 +316,7 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 ## 定位与修复 JPEG 解码警告
 
 先暂停训练，然后运行 `python repair_images.py yolo_datasets/camping_animals/images --workers 16`。递归检查图片，只修复有问题且可解码的 JPEG，保护硬链接的其他路径；支持进度和 Ctrl+C 续跑，只记录问题图片。结果见 `runs/image_repair/REPORT.md`，详见 [图片修复说明](docs/image_repair.md)。
+
+## 训练被终止的诊断日志
+
+Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`，记录完整控制台输出、每 5 秒资源快照、训练/验证阶段和退出诊断。原命令无需改动，下次异常优先查看 `DIAGNOSIS.md`。详见 [诊断日志说明](docs/training_diagnostics.md)。

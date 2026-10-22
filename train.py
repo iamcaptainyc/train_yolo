@@ -38,6 +38,8 @@ def main():
     import torch
     print(f'PyTorch: {torch.__version__}; CUDA available: {torch.cuda.is_available()}')
     model = YOLO(str(args.resume) if args.resume else args.model, task='detect')
+    from training_diagnostics import install_phase_logging
+    install_phase_logging(model)
     device = {'device': args.device} if args.device is not None else {}
     if args.resume:
         model.train(resume=True, **device)
