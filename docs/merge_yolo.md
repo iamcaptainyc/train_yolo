@@ -13,7 +13,9 @@ python -m pip install -r requirements-lila.txt
 python merge_yolo_datasets.py \
   --lila yolo_datasets/lila_camping \
   --animals yolo_datasets/animals-detection-images-dataset \
-  --output yolo_datasets/camping_merged \
+  --lila-source datasets/lila \
+  --output yolo_datasets/camping_merged_resplit \
+  --min-class-boxes 100 \
   --workers 16
 ```
 
@@ -30,13 +32,21 @@ python merge_yolo_datasets.py \
 - `moths and butterflies` → `insect`，`butterfly` 仍保留；不能把混合蛾蝶标签全部猜成蝴蝶。
 - `domestic dog` → `dog`；`domestic cat` → `cat`；`mountain lion` → `cougar`。
 - 未确定动物、哺乳动物、小型动物等宽泛类别整图排除。未审阅的新名称或旧科学分类会明确报错，不猜物种。类别仅为实际保留的有框样本分配 ID，缺失的狼等不会凭空加入。
-- 每张保留图片都留在来源的原始 train/val/test，绝不随机重新划分。两来源的比例不同，因此总比例不保证是 90%/5%/5%。只出现在 val/test、没有训练样本的类别，其相关图片整图排除并记录，不移入训练集，也不将物体隐去为背景。
+- 默认重新划分，不保留原 train/val/test。目标为 90%/5%/5%，通过 `--val-fraction .05 --test-fraction .05 --seed 42` 调整。完整相机/序列连通组不可拆；先争取少数类覆盖，再优化图片比例和类别分布，不保证精确比例或找到所有可行覆盖方案。原来只在 val/test 的类别也可以重新分配到 train。
+- 默认 `--min-class-boxes 100`：统计两个来源所有原划分的有效框，少于阈值的细类沿已审核父类合并；`0` 禁用。阈值依据是合并前原类别总框，不是训练框。框数不是独立场景数，报告另外列出每类独立分组数。
+- 例如竹鼠→`rodent`，巨蜥→`lizard`，水貂/鼬→`mustelid`，少量鸽子→`bird`，海马→`fish`，豹猫→`wild_cat`。无合理上级的蝙蝠、胡狼、穿山甲等保持原类，在报告列出，不能错并为鼠、狗或重新引入未知动物类别。`wild_boar`、`pig`、`warthog` 强制保持独立。提高阈值也可能合并棕熊等熟悉细类，应查看报告再训练。
 - 每个保留框的四个坐标 token 原样保留，包括小数位与科学计数法；只改变类别 ID。若别名合并造成同类同坐标的重复记录，保留第一条原始坐标文本，报告去重数量。
 - 既有空标签作为负样本保留。缺失标签、非法 ID、非法坐标或越界框会整图排除，绝不把丢失正标签当作负样本。继承两个来源既有的负样本，总负样本比例不重新抽成 5%。
 
 ## 重复图片与检查范围
 
-默认不读图片主体字节、不计算图片内容哈希，只检查设备号/inode 是否指向同一个文件。查出跨 train/val/test 的同图时，将相关记录全部排除；同一划分里同图但统一标签冲突，也全部排除。同一划分同图同标签的记录保留，图片数按来源记录计数，不声称是唯一内容图片数。
+默认不读图片主体字节、不计算图片内容哈希，只检查设备号/inode 是否指向同一个文件。原划分之间的同图绑定为同一连通组再分配；统一标签冲突时相关记录全部排除。同图同标签的记录保留，图片数按来源记录计数，不声称是唯一内容图片数。
+
+LILA 从 `lila_camping/.lila-state/run.json` 恢复原下载目录，再读取各 `selection/selected_annotations.json` 的相机/序列字段；原下载目录移动后用 `--lila-source` 指定。只读取标注，不需要原始下载图片主体，不运行 Validate and hash。相同相机、跨相机同序列、已知同图通过连通关系绑定。某个 LILA 子数据集缺失分组信息时，保守将该子数据集放在训练集并在报告提示，不随机拆图。
+
+Animals 默认按单图分组，因为当前 YOLO 输入没有相机/序列元数据；不能声称其未知序列或近似图片已隔离。若有分组信息可传 `--group-map groups.json`，格式为 `{"animals/train/relative/image.jpg": "sequence-001"}`；键是来源/原划分/相对图片路径，值为全局分组 ID，相同值强制绑定。该参数也可以补充 LILA 分组，但不解除从官方元数据得到的相机约束。
+
+`--preserve-splits --min-class-boxes 0` 可使用保留旧划分且不合并稀有类的模式，此模式跨原划分同图才会全部排除。新策略与旧输出检查点不兼容，必须使用新的输出目录；脚本不会自动删除旧数据。
 
 **默认模式不能发现所有独立复制文件的内容重复**，也不声称不存在全部跨数据集内容泄漏。需要检查字节相同的独立文件时，首次运行就添加：
 
@@ -48,7 +58,7 @@ python merge_yolo_datasets.py \
   --workers 16 --check-content-hashes
 ```
 
-该选项仅对大小相同的候选文件计算 SHA-256，唯一大小文件无需读取；同 inode 的候选只读取一次。不会解码图片，也不会保存正常图片的逐图哈希记录。大部分图片大小重复时，仍可能读取很多图片，需要时间；中断后哈希在内存中重新计算。它只能发现字节相同的文件，不能发现不同编码或相邻帧的视觉近似图。源 LILA 的相机/序列隔离通过原划分继承，合并器不从图片猜新的相机信息。
+该选项仅对大小相同的候选文件计算 SHA-256，唯一大小文件无需读取；同 inode 的候选只读取一次。同字节文件绑定为同一连通组。不会解码图片，也不会保存正常图片的逐图哈希记录。大部分图片大小重复时，仍可能读取很多图片，需要时间；中断后哈希在内存中重新计算。它只能发现字节相同的文件，不能发现不同编码或相邻帧的视觉近似图。重新划分不继承旧划分的内容哈希隔离证明，默认仅保证本次恢复的相机/序列与已知文件身份分组隔离。
 
 两种模式都会重新读取实际输出标签，核对统一类别和原坐标文本，并逐图核对硬链接文件身份。**不重新认证源图片是否损坏、作者物种是否标对、框是否标全**；输入应先完成各自的转换检查。
 
@@ -56,12 +66,12 @@ python merge_yolo_datasets.py \
 
 Ctrl+C 后重跑完全相同的命令，已写好且正确的硬链接和标签会复用；重新扫描标签与元数据，不保存正常图片的逐图校验表。正常状态只保存 `.merge-state/run.json` 里的配置和一个整体输入摘要。输入配置、类别规则、保留样本或文件属性变化时须选新输出目录，避免混合版本；线程数可改变。
 
-`Hardlink images and remap IDs` 已移除旧版本的逐图目录扫描：原先每处理一张图都 `glob` 整个标签目录清理临时文件，数十万张时会越跑越慢。现在只在写入前对每个标签目录扫描一次并清理本程序的临时文件，目录也集中创建。正在运行旧版本时先 Ctrl+C，`git pull --ff-only` 后重跑同一命令与输出目录，已完成文件继续复用。这不会触发图片解码或默认内容哈希；剩余速度仍受磁盘小文件创建、读取和元数据吞吐影响。
+`Hardlink images and remap IDs` 已移除旧版本的逐图目录扫描：现在每个标签目录只扫描一次清理临时文件，目录也集中创建。相同策略中断后可复用已完成文件；从保留划分切换到重新划分，或修改阈值、种子、比例时须换新输出目录。这不会触发图片解码或默认内容哈希；速度仍受磁盘小文件创建、读取和元数据吞吐影响。
 
 仅全部检查完成才生成正式 `data.yaml` 和 `MERGE_REPORT.md`；中断/失败时输出 `PROCESSING_REPORT.md`，保留已写文件便于续跑。
 
 ```text
-yolo_datasets/camping_merged/
+yolo_datasets/camping_merged_resplit/
   data.yaml
   images/{train,val,test}/{lila,animals}/...
   labels/{train,val,test}/{lila,animals}/...
@@ -73,12 +83,12 @@ yolo_datasets/camping_merged/
   .merge-state/run.json
 ```
 
-报告列出每个来源的原类别名/ID → 统一英文名/新 ID、各来源/各划分图片数与框数、每类 train/val/test 框数、排除数量及完整原因清单、坐标和硬链接检查结果、内容重复检查范围。文件名以 `SHA256(来源/train或val或test/图片相对路径)` 命名；这个文件名摘要不是图片内容哈希。
+报告列出每个来源的原类别名/ID → 最终英文名/新 ID、少样本合并前数量/目标、无合适上级的稀有类、每类独立分组数与缺失集合、原划分→新划分流向、各来源/各划分图片数与框数、每类 train/val/test 框数、排除原因、坐标和硬链接检查结果。缺少独立分组时不会拆相邻帧来凑齐三集合；检查通过也不等于所有类别都有足够评估样本。文件名以 `SHA256(来源/原划分/图片相对路径)` 命名；这不是图片内容哈希。
 
 训练使用新 YAML，旧权重的分类头 ID 不能直接解释为新类别：
 
 ```bash
-python train.py --data yolo_datasets/camping_merged/data.yaml \
+python train.py --data yolo_datasets/camping_merged_resplit/data.yaml \
   --model weights/yolo11s.pt --epochs 100 --batch 128 --workers 16 --device 0
 ```
 

@@ -1,4 +1,4 @@
-"""Merge camping LILA and Animals Detection YOLO datasets, preserving splits and hardlinking images."""
+"""Merge YOLO datasets with rare-class folding, grouped resplitting and hardlinked images."""
 
 from __future__ import annotations
 
@@ -204,7 +204,7 @@ def scan_one(task):
     return record
 
 
-def exclusions_for_duplicates(records, content_hashes=False):
+def exclusions_for_duplicates(records, content_hashes=False, preserve_splits=True):
     """Return indices to exclude. Hashes, when requested, exist in memory only."""
     by_identity, by_size = defaultdict(list), defaultdict(list)
     for i, r in enumerate(records):
@@ -231,12 +231,13 @@ def exclusions_for_duplicates(records, content_hashes=False):
                     if not same_content_attributes(info, fingerprint(r['image'])):
                         raise ValueError(f'Image changed during duplicate check: {r["image"]}')
                 by_digest[seen_identity[identity]].append(i)
+                records[i]['duplicate_digest'] = seen_identity[identity]
         groups += list(by_digest.values())
     rejected = {}
     for indices in groups:
         if len(indices) < 2:
             continue
-        if len({records[i]['split'] for i in indices}) > 1:
+        if preserve_splits and len({records[i]['split'] for i in indices}) > 1:
             for i in indices:
                 rejected[i] = 'same image occurs across original splits; exclude all affected records without moving splits'
         else:
@@ -355,8 +356,9 @@ def make_report(datasets, records, excluded, ids, metadata, reused, hashes, cont
 
 
 def markdown(report):
+    preserved = report['audit']['source_splits_preserved']
     lines = ['# YOLO 数据集合并报告', '',
-             '状态：合并检查通过。LILA 与 Animals Detection 保留各自原 train/val/test；图片为硬链接，统一类别 ID 并去除合并后同类同框的重复记录，保留框的原坐标文本逐项核对。', '',
+             '状态：合并检查通过。' + ('保留原 train/val/test。' if preserved else '原划分已打散，按相机/序列/已知重复图的连通分组重新分配 train/val/test。') + '图片为硬链接；统一类别 ID，去除同类同框重复记录，框坐标文本逐项核对。', '',
              '没有重新解码图片，不重新认证原始物种、框位置或图片完整性。两个输入应先完成各自的转换检查。', '',
              '## 划分统计', '', '| 来源 | 划分 | 图片 | 负样本 | 框 |', '| --- | --- | ---: | ---: | ---: |']
     for ds, splits in report['dataset_split_stats'].items():
@@ -375,17 +377,42 @@ def markdown(report):
             lines.append(f"| {ds} | {r['source_id']} | {name} | {r['target'] or '排除'} | {r['target_id'] if r['target_id'] is not None else '无保留样本'} |")
     lines += ['', '## 检查范围与排除', '',
               '`pig` 保持家野未明确的猪；`wild_boar` 为约定的野生猪类，二者分开。`bull/cow/cattle` 合为 `cattle`；`moths and butterflies` 归 `insect`；不猜更细物种。', '',
-              '原始空标签保留为负样本；缺失标签、非法标签、排除类别及已发现的跨划分重复/标签冲突均整图排除，完整清单见 excluded_images.jsonl。', '',
-              '没有移动图片到其他划分。相同划分内同图同标签的重复记录保留；没有训练样本的类别整图排除并记录。', '',
+              '原始空标签保留为负样本；缺失标签、非法标签、排除类别和标签冲突均整图排除，完整清单见 excluded_images.jsonl。已知同图在重新划分时绑定为同一分组；保留旧划分模式才排除跨划分同图。', '',
+              ('保留原划分。' if preserved else '重新分配完整分组，不拆相机/序列以强行凑比例。') + '同图同标签重复记录保留；标签冲突整图排除。', '',
               '内容重复检查：' + ('已对等大小候选图片计算 SHA-256，检查字节相同的跨划分重复；不能发现不同编码的近似图。' if report['audit']['independent_copied_image_duplicates_checked'] else '仅检查相同设备/inode 的文件身份，未检查独立复制文件的字节重复；不能声称不存在全部跨数据集内容泄漏。需要时使用 --check-content-hashes。'), '',
               f"排除图片：{report['excluded_images']}。", '', '```json', json.dumps(report['audit'], ensure_ascii=False, indent=2), '```', '',
               '源目录删除说明：完成且 data.yaml、report.json、MERGE_REPORT.md 已生成后，合并后的硬链接不依赖输入图片路径继续存在；源图删除不会删除合并图的内容。重跑合并仍依赖输入目录，因此删除后不能再从这些输入续跑。硬链接目录删除通常不会释放图片主体空间。', '']
+    folding = report.get('rare_class_policy', {})
+    lines += ['## 少样本类别合并', '',
+              f"阈值：合并前有效总框数 < {folding.get('minimum_total_boxes', 0)}；统计覆盖原 train/val/test。仅使用已审核上级；不把未知动物重新引入。", '',
+              '| 原类别 | 原总框 | 合并到 |', '| --- | ---: | --- |']
+    for change in folding.get('changes', []):
+        lines.append(f"| {change['source']} | {change['original_boxes']} | {change['target']} |")
+    lines += ['', '缺少合适上级或受保护、仍保留的稀有类：' + ', '.join(folding.get('rare_without_safe_parent', [])), '']
+    if not preserved:
+        split = report['resplit']
+        lines += ['## 分组与类别覆盖', '',
+                  f"目标比例：{split['target_fractions']}；随机种子：{split['seed']}；独立连通分组：{split['groups']}；已知分组跨集合重叠：{split['group_overlap']}。", '',
+                  '先争取少数类覆盖，再优化图片比例和类别分布；启发式分配不保证所有可行覆盖都被找到。单组类别必须留在训练集。', '',
+                  'LILA 缺失分组信息时，相应子数据集保守放入训练集：' + json.dumps(report['grouping']['lila_missing_group_images_train_only'], ensure_ascii=False), '',
+                  f"Animals 无分组元数据、按单图分组：{report['grouping']['animals_individual_image_groups']} 张。不能证明这些图片没有未知相邻帧或独立复制的重复图。", '',
+                  '| 类别 | 独立分组数 | 缺失集合 |', '| --- | ---: | --- |']
+        for n, count in split['class_independent_groups'].items():
+            missing = ', '.join(s for s in SPLITS if n in split['missing_classes'][s]) or '无'
+            lines.append(f'| {n} | {count} | {missing} |')
+        lines += ['', '输入划分 → 新划分图片数：', '', '```json', json.dumps(report['original_to_new_split_images'], indent=2), '```', '']
     return '\n'.join(lines)
 
 
-def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
+def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
+          preserve_splits=False, min_class_boxes=100, val_fraction=.05,
+          test_fraction=.05, seed=42, lila_source=None, group_map=None):
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
+    if not isinstance(min_class_boxes, int) or isinstance(min_class_boxes, bool) or min_class_boxes < 0:
+        raise ValueError('--min-class-boxes must be a nonnegative integer')
+    if not (0 < val_fraction < 1 and 0 < test_fraction < 1 and val_fraction + test_fraction < 1):
+        raise ValueError('Validation/test fractions must be positive and sum to less than one')
     output = Path(output).resolve()
     metadata = class_metadata()
     datasets = [load_dataset(lila, 'lila', metadata), load_dataset(animals, 'animals', metadata)]
@@ -401,7 +428,11 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
         previous = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else None
         output.mkdir(parents=True, exist_ok=True)
         config = {'inputs': {d['alias']: {'yaml': str(d['yaml']), 'sha256': d['yaml_sha256']} for d in datasets},
-                  'content_hash_check': check_content_hashes, 'policy': signature([metadata, ALIASES, sorted(EXCLUDED)])}
+                  'content_hash_check': check_content_hashes, 'policy': signature([metadata, ALIASES, sorted(EXCLUDED)]),
+                  'split_policy_version': 1, 'preserve_splits': preserve_splits, 'min_class_boxes': min_class_boxes,
+                  'val_fraction': val_fraction, 'test_fraction': test_fraction, 'seed': seed,
+                  'lila_source': str(Path(lila_source).resolve()) if lila_source else None,
+                  'group_map_sha256': hashlib.sha256(Path(group_map).read_bytes()).hexdigest() if group_map else None}
         if previous and previous['config'] != config:
             raise ValueError('Merge inputs or policy changed; use a new output directory')
         # Never expose a stale certificate while resuming or failing.
@@ -423,11 +454,18 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
                     with tqdm(total=len(images), desc=f'Scan labels {dataset["alias"]}/{split}', unit='img') as progress, closing(bounded_map(scan_one, tasks, workers, progress)) as results:
                         for r in results:
                             (excluded if r.get('error') else records).append(r)
-            duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes)
+            from merge_yolo_split import fold_rare, attach_groups, resplit
+            folding = fold_rare(records, datasets, metadata, min_class_boxes)
+            duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes, preserve_splits)
             for index, reason in duplicates.items():
                 records[index]['error'] = reason
                 excluded.append(records[index])
             records = [r for i, r in enumerate(records) if i not in duplicates]
+            grouping, splitting = {}, {}
+            if not preserve_splits:
+                print('Recover camera/sequence metadata and reallocate whole groups...', flush=True)
+                grouping = attach_groups(records, datasets, lila_source, group_map)
+                splitting = resplit(records, val_fraction, test_fraction, seed)
             trained = {name for r in records if r['split'] == 'train' for name, _ in r['rows']}
             for r in records:
                 missing = {name for name, _ in r['rows']} - trained
@@ -440,9 +478,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
                     stream.write(json.dumps({'dataset': r['dataset'], 'split': r['split'], 'image': str(r['image']), 'reason': r['error']}, ensure_ascii=False) + '\n')
             names = sorted({name for r in records for name, _ in r['rows']})
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
-                raise ValueError('Every original split must retain positive boxes after exclusions')
+                raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
             ids = {name: i for i, name in enumerate(names)}
-            inventory = signature([[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records])
+            inventory = signature([grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
             old_inventory = previous.get('inventory') if previous else None
             if old_inventory and old_inventory != inventory:
                 raise ValueError('Source files/labels or exclusions changed; use a new output directory')
@@ -464,6 +502,14 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
                 if actual != expected:
                     raise ValueError(f'Unexpected or missing files in output {kind}; no training YAML issued')
             report = make_report(datasets, records, excluded, ids, metadata, reused, hashes, check_content_hashes)
+            report['rare_class_policy'] = folding
+            report['grouping'] = grouping
+            report['resplit'] = splitting
+            report['audit']['source_splits_preserved'] = preserve_splits
+            if not preserve_splits:
+                report['audit']['group_overlap'] = splitting['group_overlap']
+            report['original_to_new_split_images'] = dict(Counter(
+                f"{r['dataset']}/{r.get('original_split', r['split'])}->{r['split']}" for r in records))
             report['audit']['temporary_labels_removed'] = temporary_labels_removed
             report['input_images'] = {ds: dict(counts) for ds, counts in input_counts.items()}
             if len(records) + len(excluded) != sum(sum(c.values()) for c in input_counts.values()):
@@ -492,12 +538,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lila', type=Path, default=Path('yolo_datasets/lila_camping'), help='Processed common-name LILA directory or data.yaml')
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'), help='Converted Animals Detection directory or data.yaml')
-    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_merged'))
+    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_merged_resplit'))
     parser.add_argument('--workers', type=int, default=8)
+    parser.add_argument('--preserve-splits', action='store_true', help='Legacy mode: retain original splits instead of grouped resplitting')
+    parser.add_argument('--min-class-boxes', type=int, default=100, help='Fold classes with fewer total boxes into reviewed parents; 0 disables folding')
+    parser.add_argument('--val-fraction', type=float, default=.05)
+    parser.add_argument('--test-fraction', type=float, default=.05)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--lila-source', type=Path, help='Original LILA download directory containing selection metadata; auto-detected from conversion checkpoint')
+    parser.add_argument('--group-map', type=Path, help='JSON: dataset/original_split/relative_image -> global group ID; optional additional grouping')
     parser.add_argument('--check-content-hashes', action='store_true', help='Also hash equal-size candidate images for exact-copy leakage/conflict detection; never decode images or persist hashes')
     args = parser.parse_args()
     try:
-        merge(args.lila, args.animals, args.output, workers=args.workers, check_content_hashes=args.check_content_hashes)
+        merge(args.lila, args.animals, args.output, workers=args.workers, check_content_hashes=args.check_content_hashes,
+              preserve_splits=args.preserve_splits, min_class_boxes=args.min_class_boxes,
+              val_fraction=args.val_fraction, test_fraction=args.test_fraction, seed=args.seed,
+              lila_source=args.lila_source, group_map=args.group_map)
     except KeyboardInterrupt:
         parser.exit(130, 'Interrupted. Rerun the same command to resume.\n')
     except (ValueError, OSError, KeyError, TypeError, CancelledError, yaml.YAMLError) as exc:

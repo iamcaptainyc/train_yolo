@@ -31,6 +31,8 @@ class MergeYoloTests(unittest.TestCase):
         fixture(root / 'animals', ['brown bear', 'bull', 'pig', 'squirrel', 'moths and butterflies', 'butterfly'], 'animals')
 
     def run_merge(self, root, **kwargs):
+        kwargs.setdefault('preserve_splits', True)
+        kwargs.setdefault('min_class_boxes', 0)
         return merger.merge(root / 'lila', root / 'animals', root / 'out', workers=kwargs.pop('workers', 1), **kwargs)
 
     def test_unified_ids_original_splits_coordinate_tokens_and_hardlinks(self):
@@ -251,7 +253,7 @@ class MergeYoloTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             self.data(root)
-            result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(merger.__file__)), '--lila', str(root / 'lila/data.yaml'), '--animals', str(root / 'animals'), '--output', str(root / 'out'), '--workers', '2'], capture_output=True, text=True, encoding='utf-8', timeout=120)
+            result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(merger.__file__)), '--lila', str(root / 'lila/data.yaml'), '--animals', str(root / 'animals'), '--output', str(root / 'out'), '--workers', '2', '--preserve-splits', '--min-class-boxes', '0'], capture_output=True, text=True, encoding='utf-8', timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((root / 'out/data.yaml').exists())
 
