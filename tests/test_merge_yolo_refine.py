@@ -66,6 +66,20 @@ class RefineTests(unittest.TestCase):
             repeated = self.run_merge(root, workers=2)
             self.assertEqual(repeated['audit']['resumed_output_files'], 12)
 
+    def test_default_does_not_sample_species_above_refinement_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_lila(root, [{'id': 1, 'name': 'Eastern Gray Squirrel'}], [[1]] * 12)
+            # Intentionally omit cap_class_images to exercise the public default.
+            result = merger.merge(root / 'lila', root / 'animals', root / 'out',
+                                  lila_source=root / 'source', min_class_images=1, max_class_images=3)
+            self.assertEqual(result['sampling']['maximum_images'], 0)
+            self.assertEqual(result['sampling']['removed_images'], 0)
+            self.assertEqual(result['excluded_images'], 0)
+            self.assertEqual(result['audit']['images_verified'], 18)
+            self.assertEqual(result['refinement']['still_above_threshold']['eastern_gray_squirrel'], 12)
+            self.assertIn('未启用数量抽样', (root / 'out/MERGE_REPORT.md').read_text(encoding='utf-8'))
+
     def test_small_child_folds_back_but_large_child_survives(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -403,14 +403,15 @@ def markdown(report):
         lines.append(f"| {change['source']} | {change['original_images']} | {change['target']} |")
     lines += ['', '缺少合适上级或受保护、仍保留的稀有类：' + ', '.join(folding.get('rare_without_safe_parent', [])), '']
     refinement = report.get('refinement', {})
-    lines += ['## 大类细分与整图抽样', '',
+    lines += ['## 大类细分与图片保留', '',
               f"细分触发：图片数 > {refinement.get('threshold_images', 0)}。细类来自已审核的原始类别名称，并与现有 YOLO 框坐标逐框匹配；不能匹配或存在歧义时保留粗类。", '',
               '| 输入类别 | 最终类别 | 最终保留图片数 |', '| --- | --- | ---: |']
     for t in refinement.get('transitions', []):
         lines.append(f"| {t['source']} | {t['target']} | {t['images']} |")
     lines += ['', '细分未成功的原因计数：' + json.dumps(refinement.get('issues', {}), ensure_ascii=False), '',
               '旧规则把黄喉貂误归鸟类；只有原始黄喉貂标注与框匹配成功时才纠正到黄喉貂/鼬科。', '',
-              '抽样只移除输出中的整张图，不删原文件、不隐藏框、不改变保留图片所属集合；优先保留少样本证据及已有的各类集合覆盖。不能保证所有类别严格低于上限。', '',
+              ('已显式启用整图抽样；保留少样本证据及已有的各类集合覆盖。' if report.get('sampling', {}).get('maximum_images', 0) else
+               '未启用数量抽样：10,000 张仅为细分触发阈值，不是数量上限。无法继续细分的物种即使超过阈值也保留全部有效图片。'), '',
               '```json', json.dumps(report.get('sampling', {}), ensure_ascii=False, indent=2), '```', '',
               '最终仍超过细分阈值的类别：' + json.dumps(refinement.get('still_above_threshold', {}), ensure_ascii=False), '']
     if not preserved:
@@ -431,7 +432,7 @@ def markdown(report):
 def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
           preserve_splits=False, min_class_boxes=None, val_fraction=.05,
           test_fraction=.05, seed=42, lila_source=None, group_map=None,
-          min_class_images=100, max_class_images=10000, cap_class_images=10000):
+          min_class_images=100, max_class_images=10000, cap_class_images=0):
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
     if min_class_boxes is not None:  # Deprecated spelling; now always counts images.
@@ -597,13 +598,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lila', type=Path, default=Path('yolo_datasets/lila_camping'), help='Processed common-name LILA directory or data.yaml')
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'), help='Converted Animals Detection directory or data.yaml')
-    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_balanced'))
+    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping_all'))
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--preserve-splits', action='store_true', help='Legacy mode: retain original splits instead of grouped resplitting')
     parser.add_argument('--min-class-images', type=int, default=100, help='Fold classes present in fewer images into reviewed parents; 0 disables folding')
     parser.add_argument('--min-class-boxes', type=int, help='Deprecated alias for --min-class-images; now counts images, not boxes')
     parser.add_argument('--max-class-images', type=int, default=10000, help='Recover fine labels for classes above this image count; 0 disables refinement')
-    parser.add_argument('--cap-class-images', type=int, default=10000, help='Soft image cap after refinement and splitting; 0 disables sampling')
+    parser.add_argument('--cap-class-images', type=int, default=0, help='Optional image sampling cap; disabled by default (0). Leave at 0 to retain all valid images')
     parser.add_argument('--val-fraction', type=float, default=.05)
     parser.add_argument('--test-fraction', type=float, default=.05)
     parser.add_argument('--seed', type=int, default=42)

@@ -14,10 +14,10 @@ python merge_yolo_datasets.py \
   --lila yolo_datasets/lila_camping \
   --animals yolo_datasets/animals-detection-images-dataset \
   --lila-source datasets/lila \
-  --output yolo_datasets/camping_balanced \
+  --output yolo_datasets/camping_all \
   --min-class-images 100 \
   --max-class-images 10000 \
-  --cap-class-images 10000 \
+  --cap-class-images 0 \
   --workers 16
 ```
 
@@ -36,14 +36,12 @@ python merge_yolo_datasets.py \
 - `jackal`（胡狼）与 `coyote`（郊狼）统一为用户定义的 `wolf`，中文“狼类（含胡狼、郊狼）”。这是应用分组，不是灰狼物种标注，也不意味着新增了灰狼样本。统一在少样本阈值统计之前进行，报告保留各来源名称和 ID。
 - 未确定动物、哺乳动物、小型动物等宽泛类别整图排除。未审阅的新名称或旧科学分类会明确报错，不猜物种。类别仅为实际保留的有框样本分配 ID，缺失的狼等不会凭空加入。
 - 默认重新划分，不保留原 train/val/test。目标为 90%/5%/5%，通过 `--val-fraction .05 --test-fraction .05 --seed 42` 调整。完整相机/序列连通组不可拆；先争取少数类覆盖，再优化图片比例和类别分布，不保证精确比例或找到所有可行覆盖方案。原来只在 val/test 的类别也可以重新分配到 train。
-- 默认 `--min-class-images 100 \
-  --max-class-images 10000 \
-  --cap-class-images 10000`：统计两个来源所有原划分的有效框，少于阈值的细类沿已审核父类合并；`0` 禁用。阈值依据是合并前原类别总框，不是训练框。框数不是独立场景数，报告另外列出每类独立分组数。
+- 默认 `--min-class-images 100`：按图片数统计，同图同类多个框只计一张。少于 100 张的细类归入合理上级；上级支持量包含子类覆盖图片，避免因细分而错误上卷。`0` 禁用少样本合并。旧参数 `--min-class-boxes` 是兼容拼写，也按图片数计。
 - 例如竹鼠→`rodent`，巨蜥→`lizard`，水貂/鼬→`mustelid`，少量鸽子→`bird`，海马→`fish`，豹猫→`wild_cat`。无合理上级的蝙蝠、穿山甲等保持原类，在报告列出，不能错并为鼠或重新引入未知动物类别。`wild_boar`、`pig`、`warthog` 强制保持独立。提高阈值也可能合并棕熊等熟悉细类，应查看报告再训练。
 - 每个保留框的四个坐标 token 原样保留，包括小数位与科学计数法；只改变类别 ID。若别名合并造成同类同坐标的重复记录，保留第一条原始坐标文本，报告去重数量。
 - 既有空标签作为负样本保留。缺失标签、非法 ID、非法坐标或越界框会整图排除，绝不把丢失正标签当作负样本。继承两个来源既有的负样本，总负样本比例不重新抽成 5%。
 
-## 超过 10,000 张优先细分，再按整图控制数量
+## 超过 10,000 张优先细分，保留全部有效图片
 
 `--max-class-images 10000` 在图片数严格大于 10,000 时触发。默认从 [细分规则](../configs/lila_refinements.json) 中的 74 条数据集专属映射恢复英文细类，例如白尾鹿、黑尾鹿、水鹿、不同松鼠、羚羊和鸟类。不把 `unidentified` 或仅有宽泛标签的图片猜成某个物种；`wild_boar` 继续统一，不恢复成多种野猪标签。
 
@@ -51,7 +49,11 @@ python merge_yolo_datasets.py \
 
 旧 LILA 策略错误地将黄喉貂归到了 bird；本次在处理超量 bird 时，对原始黄喉貂框匹配成功的记录改为黄喉貂，再按数量决定是否归入 mustelid。无法验证的记录保留并报告，不假称已修复全部源标注。
 
-`--cap-class-images 10000` 在重新划分后，对仍然过多的类别进行确定性的整图抽样，按相机/序列连通组轮流选择，保留完整标签。不会删除输入文件，不把被删除的框变成负样本，不把保留图移到别的集合；少样本类至少保留原有图片数与最低阈值中的较小者，各类原本存在的 train/val/test 至少保留一张。因此多类共现可能导致少量超限，报告列出原因及超限类别。抽样改变实际集合比例，不保证精确 90%/5%/5%。`--cap-class-images 0` 可只细分、保留全部有效图片。
+**默认 `--cap-class-images 0`，不按类别数量抽样。** 10,000 张仅为细分触发阈值，不是上限。已是单一物种、缺少更细原标注或无法可靠恢复细类时，即使超过 10,000 张也保留全部有效图片，只在报告列出。少样本合并只改类别，不减少图片。
+
+旧版命令中的 `--cap-class-images 10000` 会主动抽样，必须删除该参数或改为 `0`。正在运行旧命令可 Ctrl+C，更新代码后使用新输出目录 `camping_all` 重跑；输入图片没有被删除，新的输出能重新纳入之前仅因数量被抽样排除的图片。无需重新解码或全量哈希。
+
+仅显式传入大于零的 `--cap-class-images` 才启用旧的整图抽样功能。缺失/非法标签、已发现的冲突等质量排除规则仍保留，完整原因见报告；不承诺无效输入也进入训练集。
 
 统计中的图片数是输入图片记录数，不是内容去重后的唯一图片数。多类图片计入多个类别，各类图片数之和可以超过总图片数。最终类别数和图片分布须以实际运行报告为准，不能用旧框数表直接推算。
 
@@ -88,7 +90,7 @@ Ctrl+C 后重跑完全相同的命令，已写好且正确的硬链接和标签�
 仅全部检查完成才生成正式 `data.yaml` 和 `MERGE_REPORT.md`；中断/失败时输出 `PROCESSING_REPORT.md`，保留已写文件便于续跑。
 
 ```text
-yolo_datasets/camping_balanced/
+yolo_datasets/camping_all/
   data.yaml
   images/{train,val,test}/{lila,animals}/...
   labels/{train,val,test}/{lila,animals}/...
@@ -105,7 +107,7 @@ yolo_datasets/camping_balanced/
 训练使用新 YAML，旧权重的分类头 ID 不能直接解释为新类别：
 
 ```bash
-python train.py --data yolo_datasets/camping_balanced/data.yaml \
+python train.py --data yolo_datasets/camping_all/data.yaml \
   --model weights/yolo11s.pt --epochs 100 --batch 128 --workers 16 --device 0
 ```
 
