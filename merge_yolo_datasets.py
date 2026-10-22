@@ -257,18 +257,36 @@ def output_text(record, ids):
     return ''.join(f'{ids[name]} ' + ' '.join(coords) + '\n' for name, coords in record['rows'])
 
 
+def prepare_output_directories(records, output):
+    """Create each directory once; clean atomic label leftovers with one scan.
+
+    Never glob the growing flat label directory per image: with N labels that
+    would enumerate roughly N**2 entries, even when no temp file exists.
+    """
+    image_dirs = {output / r['image_rel'].parent for r in records}
+    label_dirs = {output / r['label_rel'].parent for r in records}
+    for directory in sorted(image_dirs | label_dirs):
+        directory.mkdir(parents=True, exist_ok=True)
+    removed = 0
+    for directory in sorted(label_dirs):
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                # Only this merger's generated atomic label files are owned.
+                if re.fullmatch(r'\.[0-9a-f]{64}\.txt\.[0-9a-f]{32}\.tmp', entry.name):
+                    if entry.is_file(follow_symlinks=False):
+                        (directory / entry.name).unlink()
+                        removed += 1
+    return removed
+
+
 def write_one(record, output, ids):
     assert_unchanged(record)
     image, label = output / record['image_rel'], output / record['label_rel']
-    image.parent.mkdir(parents=True, exist_ok=True)
-    label.parent.mkdir(parents=True, exist_ok=True)
     text = output_text(record, ids)
     temporary = image.with_name(image.name + '.merge-part')
+    temporary_label = label.with_name(label.name + '.merge-part')
     temporary.unlink(missing_ok=True)
-    for leftover in label.parent.glob('.' + label.name + '.*.tmp'):
-        suffix = leftover.name[len('.' + label.name + '.'):-4]
-        if re.fullmatch('[0-9a-f]{32}', suffix):
-            leftover.unlink()
+    temporary_label.unlink(missing_ok=True)
     image_hit = image.exists() and os.path.samefile(image, record['image'])
     label_hit = label.is_file() and label.read_text(encoding='utf-8') == text
     if not image_hit:
@@ -278,7 +296,13 @@ def write_one(record, output, ids):
         finally:
             temporary.unlink(missing_ok=True)
     if not label_hit:
-        atomic_text(label, text)
+        # Parent directories already exist. A stable per-record temp path avoids
+        # repeated mkdir calls and per-image wildcard cleanup on resume.
+        try:
+            temporary_label.write_text(text, encoding='utf-8')
+            os.replace(temporary_label, label)
+        finally:
+            temporary_label.unlink(missing_ok=True)
     assert_unchanged(record)
     return image_hit and label_hit
 
@@ -424,6 +448,8 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
                 raise ValueError('Source files/labels or exclusions changed; use a new output directory')
             state_value = {'schema': 1, 'config': config, 'status': 'RUNNING', 'inventory': inventory}
             atomic_text(state_path, json.dumps(state_value, ensure_ascii=False, indent=2))
+            print('Prepare output directories (single-pass temporary cleanup)...', flush=True)
+            temporary_labels_removed = prepare_output_directories(records, output)
             reused = 0
             with tqdm(total=len(records), desc='Hardlink images and remap IDs', unit='img') as progress, closing(bounded_map(lambda r: write_one(r, output, ids), records, workers, progress)) as results:
                 for hit in results:
@@ -438,6 +464,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False):
                 if actual != expected:
                     raise ValueError(f'Unexpected or missing files in output {kind}; no training YAML issued')
             report = make_report(datasets, records, excluded, ids, metadata, reused, hashes, check_content_hashes)
+            report['audit']['temporary_labels_removed'] = temporary_labels_removed
             report['input_images'] = {ds: dict(counts) for ds, counts in input_counts.items()}
             if len(records) + len(excluded) != sum(sum(c.values()) for c in input_counts.values()):
                 raise ValueError('Input/retained/excluded image accounting mismatch')

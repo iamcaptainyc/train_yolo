@@ -120,6 +120,52 @@ class MergeYoloTests(unittest.TestCase):
             self.assertEqual(result['audit']['images_verified'], 12)
             self.assertGreaterEqual(result['audit']['resumed_output_files'], 4)
 
+    def test_each_image_write_does_not_scan_directories_or_repeat_mkdir(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.data(root)
+            original = merger.write_one
+
+            def no_directory_work(*args):
+                with patch('os.scandir', side_effect=AssertionError('Per-image directory scan')), patch.object(Path, 'mkdir', side_effect=AssertionError('Per-image mkdir')):
+                    return original(*args)
+
+            with patch.object(merger, 'write_one', side_effect=no_directory_work):
+                result = self.run_merge(root)
+            self.assertEqual(result['audit']['images_verified'], 12)
+
+    def test_resume_cleans_owned_temp_files_once_per_label_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.data(root)
+            self.run_merge(root)
+            label = next((root / 'out/labels/train/lila').glob('*.txt'))
+            leftover = label.with_name('.' + label.name + '.' + 'a' * 32 + '.tmp')
+            unrelated = label.with_name('.user-notes.tmp')
+            leftover.write_text('incomplete')
+            unrelated.write_text('not merger-owned')
+            records = [
+                {'image_rel': image.relative_to(root / 'out'), 'label_rel': merger.label_for(image).relative_to(root / 'out')}
+                for image in (root / 'out/images').rglob('*.jpg')
+            ]
+            scandir = os.scandir
+            with patch('os.scandir', wraps=scandir) as scans:
+                removed = merger.prepare_output_directories(records, root / 'out')
+            self.assertEqual(scans.call_count, 6)
+            self.assertEqual(removed, 1)
+            self.assertFalse(leftover.exists())
+            self.assertEqual(unrelated.read_text(), 'not merger-owned')
+            unrelated.unlink()  # Output inventory correctly rejects unrelated files.
+            stable_label_temp = label.with_name(label.name + '.merge-part')
+            image = root / 'out/images/train/lila' / (label.stem + '.jpg')
+            stable_image_temp = image.with_name(image.name + '.merge-part')
+            stable_label_temp.write_text('left by a killed process')
+            stable_image_temp.write_bytes(b'left by a killed process')
+            result = self.run_merge(root)
+            self.assertEqual(result['audit']['resumed_output_files'], 12)
+            self.assertFalse(stable_label_temp.exists())
+            self.assertFalse(stable_image_temp.exists())
+
     def test_hardlink_failure_has_no_copy_fallback_and_no_yaml(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
