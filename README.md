@@ -291,7 +291,7 @@ python -m unittest discover -s tests -v
 
 ### LILA 自动清理与断点恢复
 
-`prepare_lila_audited.py` 默认排除损坏图片和无法安全修复的整图标注，自动修正至多 1 像素的越界框，完成后生成 `AUDIT_REPORT.md`、完整剔除清单和可训练的 `data.yaml`。原始图片保留。中断后重跑相同命令与输出目录，会复用通过且未变化的图片、框与输出审计缓存；失败或变化的文件重新检查。旧版未保存的校验无法恢复，升级后首次需建立缓存。详见 [自动处理与恢复说明](docs/lila_audited_merge.md#默认自动处理与恢复)。
+`prepare_lila_audited.py` 默认排除损坏图片和无法安全修复的整图标注，自动修正至多 1 像素的越界框，完成后生成 `AUDIT_REPORT.md`、完整剔除清单和可训练的 `data.yaml`。原始图片保留。默认不保存正常图片的逐图校验、哈希或逐框明细，只保存每 128 张的批次断点与异常/修正清单。中断后重跑相同命令与输出目录，跳过未变化且已完成批次的解码检查，未完成批次最多重检 128 张；内容哈希仍在内存中重算用于去重分组。已有旧逐图缓存会归并成批次断点，再自动删除旧大文件。详见 [自动处理与恢复说明](docs/lila_audited_merge.md#默认自动处理与恢复)。
 
 ```bash
 python -m pip install -r requirements-lila.txt

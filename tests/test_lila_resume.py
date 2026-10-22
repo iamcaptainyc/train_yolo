@@ -18,6 +18,7 @@ class LilaResumeTests(unittest.TestCase):
             root / 'source',
             root / 'out',
             datasets=['caltech-camera-traps'],
+            checkpoint_mode="detailed",
             copy_mode=options.pop('copy_mode', 'copy'),
             workers=options.pop('workers', 1),
             **options

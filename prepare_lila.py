@@ -437,6 +437,9 @@ def validate_record(record, class_ids, plan_only=False, strict_boxes=False, stat
         if state:
             state.error("validation", record, exc)
         return 0, 0, f'{record["dataset"]}/{record["name"]}: {exc}'
+    finally:
+        if getattr(state, 'compact', False):
+            state.validation_done(record)
 
 
 def write_record(record, output, copy_mode, state=None):
@@ -554,6 +557,8 @@ def prepare(
     if not names:
         raise ValueError("No positive classes remain")
     class_ids = {name: index for index, name in enumerate(names)}
+    if getattr(state, 'compact', False):
+        state.prepare_batches(records)
     clipped, missing, unknown_dimensions = 0, [], 0
     function = partial(
         validate_record,
@@ -568,7 +573,9 @@ def prepare(
             desc="Validate and hash" if not plan_only else "Plan labels",
             unit="img",
         ) as progress, closing(
-            bounded_map(function, records, 1 if plan_only else workers, progress)
+            (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
+                function, records, 1 if plan_only else workers, progress
+            )
         ) as results:
             for count, unknown, issue in results:
                 clipped += count
@@ -698,33 +705,34 @@ def prepare(
     (output / "class_mapping.json").write_text(
         json.dumps(mapping, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    with (output / "split_manifest.jsonl").open("w", encoding="utf-8") as stream:
-        for r in records:
-            stream.write(
-                json.dumps(
-                    {
-                        k: r.get(k)
-                        for k in (
-                            "dataset",
-                            "name",
-                            "role",
-                            "location",
-                            "sequence",
-                            "group",
-                            "component",
-                            "split",
-                            "digest",
-                        )
-                    }
+    if not getattr(state, 'compact', False):
+        with (output / "split_manifest.jsonl").open("w", encoding="utf-8") as stream:
+            for r in records:
+                stream.write(
+                    json.dumps(
+                        {
+                            k: r.get(k)
+                            for k in (
+                                "dataset",
+                                "name",
+                                "role",
+                                "location",
+                                "sequence",
+                                "group",
+                                "component",
+                                "split",
+                                "digest",
+                            )
+                        }
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
     if not plan_only:
         used_modes = Counter()
         with tqdm(
             total=len(records), desc="Write YOLO", unit="img"
         ) as progress, closing(
-            bounded_map(
+            (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
                 partial(write_record, output=output, copy_mode=copy_mode, state=state),
                 records,
                 workers,

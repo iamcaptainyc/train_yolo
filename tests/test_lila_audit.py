@@ -10,7 +10,11 @@ from PIL import Image, ImageDraw
 import yaml
 
 from lila_audit import DATASET_NAMES, TAXONOMY, inspect_sources, taxonomy_mapping
-from prepare_lila_audited import merge, make_auditor
+from prepare_lila_audited import merge as merge_detailed, make_auditor
+
+
+def merge(*args, **kwargs):
+    return merge_detailed(*args, checkpoint_mode="detailed", **kwargs)
 
 
 def fixture(root, dataset, names):

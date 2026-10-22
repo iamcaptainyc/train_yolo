@@ -140,6 +140,7 @@ class RunState:
             json.dumps(
                 {
                     "schema": SCHEMA,
+                    "storage_mode": "compact" if getattr(self, "compact", False) else "detailed",
                     "config": self.config,
                     "status": status,
                     "run_id": self.run_id,
@@ -331,7 +332,7 @@ class RunState:
 
 
 @contextmanager
-def managed_run(source, output, config, force=False):
+def managed_run(source, output, config, force=False, compact=False):
     source, output = Path(source).resolve(), Path(output).resolve()
     if source == output or source in output.parents or output in source.parents:
         raise ValueError("Input and output directories must not contain each other")
@@ -342,8 +343,16 @@ def managed_run(source, output, config, force=False):
             raise ValueError(
                 "Non-empty output has no managed checkpoint; use a new output directory"
             )
+        if marker.exists() and not compact:
+            previous = json.loads(marker.read_text(encoding='utf-8'))
+            if previous.get('storage_mode') == 'compact':
+                raise ValueError('Use a new output directory when switching from compact to detailed mode')
         (output / ".lila-state").mkdir(parents=True, exist_ok=True)
-        state = RunState(output, force)
+        if compact:
+            from lila_compact import CompactState
+            state = CompactState(output, force)
+        else:
+            state = RunState(output, force)
         try:
             state.configure({"source": str(source), **config})
             # A partial/failed resumed attempt must never leave an old training certificate visible.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from contextlib import closing
+from contextlib import closing, nullcontext
 from functools import partial
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -26,6 +26,25 @@ from lila_state import managed_run, fingerprint, signature, record_key
 def cached_audit(record, output, names, mapping, allow_clipping=False, state=None):
     if state is None:
         return audit_one(record, output, names, mapping, allow_clipping)
+    if getattr(state, 'compact', False):
+        try:
+            state.refresh_source(record)
+            reuse = state._passed(record, 'audit')
+            row = audit_one(
+                record,
+                output,
+                names,
+                mapping,
+                allow_clipping,
+                verify_image_hash=not reuse,
+            )
+            state.stats['audit_hash_skipped' if reuse else 'audit_checked'] += 1
+            state.clear_error('audit', record)
+            state.audit_done(record)
+            return row
+        except (OSError, ValueError) as exc:
+            state.error('audit', record, exc)
+            raise
     image, label = output_paths(output, record)
     try:
         state.refresh_source(record)
@@ -115,10 +134,12 @@ def decode_label(path, width, height, names):
     return result
 
 
-def audit_one(record, output, names, mapping, allow_clipping=False):
+def audit_one(
+    record, output, names, mapping, allow_clipping=False, verify_image_hash=True
+):
     """Independent reverse decoding of the written file, never using converter label tuples."""
     image_path, label_path = output_paths(output, record)
-    if sha256(image_path) != record['digest']:
+    if verify_image_hash and sha256(image_path) != record['digest']:
         raise ValueError(f'Output image bytes differ from input: {image_path}')
     with Image.open(image_path) as image:
         width, height = image.size
@@ -590,6 +611,7 @@ def make_auditor(
                             "lila_audit.py",
                             "lila_parallel.py",
                             "lila_state.py",
+                            "lila_compact.py",
                         )
                     },
                 },
@@ -705,12 +727,24 @@ def make_auditor(
             mapping=mapping,
             allow_clipping=allow_clipping,
         )
+        compact = getattr(getattr(report, 'state', None), 'compact', False)
+        if compact:
+            report.state.prepare_batches(records, 'audit')
         with (
-            (output / "box_audit.jsonl").open("w", encoding="utf-8") as stream,
+            (
+                nullcontext(None)
+                if compact
+                else (output / "box_audit.jsonl").open("w", encoding="utf-8")
+            ) as stream,
+            (output / 'repairs.jsonl').open('w', encoding='utf-8') as repairs,
             tqdm(
                 total=len(records), desc="Independent output audit", unit="img"
             ) as progress,
-            closing(bounded_map(function, records, workers, progress)) as results,
+            closing(
+                (report.state.map_tasks if compact else bounded_map)(
+                    function, records, workers, progress
+                )
+            ) as results,
         ):
             for record, row in zip(records, results):
                 row["original_annotation_ids"] = inventories[record["dataset"]][
@@ -786,7 +820,31 @@ def make_auditor(
                             ),
                         }
                     )
-                stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+                if stream is not None:
+                    stream.write(
+                        json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                    )
+                if row['max_clipping_pixels']:
+                    repairs.write(
+                        json.dumps(
+                            {
+                                'dataset': record['dataset'],
+                                'file_name': record['name'],
+                                'reason': 'one_pixel_edge_clipping',
+                                'max_clipping_pixels': row['max_clipping_pixels'],
+                                'corrected_boxes': sum(
+                                    any(
+                                        [x, y, x + w, y + h]
+                                        != b['expected_clipped_xyxy']
+                                        for x, y, w, h in b['source_coco_xywh']
+                                    )
+                                    for b in row['boxes']
+                                ),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + '\n'
+                    )
         audit = {
             "images_verified": len(records),
             "processing_workers": workers,
@@ -819,7 +877,26 @@ def make_auditor(
         (output / "preview_index.json").write_text(
             json.dumps(previews, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        report['checkpoint_mode'] = 'compact' if compact else 'detailed'
+        report['checkpoint'] = (
+            {'batch_size': report.state.batch_size, 'per_image_results_saved': False}
+            if compact
+            else {'per_image_results_saved': True}
+        )
+        report['audit']['per_image_details_saved'] = not compact
         write_markdown(output, inventories, details, report, audit, previews, retained)
+        if compact:
+            path = output / 'AUDIT_REPORT.md'
+            text = path.read_text(encoding='utf-8')
+            text = text.replace(
+                '逐图片、逐框记录： [box_audit.jsonl](box_audit.jsonl)；',
+                '正常图片不保存逐图校验与逐框明细；修正清单：[repairs.jsonl](repairs.jsonl)；',
+            )
+            text = text.replace(
+                '划分清单：[split_manifest.jsonl](split_manifest.jsonl)',
+                '划分结果见 images/train、images/val、images/test',
+            )
+            path.write_text(text, encoding='utf-8')
         with (output / "AUDIT_REPORT.md").open("a", encoding="utf-8") as stream:
             stream.write("\n## Automatic cleanup and checkpoints\n\n")
             stream.write(
@@ -837,7 +914,7 @@ def make_auditor(
                     f"| {dataset} | {sum(e['dataset'] == dataset for e in automatic)} |\n"
                 )
             stream.write(
-                "\nCache counters: `"
+                "\nProcessing counters: `"
                 + json.dumps(report.get("cache", {}), sort_keys=True)
                 + "`.\n"
             )
@@ -904,7 +981,7 @@ def _merge(
     )
 
 
-def merge(source, output, *, recheck_all=False, **options):
+def merge(source, output, *, recheck_all=False, checkpoint_mode='compact', **options):
     config = {
         k: options.get(k, default)
         for k, default in {
@@ -919,7 +996,11 @@ def merge(source, output, *, recheck_all=False, **options):
     }
     # JSON canonical forms avoid tuple/list differences between runs.
     config = json.loads(json.dumps(config))
-    with managed_run(source, output, config, force=recheck_all) as state:
+    if checkpoint_mode not in ('compact', 'detailed'):
+        raise ValueError('checkpoint_mode must be compact or detailed')
+    with managed_run(
+        source, output, config, force=recheck_all, compact=checkpoint_mode == 'compact'
+    ) as state:
         return _merge(source, output, state=state, **options)
 
 
@@ -970,7 +1051,12 @@ def main():
     parser.add_argument(
         "--recheck-all",
         action="store_true",
-        help="Ignore validation/audit cache and check all files again",
+        help="Ignore batch checkpoints and fully recheck inputs and outputs",
+    )
+    parser.add_argument(
+        '--detailed-audit',
+        action='store_true',
+        help='Opt in to persistent per-image cache and full box/manifest logs; default saves batch progress and exceptions only',
     )
     args = parser.parse_args()
     try:
@@ -998,6 +1084,7 @@ def main():
             allow_clipping=not args.strict,
             auto_clean=not args.strict,
             recheck_all=args.recheck_all,
+            checkpoint_mode='detailed' if args.detailed_audit else 'compact',
         )
         print("Audit passed. Report: " + str(args.output.resolve() / "AUDIT_REPORT.md"))
     except (ValueError, OSError, KeyError, TypeError) as exc:
