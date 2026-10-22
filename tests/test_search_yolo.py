@@ -97,6 +97,14 @@ class SearchIntegrationTests(unittest.TestCase):
             self.assertEqual(report['winners']['n']['model'], 'yolo11n.pt')
             self.assertEqual(report['winners']['s']['model'], 'yolo11s.pt')
             self.assertEqual(report['winners']['n']['trial'], 1)
+            human = (args.output/'REPORT.md').read_text(encoding='utf-8')
+            self.assertIn('本次搜索完成', human)
+            self.assertIn('按 Size 比较架构', human)
+            self.assertIn('### yolov8n.pt', human)
+            self.assertIn('+1.00 个百分点', human)
+            self.assertIn('| n | 测试集 | 49.00%', human)
+            self.assertIn('[best_n.pt](best/best_n.pt)', human)
+
             self.assertEqual((args.output/'best/best_n.pt').read_bytes(), b'yolo11n.pt1')
             self.assertTrue((args.output/'rounds/round_0002.json').is_file())
             count = len(gpu.calls)
@@ -182,6 +190,11 @@ class SearchIntegrationTests(unittest.TestCase):
                 self.run_fake(args, gpu)
             summary = json.loads((args.output/'summary.json').read_text())
             self.assertEqual(summary['winners']['n']['test']['status'], 'failed')
+            human = (args.output/'REPORT.md').read_text(encoding='utf-8')
+            self.assertIn('尚未确认全部完成', human)
+            self.assertIn('失败，需重试', human)
+            self.assertNotIn('**状态：本次搜索完成。**', human)
+
             self.run_fake(args, gpu)
             self.assertEqual(len([j for j in gpu.calls if j['phase']=='train']), 4)
 
@@ -194,6 +207,14 @@ class SearchIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'configuration/data changed'):
                 self.run_fake(args, gpu)
             self.assertEqual(len(gpu.calls), count)
+
+
+class HumanReportTests(unittest.TestCase):
+    def test_missing_and_zero_metrics_are_distinct(self):
+        from search_report import metric, delta
+        self.assertEqual(metric({}, 'test', 'map50_95'), '—')
+        self.assertEqual(metric({'test': {'status': 'ok', 'metrics': {'map50_95': 0}}}, 'test', 'map50_95'), '0.00%')
+        self.assertEqual(delta({}, None), '—（无有效基线）')
 
 
 class BatchSpaceTests(unittest.TestCase):

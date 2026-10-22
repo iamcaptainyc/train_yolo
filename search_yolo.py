@@ -14,6 +14,7 @@ import sys
 import time
 
 from search_worker import digest, write_json
+from search_report import write_report
 
 MODELS = ('yolov8n.pt', 'yolov8s.pt', 'yolo11n.pt', 'yolo11s.pt')
 BASELINE = {'batch': 64, 'optimizer': 'auto'}
@@ -207,6 +208,7 @@ def refresh_reports(root, studies):
             shutil.copy2(source, temporary)
             temporary.replace(target)
     write_json(best_dir/'selection.json', {'selection_metric': 'validation mAP50-95', 'models': winners})
+    write_report(root, records, winners, MODELS)
     return records, winners
 
 
@@ -354,6 +356,8 @@ def search_studies(args, root, initial, storage):
         raise ValueError('Some trials failed or no complete n/s pair exists; inspect iterations.csv and stage logs')
     if args.test_policy == 'every-trial' and any(r['test'].get('status') != 'ok' for r in records if r['state'] == 'COMPLETE'):
         raise ValueError('Some test stages failed; rerun the same command to retry evaluation only')
+    write_report(root, records, winners, MODELS, complete=True)
+    print(f'Human-readable report: {root / "REPORT.md"}', flush=True)
 
 
 def main():

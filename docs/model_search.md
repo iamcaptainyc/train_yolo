@@ -58,6 +58,7 @@ python tune.py --data yolo_datasets/camping_all_classes/data.yaml --workers 16
 runs/tune/<自动名称>/
   run.json                     # 实验身份
   optuna.sqlite3               # 四个 study
+  REPORT.md                    # 人类可读：按模型/尺寸分组、基线变化和最终指标
   iterations.csv               # 每个候选的传入参数、指标和状态
   summary.json                 # 详细结果和获胜来源
   rounds/round_0001.json        # 每轮结果
@@ -95,3 +96,9 @@ CUDA/主机内存不足、SIGKILL、磁盘异常会停止整批并保留恢复�
 没有适用于所有数据的最佳组合。官方默认值是合理起点；相机陷阱数据的分布、类别不均衡、小目标比例和训练规模都可能改变最适合的学习率及增强强度。先看基线；有预算再调少量关键参数。相比微调很多参数，正确标注、合理类别、无泄漏划分更优先。
 
 参考：[Ultralytics 训练参数](https://docs.ultralytics.com/modes/train/)、[微调指南](https://docs.ultralytics.com/guides/finetuning-guide/)、[超参数调优](https://docs.ultralytics.com/guides/hyperparameter-tuning/)。本地回归测试使用真实 Optuna/SQLite 和模拟 GPU，不代表已在远端数据上测出精度或速度提升。
+
+## 阅读汇总报告
+
+优先打开实验目录下的 `REPORT.md`：先展示最佳 n/s 及权重链接，分别列出验证集和测试集的 mAP50-95、mAP50、Precision、Recall；再按 n/s 比较架构，按四个模型列出全部候选、参数与相对各自基线的提升。指标统一以百分数显示，提升用百分点表示。未评估显示“—”，失败单独提示，不会用 0 代替缺失结果。
+
+报告逐阶段更新。只有所有要求的阶段成功结束才标记“本次搜索完成”，中断时可查看阶段性结果。`auto` 标记的是配置，实际选中的优化器和学习率见候选训练日志。已有本版本搜索只需重跑同一命令，即可利用完成记录生成报告，无需重新训练；更早版本的搜索空间仍不能混用。
