@@ -91,3 +91,5 @@ python train.py --data yolo_datasets/lila_camping/data.yaml \
 ```
 
 后续合并另一个 YOLO 数据集时须按英文语义重排 ID，不能拼接原来的数字 ID，也不能沿用旧 61 类模型的类别解释直接推理新 YAML。
+
+现在可使用 [merge_yolo_datasets.py 合并说明](merge_yolo.md) 完成与 Animals Detection 的合并。该合并步骤只依赖处理后的 `lila_camping`，不依赖旧的 `yolo_datasets/lila`；旧目录的删除条件和硬链接空间说明见该文档。
