@@ -1,117 +1,97 @@
-# 四模型 Optuna 自动搜索
+# 四模型自动调参
 
-`search_yolo.py` 按轮串行训练：**yolov8n → yolov8s → yolo11n → yolo11s → 下一轮**。每个模型有独立的 Optuna TPE study，最大化该候选 `best.pt` 在验证集上的 mAP50-95。最终在两个 n 架构间选一个、两个 s 架构间选一个，导出 `best_n.pt` 和 `best_s.pt`。结果是本次搜索预算内的最佳候选，不保证全局最优。
+使用短命令 `tune.py`（原 `search_yolo.py` 仍可用），依次训练 YOLOv8n、YOLOv8s、YOLO11n、YOLO11s。四个模型各有独立 Optuna study，以 **val mAP50-95** 选出本次预算内最好的 n 和 s。测试集不参与调参或选优。
 
-默认每个候选训练完都会重新评估其 `best.pt` 的验证集和测试集，独立保存结果；**测试集只记录，Optuna、排名和最终选择都不读取测试指标**。如果人为根据每轮测试分数修改搜索，测试集也会产生选择偏差。正式实验建议 `--test-policy final`，仅在搜索结束后评估最终两个模型；默认 `every-trial` 则满足逐候选自动测试的使用方式。
-
-## 安装和使用
-
-在仓库目录执行，使用与你之前训练相同的数据 YAML；必须含独立的 train/val/test：
+## 直接运行
 
 ```bash
 git pull --ff-only
 python -m pip install -r requirements-search.txt
 
-# 只查看计划，不启动训练、不下载权重、不创建搜索目录
-python search_yolo.py --data yolo_datasets/animals-detection-images-dataset/data.yaml --dry-run
+# 查看计划，不训练、不下载、不创建输出目录
+python tune.py --data yolo_datasets/camping_all_classes/data.yaml --dry-run
 
-# 建议先使用独立目录跑通流程：每个模型一次，每次最多 3 epoch
-python search_yolo.py \
-  --data yolo_datasets/animals-detection-images-dataset/data.yaml \
-  --output runs/search_smoke --trials 1 --epochs 3 --patience 2 \
-  --batch 32 --eval-batch 16 --workers 2 --device 0
+# 先比较四个架构的默认优化器基线：共 4 次训练
+python tune.py --data yolo_datasets/camping_all_classes/data.yaml --trials 1 --workers 16
 
-# 正式搜索：5 轮、4 个模型，共 20 次训练，每次最多 100 epoch
-python search_yolo.py \
-  --data yolo_datasets/animals-detection-images-dataset/data.yaml \
-  --output runs/animals_search_batch --trials 5 --epochs 100 --patience 20 \
-  --eval-batch 32 --workers 4 --device 0
+# 默认每模型 8 次，包含基线；共 32 次训练
+# 若之前已完成上述基线，会接续同一实验，补足到 8 次
+python tune.py --data yolo_datasets/camping_all_classes/data.yaml --workers 16
 ```
 
-96GB 显存和 110 CPU 核并不保证容器 RAM 足够，默认搜索 batch=64/128/256、workers=4，并关闭图片缓存。首个候选使用 batch=64，后续由 Optuna 选择。显式传入 `--batch 32` 等正整数会关闭 batch 搜索，固定所有候选的批大小。`--eval-batch` 独立于训练 batch，避免测试阶段使用过大的 batch。脚本单卡串行执行，不会同时启动四个训练任务。
+不需要自己命名：自动目录例如 `runs/tune/camping-all-classes-a1b2c3d4e5/`，模型/候选使用 `v8n/t000`、`v8s/t000`、`v11n/t001`、`v11s/t001`。实际目录会打印出来，示例末尾不是固定值。
 
-初始权重优先从 `--weights-dir`（默认 `weights/`）复制；缺失则使用 Ultralytics 官方下载器获取。首次保存到搜索目录的 `initial_weights/`，记录 SHA-256。每个新候选从这份固定的预训练权重开始，**不会从上一候选的 best.pt 接着微调**。只有同一中断候选才用自己的 last.pt 恢复。
+名称由数据 YAML、可用的转换报告和实验条件生成短指纹。相同命令自动续跑；改 epochs、分辨率、seed、batch 设置等会生成另一个目录。只增加 `--trials` 或修改 workers/device/eval-batch 不改变目录。也可显式指定 `--output`。旧版搜索空间不能接续到新版；新版自动目录会隔离旧结果。
 
-四模型轮转、训练、评估均自动完成，不需要分别调用 `train.py`。每个 GPU 阶段在独立子进程中，Linux 复用 `training_guard.py`：阶段结束后清理它自己的进程组，再进入下一阶段。守护本身被 SIGKILL 或容器整体终止仍无法保证清理；Windows 不提供 Linux 进程组的同等回收能力。
+指纹只读取 YAML 和同目录 report.json，不逐张校验图片。数据内容若原地修改而这些文件不变，无法自动识别；此时更换输出目录。实验期间保持数据不变。
 
-## 搜索参数
+## 策略与预算
 
-每个模型第一个候选使用固定 AdamW 基线，后续由 Optuna 建议：
+默认每模型 8 次候选：
 
-| 参数 | 范围 | 首个候选 |
+1. 第 1 次：batch=64、optimizer=auto，不覆盖学习率、权重衰减和数据增强参数，建立官方默认优化器基线。
+2. 第 2～4 次：固定 AdamW、lr0=0.001、weight_decay=0.0005、mosaic=1.0，分别用 batch=64/128/256，先比较 batch 的影响。
+3. 第 5～8 次：TPE 根据该模型已有验证结果，集中搜索下表四个参数。
+
+| 参数 | 搜索范围 | 考虑 |
 | --- | --- | --- |
-| batch | 64 / 128 / 256，分类采样 | 64 |
-| optimizer | AdamW / SGD | AdamW |
-| lr0 | 0.0001～0.01，对数采样 | 0.001 |
-| lrf | 0.01～0.2，对数采样 | 0.01 |
-| momentum | 0.85～0.98 | 0.937 |
-| weight_decay | 0.00001～0.001，对数采样 | 0.0005 |
-| hsv_s | 0.3～0.8 | 0.7 |
-| hsv_v | 0.1～0.5 | 0.4 |
-| scale | 0.2～0.7 | 0.5 |
-| mosaic | 0.3～1.0 | 1.0 |
+| batch | 64 / 128 / 256 | 保留指定的档位；影响吞吐、显存和优化过程 |
+| lr0 | 0.0001～0.003，对数采样 | 围绕 AdamW 预训练微调的 0.001 附近搜索，避免小预算横跨过大的范围 |
+| weight_decay | 0.00001～0.001，对数采样 | 覆盖较弱到较强正则化 |
+| mosaic | 0～1 | 相机陷阱背景固定，比较减少拼接增强是否更适合该数据 |
 
-显式使用优化器，避免 `optimizer=auto` 忽略建议的 lr0。训练轮数上限和分辨率保持固定；训练 batch 参与搜索，实际值保存到候选 config.json、Optuna、iterations.csv 和汇总结果。分类采样不保证有限次数内覆盖全部三个值。候选训练有 Ultralytics `patience` 早停；当前不使用 Optuna 的逐 epoch pruning。TPE 前三个候选是启动采样，之后参考已完成候选；5 个候选只是初步搜索，预算充足可以增加 `--trials`。
+除基线外，优化器固定 AdamW，避免把 SGD 和 AdamW 的不同学习率需求混在一个小预算里；显式指定优化器也避免 auto 忽略建议的 lr0。其余学习率调度、颜色增强、损失权重保留安装版本的默认值。所有候选使用相同的 epochs、imgsz、seed、patience 等控制设置；沿用脚本的 close_mosaic=min(10, epochs//5)、cache=False、deterministic=True，因此基线指默认优化器/超参数基线，并非完全无覆盖的原生 CLI 命令。
 
-训练以 Ultralytics 保存的 best.pt 为候选，然后显式重新评估验证集。Optuna 优化的是这个 checkpoint 的验证 mAP50-95，而非最后一个 epoch，也不一定是 results.csv 中单项 mAP 最高的那个 epoch（checkpoint 选择由所装 Ultralytics 的规则决定）。
+`--batch 128` 会关闭 batch 搜索：第 1 次 auto 基线，第 2 次固定 AdamW 参考点，后续由 TPE 搜索三个连续参数（TPE 启动期仍有随机采样）。指定 `--trials 1` 只跑基线，不执行排队的后续候选。trial 数是每模型累计尝试数，失败也计入预算。
 
-评估固定使用 conf=0.001、IoU=0.7、max_det=300，保存 Precision、Recall、mAP50、mAP50-95、各类别指标，以及推理阶段每图片毫秒数。测速仅作参考，受 batch/硬件/系统负载影响，不作为选优目标。
+默认 8 次只是初步搜索，并不能证明参数最优。可增加到 `--trials 12` 或 20 接续搜索。原先 5 次搜索约 10 个维度，信息太少；新版先做可解释的基线和 batch 比较，再做窄范围搜索。调参不保证超过基线，基线也参与最终选优。
 
-## 输出
+每次最多 100 epoch，patience=20；支持修改 `--epochs`、`--patience`。使用 Ultralytics 早停，不启用 Optuna 逐 epoch 剪枝，避免把早期指标波动误判为无效实验。各候选从固定的初始预训练权重重新开始；只有中断的同一候选从自己的 last.pt 恢复。
+
+## 评估和结果
+
+默认 `--test-policy final`：每个候选训练完成后重新验证 best.pt，全部候选结束后仅测试选中的 n、s，共两次测试。若要保留原来的逐候选测试方式，传 `--test-policy every-trial`；测试指标仍不参与选优。扩展预算后会评估新的获胜者，不应据测试分数调整搜索。
+
+每阶段结果立即保存，包含：
 
 ```text
-runs/animals_search_batch/
-  run.json                         # 搜索配置和数据指纹，恢复时检查一致性
-  optuna.sqlite3                   # 四个独立 study 的持久化记录
-  iterations.csv                   # 所有候选的参数、验证/测试指标和状态
-  summary.json                     # 详细结果及当前获胜模型
-  initial_weights/                 # 固定的初始权重、校验值、下载日志
-  rounds/round_0001.json            # 本轮四模型结果快照，逐阶段更新
-  models/yolov8n/trial_0000/
-    config.json                    # 固定训练条件和建议参数
+runs/tune/<自动名称>/
+  run.json                     # 实验身份
+  optuna.sqlite3               # 四个 study
+  iterations.csv               # 每个候选的传入参数、指标和状态
+  summary.json                 # 详细结果和获胜来源
+  rounds/round_0001.json        # 每轮结果
+  initial_weights/             # 固定的初始权重及校验值
+  v8n/t000/                    # 另外三个模型结构相同
+    config.json                # 传入参数；auto 基线不虚构 lr0
     status.json
-    train_job.json / val_job.json / test_job.json
+    train.log / val.log / test.log
     train_result.json / val_result.json / test_result.json
-    train.log / val.log / test.log  # 每阶段日志，中断重试追加
+    training/args.yaml         # Ultralytics 保存的配置
+    training/results.csv       # 逐 epoch 日志（含学习率）
     training/weights/best.pt
     training/weights/last.pt
-    training/results.csv           # Ultralytics 原始逐 epoch 记录和图表
-    evaluation/val/...
-    evaluation/test/...
-  best/
-    best_n.pt
-    best_s.pt
-    selection.json                 # 获胜来源、参数、验证和测试指标
+    evaluation/val/
+    evaluation/test/
+  best/best_n.pt
+  best/best_s.pt
+  best/selection.json
 ```
 
-每个候选的原始权重、日志及指标保留。`best/` 随搜索更新，进程成功结束后才代表此次预算下的最终结果。若部分候选失败，脚本仍可能已经导出可用的最优权重，但会以非零状态提示检查失败记录。
+auto 的实际优化器和初始学习率看 train.log；args.yaml 可能仍记录 auto 配置。iterations.csv 的空白参数表示未显式覆盖，不是零。每个候选保留完整结果、权重，不自动删除旧实验。
 
-## 中断、失败和扩展
+评估固定 conf=0.001、IoU=0.7、max_det=300，记录 Precision、Recall、mAP50、mAP50-95、逐类指标和推理毫秒数。推理时间受评估 batch 和系统负载影响，不作为选优指标。best.pt 的保存由 Ultralytics 的规则决定，脚本再对该 checkpoint 的验证 mAP50-95 排名。
 
-重跑**同一命令、同一输出目录**即可继续：
+## 中断与资源
 
-- 已完成的训练、验证、测试阶段按记录复用；缺失或被修改的完成权重会报错，不拿旧分数对应新权重。
-- 未完成候选保留 RUNNING；有可恢复的 last.pt 时继续同一训练。没有 checkpoint 时从初始权重重试该候选，保留旧的未完成目录。只能恢复到已保存 epoch，不能恢复未保存的 batch。
-- 测试失败不撤销有效的验证分数、不重跑已完成训练；下次只重试失败的评估。
-- SIGKILL、CUDA/主机内存不足、明显本地存储错误会停止整批，避免反复启动失败进程。处理资源问题后重跑；不自动杀其他训练进程、不自动降低 batch 改变实验。
-- 其他阶段异常记为失败候选，保留日志并继续后续模型。失败候选计入 `--trials` 总尝试预算；想增加有效搜索量，可提高目标试验数。
-- 同一输出目录有文件锁，只允许一个搜索协调器，避免重复使用 GPU 或破坏 SQLite。
+Ctrl+C 后重跑同一命令即可：完成阶段复用；未完成训练有 last.pt 时恢复到已保存 epoch，无 checkpoint 时重试该候选。未保存的 batch 无法恢复。测试失败下次只重试测试，不重训。SQLite 和输出锁防止两个协调器混写同一实验。
 
-`--trials 5` 表示**每个模型累计目标五次尝试**，恢复时不会再额外执行五次；增加到 `--trials 10` 才会补充到十次。
+CUDA/主机内存不足、SIGKILL、磁盘异常会停止整批并保留恢复信息，不自动降低 batch 改变实验。其他阶段错误保留日志，可能继续后续候选，最终以非零退出码提示失败。每个阶段使用独立子进程，Linux 使用 training_guard 清理自身进程组；整个容器被强制终止仍不能保证清理。
 
-允许恢复时调整 trials、device、workers、eval-batch；已完成阶段保持原结果。更改 epochs、固定 batch 设置、imgsz、seed、patience、AMP、数据 YAML、初始权重目录或测试策略，需要使用新的输出目录。继续同一中断训练时，资源参数是否可覆盖仍由所安装的 Ultralytics 版本决定，实际以该阶段日志为准。需要公平测速时保持 eval-batch 一致。
+默认 workers=4、eval-batch=32、device=0。96GB GPU 可尝试 workers=16，但需看容器 RAM 和磁盘吞吐，不按 110 CPU 核直接开满 workers。图片缓存关闭。训练串行运行，每次只启动一个模型。权重优先读取 weights/，缺失则由 Ultralytics 下载。
 
-本次 batch 搜索将空间版本升级为 2，不能直接接续旧版固定 batch 的搜索目录；请使用新的 `--output`，旧结果保持保留。
+## 有没有公认的最佳参数？
 
-数据指纹包含 YAML 和转换器 report.json（如存在）的 SHA-256，没有逐张重新哈希数据集；搜索期间保持图片、标签和划分不变。初始权重固定为复制到搜索目录的版本，外部权重目录后来修改不会改变它。每阶段记录 Python、PyTorch 和 Ultralytics 版本，恢复时应尽量保持环境一致。建议参数随机种子按模型和候选编号派生，避免每次重启重复随机启动序列；浮点计算仍不保证跨硬件或库版本完全一致。
+没有适用于所有数据的最佳组合。官方默认值是合理起点；相机陷阱数据的分布、类别不均衡、小目标比例和训练规模都可能改变最适合的学习率及增强强度。先看基线；有预算再调少量关键参数。相比微调很多参数，正确标注、合理类别、无泄漏划分更优先。
 
-## 使用选出的模型
-
-```bash
-python train.py --mode predict --model runs/animals_search_batch/best/best_n.pt --source /你的新图片目录 --device 0 --name best_n_predict
-python train.py --mode predict --model runs/animals_search_batch/best/best_s.pt --source /你的新图片目录 --device 0 --name best_s_predict
-```
-
-本地验证使用真实 Optuna/SQLite 和模拟 GPU 进程边界，检查轮转、恢复、测试失败重试、配置隔离和验证集选优；没有替你在 AutoDL 上执行实际搜索或 GPU 训练。正式长搜索前先跑独立的 smoke 目录。
-
-参考：[Optuna 持久化 study](https://optuna.readthedocs.io/en/stable/reference/generated/optuna.create_study.html)、[Ultralytics 训练](https://docs.ultralytics.com/modes/train/)、[评估](https://docs.ultralytics.com/modes/val/)。
+参考：[Ultralytics 训练参数](https://docs.ultralytics.com/modes/train/)、[微调指南](https://docs.ultralytics.com/guides/finetuning-guide/)、[超参数调优](https://docs.ultralytics.com/guides/hyperparameter-tuning/)。本地回归测试使用真实 Optuna/SQLite 和模拟 GPU，不代表已在远端数据上测出精度或速度提升。

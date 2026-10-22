@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import errno
+import hashlib
+import re
 import json
 from pathlib import Path
 import shutil
@@ -14,10 +16,31 @@ import time
 from search_worker import digest, write_json
 
 MODELS = ('yolov8n.pt', 'yolov8s.pt', 'yolo11n.pt', 'yolo11s.pt')
-BASELINE = {'batch': 64, 'optimizer': 'AdamW', 'lr0': 0.001, 'lrf': 0.01, 'momentum': 0.937,
-            'weight_decay': 0.0005, 'hsv_s': 0.7, 'hsv_v': 0.4, 'scale': 0.5, 'mosaic': 1.0}
-SPACE_VERSION = 2
+BASELINE = {'batch': 64, 'optimizer': 'auto'}
+SEARCH_ANCHOR = {'lr0': 0.001, 'weight_decay': 0.0005, 'mosaic': 1.0}
+PARAM_FIELDS = ['batch', 'optimizer', 'lr0', 'weight_decay', 'mosaic']
+SPACE_VERSION = 3
 BATCH_CHOICES = [64, 128, 256]
+
+
+def trial_directory(root, model, number):
+    return root/Path(model).stem.replace('yolov', 'v').replace('yolo', 'v')/f't{number:03d}'
+
+
+def experiment_identity(args):
+    return json.loads(json.dumps({
+        'data': dataset_identity(args.data), 'weights_dir': str(args.weights_dir),
+        'models': MODELS, 'epochs': args.epochs, 'imgsz': args.imgsz, 'batch': args.batch,
+        'patience': args.patience, 'seed': args.seed, 'amp': args.amp,
+        'space_version': SPACE_VERSION, 'test_policy': args.test_policy,
+        'metric': 'validation mAP50-95'}))
+
+
+def automatic_output(args):
+    identity = json.dumps(experiment_identity(args), sort_keys=True).encode()
+    token = hashlib.sha256(identity).hexdigest()[:10]
+    label = re.sub(r'[^a-z0-9]+', '-', args.data.parent.name.lower()).strip('-')[:20] or 'data'
+    return Path('runs/tune')/f'{label}-{token}'
 
 
 class JobError(RuntimeError):
@@ -39,16 +62,12 @@ def read_json(path, default=None):
 
 
 def sample_params(trial, fixed_batch=None):
+    # Compact space: optimizer/schedule/color augmentation retain stable choices.
     return {'batch': trial.suggest_categorical('batch', [fixed_batch] if fixed_batch is not None else BATCH_CHOICES),
-            'optimizer': trial.suggest_categorical('optimizer', ['AdamW', 'SGD']),
-            'lr0': trial.suggest_float('lr0', 1e-4, 1e-2, log=True),
-            'lrf': trial.suggest_float('lrf', 0.01, 0.2, log=True),
-            'momentum': trial.suggest_float('momentum', 0.85, 0.98),
+            'optimizer': 'AdamW',
+            'lr0': trial.suggest_float('lr0', 1e-4, 3e-3, log=True),
             'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
-            'hsv_s': trial.suggest_float('hsv_s', 0.3, 0.8),
-            'hsv_v': trial.suggest_float('hsv_v', 0.1, 0.5),
-            'scale': trial.suggest_float('scale', 0.2, 0.7),
-            'mosaic': trial.suggest_float('mosaic', 0.3, 1.0)}
+            'mosaic': trial.suggest_float('mosaic', 0.0, 1.0)}
 
 
 def run_job(job):
@@ -124,10 +143,10 @@ def collect_records(root, studies):
         for trial in studies[model].get_trials(deepcopy=False):
             if trial.state.name == 'WAITING':
                 continue
-            directory = root/'models'/Path(model).stem/f'trial_{trial.number:04d}'
+            directory = trial_directory(root, model, trial.number)
             records.append({'model': model, 'size': Path(model).stem[-1], 'trial': trial.number,
                             'state': trial.state.name, 'objective': trial.value,
-                            'params': trial.params, 'trial_dir': str(directory),
+                            'params': read_json(directory/'config.json', {}).get('params', trial.params), 'trial_dir': str(directory),
                             'config': read_json(directory/'config.json', {}),
                             'train': read_json(directory/'train_result.json', {}),
                             'val': read_json(directory/'val_result.json', {}),
@@ -155,7 +174,7 @@ def refresh_reports(root, studies):
     fields = ['round', 'model', 'size', 'trial', 'state', 'val_map50_95', 'val_map50', 'val_precision',
               'val_recall', 'test_map50_95', 'test_map50', 'test_precision', 'test_recall',
               'test_status', 'recorded_epochs', 'train_seconds_this_attempt', 'test_inference_ms',
-              'best_checkpoint', 'error', *BASELINE]
+              'best_checkpoint', 'error', *PARAM_FIELDS]
     temporary = root/'iterations.csv.tmp'
     with temporary.open('w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -206,13 +225,7 @@ def dataset_identity(data):
 def run(args):
     import optuna
     root = args.output.resolve()
-    identity = {'data': dataset_identity(args.data), 'weights_dir': str(args.weights_dir),
-                'models': MODELS, 'epochs': args.epochs,
-                'imgsz': args.imgsz, 'batch': args.batch, 'patience': args.patience, 'seed': args.seed,
-                'amp': args.amp, 'space_version': SPACE_VERSION, 'test_policy': args.test_policy,
-                'metric': 'validation mAP50-95'}
-    # JSON roundtrip normalizes tuples for comparison with the saved manifest.
-    identity = json.loads(json.dumps(identity))
+    identity = experiment_identity(args)
     manifest = root/'run.json'
     existing = read_json(manifest)
     if existing is not None and existing != identity:
@@ -249,7 +262,9 @@ def search_studies(args, root, initial, storage):
                                    sampler=optuna.samplers.TPESampler(seed=args.seed+index, n_startup_trials=3),
                                    pruner=optuna.pruners.NopPruner())
         if not study.get_trials():
-            study.enqueue_trial({**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch']})
+            study.enqueue_trial({})  # Official auto-optimizer baseline; no lr override.
+            for batch in ([args.batch] if args.batch is not None else BATCH_CHOICES):
+                study.enqueue_trial({**SEARCH_ANCHOR, 'batch': batch})
         studies[model] = study
     refresh_reports(root, studies)
 
@@ -270,7 +285,7 @@ def search_studies(args, root, initial, storage):
             attempted = [t for t in trials if t.state != TrialState.WAITING]
             if running:
                 candidate = running[0]
-                directory = root/'models'/Path(model).stem/f'trial_{candidate.number:04d}'
+                directory = trial_directory(root, model, candidate.number)
                 config = read_json(directory/'config.json')
                 if not config:
                     study.tell(candidate.number, state=TrialState.FAIL)
@@ -288,10 +303,11 @@ def search_studies(args, root, initial, storage):
                     n_startup_trials=3)
                 candidate = study.ask()
                 number = candidate.number
-                directory = root/'models'/Path(model).stem/f'trial_{number:04d}'
+                directory = trial_directory(root, model, number)
                 config = {**{k: getattr(args, k) for k in ('epochs', 'imgsz', 'batch', 'patience', 'seed', 'amp')},
                           'data': str(args.data), 'model': model, 'trial': number, 'trial_dir': str(directory),
-                          'initial_checkpoint': initial[model], 'params': sample_params(candidate, args.batch)}
+                          'initial_checkpoint': initial[model], 'params': ({**BASELINE, 'batch': args.batch or BASELINE['batch']} if number == 0
+                                     else sample_params(candidate, args.batch))}
                 config['batch'] = config['params']['batch']
                 write_json(directory/'config.json', config)
             else:
@@ -343,9 +359,9 @@ def search_studies(args, root, initial, storage):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--data', type=Path, required=True)
-    p.add_argument('--output', type=Path, default=Path('runs/search_animals'))
+    p.add_argument('--output', type=Path, default=None, help='Optional; otherwise derive a short resumable experiment name')
     p.add_argument('--weights-dir', type=Path, default=Path('weights'))
-    p.add_argument('--trials', type=int, default=5, help='Target total trial attempts per model, including previous attempts')
+    p.add_argument('--trials', type=int, default=8, help='Target total trial attempts per model, including previous attempts')
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--patience', type=int, default=20)
     p.add_argument('--imgsz', type=int, default=640)
@@ -356,11 +372,10 @@ def main():
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='every-trial')
+    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='final')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
     args.data = args.data.expanduser().resolve()
-    args.output = args.output.expanduser().resolve()
     args.weights_dir = args.weights_dir.expanduser().resolve()
     if any(v < 1 for v in (args.trials, args.epochs, args.imgsz, args.eval_batch)) or (args.batch is not None and args.batch < 1) or args.workers < 0 or args.patience < 0:
         p.error('Trials/epochs/imgsz/batches must be positive; workers/patience must be non-negative')
@@ -368,6 +383,7 @@ def main():
         p.error('--device must be one GPU index or cpu')
     try:
         dataset_identity(args.data)
+        args.output = (args.output or automatic_output(args)).expanduser().resolve()
         if args.dry_run:
             print(json.dumps({'models_in_order': MODELS, 'rounds': args.trials,
                               'total_trials': len(MODELS)*args.trials, 'max_epochs_per_trial': args.epochs,

@@ -103,6 +103,37 @@ class SearchIntegrationTests(unittest.TestCase):
             self.run_fake(args, gpu)
             self.assertEqual(len(gpu.calls), count)  # Completed search performs no new GPU stages.
 
+    def test_baseline_and_batch_anchors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), trials=5, test_policy='final'), FakeGPU()
+            self.run_fake(args, gpu)
+            jobs = [j for j in gpu.calls if j['phase'] == 'train' and j['model'] == 'yolov8n.pt']
+            self.assertEqual(jobs[0]['params'], {'batch': 64, 'optimizer': 'auto'})
+            self.assertEqual([j['batch'] for j in jobs[1:4]], [64, 128, 256])
+            for job in jobs[1:4]:
+                self.assertEqual(job['params']['optimizer'], 'AdamW')
+                self.assertEqual(job['params']['lr0'], .001)
+            self.assertEqual(jobs[4]['params']['optimizer'], 'AdamW')
+            self.assertTrue(1e-4 <= jobs[4]['params']['lr0'] <= 3e-3)
+            self.assertIn(jobs[4]['batch'], [64, 128, 256])
+            records = json.loads((args.output/'summary.json').read_text())['iterations']
+            self.assertEqual(records[0]['params']['optimizer'], 'auto')
+            self.assertEqual(records[4]['params']['optimizer'], 'AdamW')
+            self.assertEqual(len([j for j in gpu.calls if j['phase'] == 'test']), 2)
+
+    def test_automatic_name_stable_for_resume_but_changes_with_experiment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp))
+            original = search_yolo.automatic_output(args)
+            args.trials = 20
+            args.workers = 16
+            self.assertEqual(search_yolo.automatic_output(args), original)
+            args.epochs += 1
+            self.assertNotEqual(search_yolo.automatic_output(args), original)
+            args.epochs -= 1
+            args.data.write_text(args.data.read_text().replace('cat', 'dog'))
+            self.assertNotEqual(search_yolo.automatic_output(args), original)
+
     def test_explicit_batch_disables_search_and_survives_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             args, gpu = self.args(Path(tmp)), FakeGPU()
@@ -131,9 +162,9 @@ class SearchIntegrationTests(unittest.TestCase):
             gpu.kill_train_once = True
             with self.assertRaises(search_yolo.JobError):
                 self.run_fake(args, gpu)
-            before = json.loads((args.output/'models/yolov8n/trial_0000/config.json').read_text())
+            before = json.loads((args.output/'v8n/t000/config.json').read_text())
             self.run_fake(args, gpu)
-            after = json.loads((args.output/'models/yolov8n/trial_0000/config.json').read_text())
+            after = json.loads((args.output/'v8n/t000/config.json').read_text())
             self.assertEqual(before, after)
             self.assertEqual(len(json.loads((args.output/'summary.json').read_text())['iterations']), 4)
 
