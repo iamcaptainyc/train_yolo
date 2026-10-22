@@ -25,6 +25,7 @@ from lila_state import (
     record_key,
     relative_paths,
     label_text,
+    check_label_precision,
 )
 import yaml
 from tqdm import tqdm
@@ -425,6 +426,7 @@ def validate_record(record, class_ids, plan_only=False, strict_boxes=False, stat
                     state.put("geometry", record_key(record), geometry_stamp, geometry)
             record["labels"] = [tuple(b) for b in geometry["labels"]]
             count = geometry["count"]
+            check_label_precision(record["labels"])
             if count and strict_boxes:
                 raise ValueError(
                     "Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping"
@@ -537,6 +539,7 @@ def prepare(
     workers=8,
     state=None,
     auto_clean=False,
+    resume_output=False,
 ):
     fractions = split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -557,6 +560,10 @@ def prepare(
     if not names:
         raise ValueError("No positive classes remain")
     class_ids = {name: index for index, name in enumerate(names)}
+    if resume_output and not getattr(state, 'compact', False):
+        raise ValueError(
+            '--resume-output requires compact checkpoints; full validation will not run'
+        )
     if getattr(state, 'compact', False):
         state.prepare_batches(records)
     clipped, missing, unknown_dimensions = 0, [], 0
@@ -567,24 +574,30 @@ def prepare(
         strict_boxes=strict_boxes,
         state=state,
     )
-    try:
-        with tqdm(
-            total=len(records),
-            desc="Validate and hash" if not plan_only else "Plan labels",
-            unit="img",
-        ) as progress, closing(
-            (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
-                function, records, 1 if plan_only else workers, progress
-            )
-        ) as results:
-            for count, unknown, issue in results:
-                clipped += count
-                unknown_dimensions += unknown
-                if issue is not None:
-                    missing.append(issue)
-    finally:
-        if state:
-            state.export_errors("validation", records)
+    if resume_output:
+        from lila_resume_output import restore_written
+
+        clipped, missing = restore_written(records, state, class_ids, strict_boxes)
+        state.export_errors('validation', records)
+    else:
+        try:
+            with tqdm(
+                total=len(records),
+                desc="Validate and hash" if not plan_only else "Plan labels",
+                unit="img",
+            ) as progress, closing(
+                (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
+                    function, records, 1 if plan_only else workers, progress
+                )
+            ) as results:
+                for count, unknown, issue in results:
+                    clipped += count
+                    unknown_dimensions += unknown
+                    if issue is not None:
+                        missing.append(issue)
+        finally:
+            if state:
+                state.export_errors("validation", records)
     rejected = [r for r in records if r.get("validation_error")]
     if missing and not auto_clean:
         raise ValueError(
@@ -594,25 +607,36 @@ def prepare(
         )
     if auto_clean:
         records = [r for r in records if not r.get("validation_error")]
-        # An exact duplicate with conflicting annotations has no defensible winner.
-        variants = defaultdict(set)
-        for r in records:
-            variants[r["digest"]].add(signature(r["labels"]))
-        conflicts = {key for key, values in variants.items() if len(values) > 1}
-        for r in records:
-            if r["digest"] in conflicts:
-                r["validation_error"] = (
-                    "Identical image with conflicting annotations; excluded all versions"
-                )
-                rejected.append(r)
-                if state:
-                    state.error("validation", r, r["validation_error"])
+        if not resume_output:
+            # An exact duplicate with conflicting annotations has no defensible winner.
+            variants = defaultdict(set)
+            for r in records:
+                variants[r["digest"]].add(signature(r["labels"]))
+            conflicts = {key for key, values in variants.items() if len(values) > 1}
+            for r in records:
+                if r["digest"] in conflicts:
+                    r["validation_error"] = (
+                        "Identical image with conflicting annotations; excluded all versions"
+                    )
+                    rejected.append(r)
+                    if state:
+                        state.error("validation", r, r["validation_error"])
         records = [r for r in records if not r.get("validation_error")]
         if state:
             state.export_errors("validation", records + rejected)
+    if state:
+        for r in rejected:
+            # A validation exclusion supersedes an earlier failed write/output audit.
+            state.clear_error('write', r)
+            state.clear_error('audit', r)
     if not records or not any(r["labels"] for r in records):
         raise ValueError("No valid positive images remain after filtering")
-    components = split_records(records, val_fraction, seed, test_fraction)
+    if resume_output:
+        from lila_resume_output import restore_components
+
+        components = restore_components(records)
+    else:
+        components = split_records(records, val_fraction, seed, test_fraction)
     overlaps = split_overlap(records)
     if any(n for pair in overlaps.values() for n in pair.values()):
         raise ValueError(f"Cross-split grouping overlap: {overlaps}")
@@ -680,7 +704,19 @@ def prepare(
             "plan_only": plan_only,
             "image_files_verified": not plan_only,
             "plan_positive_images_needing_dimensions": unknown_dimensions,
-            "sha256_overlap_checked": not plan_only,
+            "sha256_overlap_checked": not plan_only and not resume_output,
+            "resumed_written_output": resume_output,
+            "prior_sha256_grouping_preserved": resume_output,
+            "group_component_basis": (
+                'camera_sequence_only'
+                if resume_output
+                else 'camera_sequence_and_content_hash'
+            ),
+            "previous_grouping_evidence": (
+                state.previous_written_report['cross_split_overlap']
+                if resume_output
+                else None
+            ),
             "missing_classes": {
                 s: sorted(set(names) - stats[s]["boxes"].keys()) for s in stats
             },
@@ -729,18 +765,27 @@ def prepare(
                 )
     if not plan_only:
         used_modes = Counter()
-        with tqdm(
-            total=len(records), desc="Write YOLO", unit="img"
-        ) as progress, closing(
-            (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
-                partial(write_record, output=output, copy_mode=copy_mode, state=state),
-                records,
-                workers,
-                progress,
+        if resume_output:
+            used_modes.update(r['_resume_storage'] for r in records)
+            print(
+                'Validate and hash skipped; existing images and train/val/test assignments reused.',
+                flush=True,
             )
-        ) as results:
-            for mode in results:
-                used_modes[mode] += 1
+        else:
+            with tqdm(
+                total=len(records), desc="Write YOLO", unit="img"
+            ) as progress, closing(
+                (state.map_tasks if getattr(state, 'compact', False) else bounded_map)(
+                    partial(
+                        write_record, output=output, copy_mode=copy_mode, state=state
+                    ),
+                    records,
+                    workers,
+                    progress,
+                )
+            ) as results:
+                for mode in results:
+                    used_modes[mode] += 1
         report["image_storage_modes"] = dict(used_modes)
         (output / "report.json").write_text(
             json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"

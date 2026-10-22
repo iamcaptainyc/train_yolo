@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -60,6 +61,23 @@ def label_text(record):
         str(b[0]) + " " + " ".join(f"{v:.8f}" for v in b[1:]) + "\n"
         for b in record["labels"]
     )
+
+
+def check_label_precision(labels):
+    """Check the actual eight-decimal numbers consumed by YOLO, including cache hits."""
+    for number, box in enumerate(labels, 1):
+        values = tuple(float(f'{value:.8f}') for value in box[1:])
+        if len(values) != 4 or not all(
+            math.isfinite(v) and 0 <= v <= 1 for v in values
+        ):
+            raise ValueError(
+                f'Invalid serialized YOLO coordinates at row {number}: {values}'
+            )
+        if min(values[2:]) <= 0:
+            raise ValueError(
+                f'BBox collapses to zero width/height at 8-decimal YOLO precision, row {number}: '
+                f'original normalized coordinates={box[1:]}, serialized={values}; exclude whole image'
+            )
 
 
 def atomic_text(path, text):

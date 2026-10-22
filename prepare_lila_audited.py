@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
 import math
+import sys
 from pathlib import Path
 from urllib.parse import quote
 
@@ -29,7 +30,13 @@ def cached_audit(record, output, names, mapping, allow_clipping=False, state=Non
     if getattr(state, 'compact', False):
         try:
             state.refresh_source(record)
-            reuse = state._passed(record, 'audit')
+            if getattr(state, 'resumed_written', False):
+                from lila_resume_output import verify_existing_image
+
+                verify_existing_image(record, output_paths(output, record)[0], state)
+                reuse = True
+            else:
+                reuse = state._passed(record, 'audit')
             row = audit_one(
                 record,
                 output,
@@ -116,7 +123,9 @@ def decode_label(path, width, height, names):
             not all(math.isfinite(x) and 0 <= x <= 1 for x in (cx, cy, w, h))
             or min(w, h) <= 0
         ):
-            raise ValueError(f'Invalid YOLO coordinates {path}:{number}')
+            raise ValueError(
+                f'Invalid YOLO coordinates {path}:{number}: {line!r}; normalized center must be in [0,1] and width/height in (0,1]'
+            )
         result.append(
             {
                 'line': number,
@@ -141,8 +150,11 @@ def audit_one(
     image_path, label_path = output_paths(output, record)
     if verify_image_hash and sha256(image_path) != record['digest']:
         raise ValueError(f'Output image bytes differ from input: {image_path}')
-    with Image.open(image_path) as image:
-        width, height = image.size
+    if record.get('_resume_storage'):
+        width, height = record['actual_dimensions']
+    else:
+        with Image.open(image_path) as image:
+            width, height = image.size
     decoded = decode_label(label_path, width, height, names)
     class_ids = {name: i for i, name in enumerate(names)}
     expected = defaultdict(list)
@@ -612,6 +624,7 @@ def make_auditor(
                             "lila_parallel.py",
                             "lila_state.py",
                             "lila_compact.py",
+                            "lila_resume_output.py",
                         )
                     },
                 },
@@ -849,9 +862,16 @@ def make_auditor(
             "images_verified": len(records),
             "processing_workers": workers,
             "max_in_flight_tasks": 2 * workers if workers > 1 else 1,
-            "unique_image_sha256": len({r["digest"] for r in records}),
-            "duplicate_image_records": len(records)
-            - len({r["digest"] for r in records}),
+            "unique_image_sha256": (
+                None
+                if report.get("resumed_written_output")
+                else len({r["digest"] for r in records})
+            ),
+            "duplicate_image_records": (
+                None
+                if report.get("resumed_written_output")
+                else len(records) - len({r["digest"] for r in records})
+            ),
             "boxes_verified": boxes,
             "maximum_roundtrip_error_pixels": max_error,
             "maximum_input_clipping_pixels": max_clipping,
@@ -866,7 +886,18 @@ def make_auditor(
             ),
             "cross_split_overlap": overlaps,
             "preview_images": len(previews),
-            "all_output_image_hashes_match": True,
+            "all_output_image_hashes_match": (
+                None if report.get("resumed_written_output") else True
+            ),
+            "all_output_images_match_source": True,
+            "image_verification": (
+                'hardlink_identity_or_prior_copy_audit_or_byte_comparison'
+                if report.get('resumed_written_output')
+                else 'sha256'
+            ),
+            "prior_sha256_grouping_preserved": report.get(
+                'resumed_written_output', False
+            ),
             "taxonomy_ancestor_conflicts": 0,
             "allow_one_pixel_clipping": allow_clipping,
         }
@@ -898,6 +929,14 @@ def make_auditor(
             )
             path.write_text(text, encoding='utf-8')
         with (output / "AUDIT_REPORT.md").open("a", encoding="utf-8") as stream:
+            if report.get('resumed_written_output'):
+                stream.write('\n## Resume from completed YOLO output\n\n')
+                stream.write(
+                    'Input image decoding and input image hashing were skipped. Existing split assignments were preserved; camera/sequence overlap was checked again. Previous content-hash grouping was reused from unchanged complete input batch checkpoints. No new unique-image SHA count is claimed.\n\n'
+                )
+                stream.write(
+                    'Output images were verified by hardlink identity, reused completed copy audits with matching size/mtime, or byte comparison for copies without a reusable audit. All retained label coordinates were independently decoded again.\n'
+                )
             stream.write("\n## Automatic cleanup and checkpoints\n\n")
             stream.write(
                 f"Automatically excluded images: {len(automatic)}. One-pixel clipped boxes: {report['clipped_boxes_within_one_pixel']}.\n\n"
@@ -940,6 +979,7 @@ def _merge(
     workers=8,
     auto_clean=True,
     state=None,
+    resume_output=False,
 ):
     split_fractions(val_fraction, test_fraction)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -978,10 +1018,15 @@ def _merge(
         workers=workers,
         state=state,
         auto_clean=auto_clean,
+        resume_output=resume_output,
     )
 
 
 def merge(source, output, *, recheck_all=False, checkpoint_mode='compact', **options):
+    if options.get('resume_output') and (recheck_all or checkpoint_mode != 'compact'):
+        raise ValueError(
+            '--resume-output cannot use --recheck-all or --detailed-audit; full validation will not run'
+        )
     config = {
         k: options.get(k, default)
         for k, default in {
@@ -1058,6 +1103,11 @@ def main():
         action='store_true',
         help='Opt in to persistent per-image cache and full box/manifest logs; default saves batch progress and exceptions only',
     )
+    parser.add_argument(
+        '--resume-output',
+        action='store_true',
+        help='Resume completed Write YOLO outputs, preserve splits, and NEVER run input Validate and hash',
+    )
     args = parser.parse_args()
     try:
 
@@ -1067,6 +1117,41 @@ def main():
                 raise ValueError("JSON options must contain an object")
             return value
 
+        restored_group_map = load(args.group_map)
+        if args.resume_output:
+            saved = load(args.output / '.lila-state/run.json')['config']
+
+            def provided(flag):
+                return any(
+                    arg == flag or arg.startswith(flag + '=') for arg in sys.argv[1:]
+                )
+
+            for field in (
+                'source',
+                'datasets',
+                'val_fraction',
+                'test_fraction',
+                'seed',
+                'copy_mode',
+            ):
+                if not provided('--' + field.replace('_', '-')) and field in saved:
+                    setattr(
+                        args,
+                        field,
+                        Path(saved[field]) if field == 'source' else saved[field],
+                    )
+            if not provided('--group-map'):
+                restored_group_map = saved.get('group_map')
+            if not provided('--exclude-category'):
+                args.exclude_category = saved.get('exclusions', [])
+            provenance_path = args.output / 'audit_sources.json'
+            if not provided('--taxonomy-file') and provenance_path.is_file():
+                args.taxonomy_file = Path(load(provenance_path)['taxonomy_file'])
+            print(
+                'Restored source, class/split settings and copy mode from the existing output.',
+                flush=True,
+            )
+
         merge(
             args.source,
             args.output,
@@ -1074,7 +1159,7 @@ def main():
             taxonomy_file=args.taxonomy_file,
             original_files=load(args.original_files),
             exclusions=args.exclude_category,
-            group_map=load(args.group_map),
+            group_map=restored_group_map,
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
             seed=args.seed,
@@ -1084,6 +1169,7 @@ def main():
             allow_clipping=not args.strict,
             auto_clean=not args.strict,
             recheck_all=args.recheck_all,
+            resume_output=args.resume_output,
             checkpoint_mode='detailed' if args.detailed_audit else 'compact',
         )
         print("Audit passed. Report: " + str(args.output.resolve() / "AUDIT_REPORT.md"))

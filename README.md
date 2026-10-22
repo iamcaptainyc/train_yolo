@@ -297,3 +297,5 @@ python -m unittest discover -s tests -v
 python -m pip install -r requirements-lila.txt
 python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yolo_auto --copy-mode hardlink --workers 16
 ```
+
+若 `Write YOLO` 已到 100%，后面的输出审计才失败：更新后在原命令末尾加 `--resume-output`，保留原输出目录和其他参数。此模式直接恢复既有划分和标签审计，禁止进入全量输入图片解码/哈希阶段。见 [已写出结果直接恢复](docs/lila_audited_merge.md#write-yolo-已完成输出审计失败直接恢复输出)。

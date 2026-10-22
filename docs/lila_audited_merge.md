@@ -163,6 +163,7 @@ python train.py --mode val --split test --data datasets/lila_yolo_90505/data.yam
 
 - 损坏/截断、无法解码、缺失的图片自动排除；不尝试用宽松解码掩盖损坏。
 - 实际尺寸与标注不符、EXIF 未归一化、不可安全修复的标注，整张图片排除。
+- 写入前核对实际保留 8 位小数后的 YOLO 数值；极小框若舍入成零宽/零高，会排除整张图片并记录原因，避免直到最终审计才失败。旧断点和缓存复用时同样执行这条规则，不需要因此重新解码所有图片。
 - 至多 1 像素的轻微越界自动裁剪；完全同类同位置重复框自动去重。相同图片内容却有冲突标注时，相关版本全部排除，不猜哪一份正确。
 - 原图不改写、不删除；“丢弃”仅表示不纳入本次 YOLO 输出，不能把有问题的正样本改为空标签负样本。
 - 保留图片按相机/序列/内容哈希重新分组，以 90/5/5 为目标比例，不强行拆散组。
@@ -197,3 +198,22 @@ python prepare_lila_audited.py --source datasets/lila \
 python prepare_lila_audited.py --source datasets/lila \
   --output datasets/lila_yolo_auto --copy-mode hardlink --workers 16 --recheck-all
 ```
+
+## Write YOLO 已完成、输出审计失败：直接恢复输出
+
+如果日志已经显示 `Write YOLO: 100%`，随后 `Independent output audit` 失败，不必再运行整批输入图片的 `Validate and hash`。更新代码后，在**上次完整命令末尾加 `--resume-output`**；其余参数尤其 `--source`、`--output`、`--copy-mode`、数据集列表和 seed 保持原值。
+
+也可以只指定旧输出目录；程序自动恢复保存的源目录、数据集列表、复制模式、seed、划分比例和分组设置：
+
+```bash
+git pull --ff-only
+python prepare_lila_audited.py --output yolo_datasets/lila --resume-output --workers 16
+```
+
+此模式明确禁止进入输入图片解码/哈希重建，也不会重新划分 train/val/test 或重写整批图片。它会检查已完成的输入批次属性摘要和保存的报告，沿用原输出路径表示的划分；正常保留图片不会换 split。标签从原标注重建核对，异常小框舍入为零时整图排除，缺失/被改坏的标签自动修复。原来已经剔除的坏图继续排除，不再打开它们。
+
+硬链接用文件身份（同设备/inode）直接证明输出内容与原图相同，不需要读取图片内容。复制输出中，原审计已完成且大小/mtime 仍匹配的部分复用原证据；未审计或属性变化的复制图片才逐块比较源/输出字节。仍会读取原始标注、扫描文件属性和标签、重新汇总报告，并为少量预览图片解码。不会承诺耗时为零。
+
+原始按图片 SHA 的分组证据仅在完整输入批次摘要仍匹配、原写出计数完整、来源/类别一致且保留原划分时复用。新报告明确标注证据复用，`sha256_overlap_checked=false`、`prior_sha256_grouping_preserved=true`，不会伪称重新计算了唯一图片 SHA 数量；本次连通组计数指相机/序列连通关系。复制图片复用证据同样依赖文件属性反映外部修改。
+
+如果图片/标注发生变化、写出未完成或缺少可靠进度，此模式会明确报错并保存失败说明，**绝不会自动退回全量 Validate and hash**。不要组合 `--recheck-all` 或 `--detailed-audit`。保留现有输出目录，不要删除图片/标签/进度文件。
