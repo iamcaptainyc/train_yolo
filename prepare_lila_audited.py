@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from contextlib import closing
+from functools import partial
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
@@ -17,6 +19,7 @@ from tqdm import tqdm
 from lila_audit import TAXONOMY, inspect_sources, sha256, taxonomy_mapping
 from prepare_lila import DEFAULT_DATASETS, prepare, split_fractions, split_overlap
 from lila_selection import items
+from lila_parallel import bounded_map
 
 
 def output_paths(output, record):
@@ -482,7 +485,13 @@ def write_markdown(output, inventories, details, report, audit, previews, retain
 
 
 def make_auditor(
-    inventories, details, taxonomy_file, mapping, per_class=1, allow_clipping=False
+    inventories,
+    details,
+    taxonomy_file,
+    mapping,
+    per_class=1,
+    allow_clipping=False,
+    workers=8,
 ):
     def audit(records, legacy_mapping, report, output):
         if report['plan_only']:
@@ -528,6 +537,7 @@ def make_auditor(
                             'prepare_lila_audited.py',
                             'prepare_lila.py',
                             'lila_audit.py',
+                            'lila_parallel.py',
                         )
                     },
                 },
@@ -624,11 +634,21 @@ def make_auditor(
             )
         max_error, max_clipping, duplicates, boxes = 0.0, 0.0, 0, 0
         previews = []
-        with (output / 'box_audit.jsonl').open('w', encoding='utf-8') as stream:
-            for record in tqdm(records, desc='Independent output audit', unit='img'):
-                row = audit_one(
-                    record, output, report['classes'], mapping, allow_clipping
-                )
+        function = partial(
+            audit_one,
+            output=output,
+            names=report['classes'],
+            mapping=mapping,
+            allow_clipping=allow_clipping,
+        )
+        with (
+            (output / 'box_audit.jsonl').open('w', encoding='utf-8') as stream,
+            tqdm(
+                total=len(records), desc='Independent output audit', unit='img'
+            ) as progress,
+            closing(bounded_map(function, records, workers, progress)) as results,
+        ):
+            for record, row in zip(records, results):
                 row['original_annotation_ids'] = inventories[record['dataset']][
                     'raw_annotation_ids'
                 ].get(str(record['image']['id']), [])
@@ -705,6 +725,8 @@ def make_auditor(
                 stream.write(json.dumps(row, ensure_ascii=False) + '\n')
         audit = {
             'images_verified': len(records),
+            'processing_workers': workers,
+            'max_in_flight_tasks': 2 * workers if workers > 1 else 1,
             'unique_image_sha256': len({r['digest'] for r in records}),
             'duplicate_image_records': len(records)
             - len({r['digest'] for r in records}),
@@ -751,8 +773,11 @@ def merge(
     previews_per_class=1,
     allow_clipping=False,
     group_map=None,
+    workers=8,
 ):
     split_fractions(val_fraction, test_fraction)
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError('--workers must be a positive integer')
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError('Output must be empty; choose a new --output directory')
@@ -763,7 +788,13 @@ def merge(
     inventories = inspect_sources(source, datasets or DEFAULT_DATASETS, original_files)
     mapping, details = taxonomy_mapping(inventories, taxonomy_file, exclusions)
     auditor = make_auditor(
-        inventories, details, taxonomy_file, mapping, previews_per_class, allow_clipping
+        inventories,
+        details,
+        taxonomy_file,
+        mapping,
+        previews_per_class,
+        allow_clipping,
+        workers=workers,
     )
     return prepare(
         source,
@@ -777,6 +808,7 @@ def merge(
         group_map=group_map,
         audit_hook=auditor,
         strict_boxes=not allow_clipping,
+        workers=workers,
     )
 
 
@@ -804,6 +836,12 @@ def main():
     parser.add_argument('--test-fraction', type=float, default=0.05)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument(
+        '--workers',
+        type=int,
+        default=8,
+        help='Concurrent validation, writing and audit tasks; 1 runs serially',
+    )
+    parser.add_argument(
         '--copy-mode', choices=['auto', 'hardlink', 'copy'], default='auto'
     )
     parser.add_argument('--previews-per-class', type=int, default=1)
@@ -828,6 +866,7 @@ def main():
             val_fraction=args.val_fraction,
             test_fraction=args.test_fraction,
             seed=args.seed,
+            workers=args.workers,
             copy_mode=args.copy_mode,
             previews_per_class=args.previews_per_class,
             allow_clipping=args.allow_one_pixel_clipping,

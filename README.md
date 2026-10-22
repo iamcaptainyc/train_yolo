@@ -287,4 +287,4 @@ python -m unittest discover -s tests -v
 
 ### LILA 五数据集合并与审计
 
-下载完成后使用 `prepare_lila_audited.py`：按官方分类树处理父子类别，默认按相机/序列连通组划分 train/val/test = 90%/5%/5%，核对原始标注与下载清单，独立反算所有输出框，并生成类别数量、合并规则和框图的 `AUDIT_REPORT.md`。运行与审计口径见 [五数据集审计合并说明](docs/lila_audited_merge.md)。
+下载完成后使用 `prepare_lila_audited.py`：按官方分类树处理父子类别，默认按相机/序列连通组划分 train/val/test = 90%/5%/5%，支持 `--workers 16` 并发校验/哈希/写出/输出审计，核对原始标注与下载清单，独立反算所有输出框，并生成类别数量、合并规则和框图的 `AUDIT_REPORT.md`。运行与审计口径见 [五数据集审计合并说明](docs/lila_audited_merge.md)。

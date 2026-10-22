@@ -14,7 +14,7 @@ python prepare_lila_audited.py \
   --source datasets/lila \
   --output datasets/lila_yolo_90505 \
   --val-fraction 0.05 --test-fraction 0.05 --seed 42 \
-  --copy-mode hardlink --previews-per-class 1
+  --copy-mode hardlink --workers 16 --previews-per-class 1
 ```
 
 审计入口默认按 **train/val/test = 90%/5%/5%** 的目标比例联合分配完整连通组。`--val-fraction`、`--test-fraction` 分别指定验证和测试比例，训练比例为余数；两者之和必须小于 1。
@@ -33,7 +33,11 @@ python prepare_lila_audited.py \
 
 脚本默认 `auto` 优先硬链接，跨文件系统则复制；上面的命令显式使用 `hardlink`，不支持时直接报错，确保不会复制图片。硬链接不再占用一份图片数据空间，但输入和输出共享内容，运行后勿修改原图。`--copy-mode copy` 需要完整图片副本空间。统计去重使用临时 SQLite；图片校验和输出哈希会全量读取图片，耗时与真实 I/O 和解码速度有关，各阶段显示进度。
 
-输出目录必须为空。中断后源数据不变，但部分输出不能用于训练，修复问题后换一个新的 `--output`。只有全部审计通过，才写入最终 `data.yaml`；不是可断点恢复的转换任务。
+`Validate and hash`、`Write YOLO`、`Independent output audit` 现在使用有界线程池，默认 `--workers 8`，上例使用 16。最多保留约 `2 × workers` 个已提交/缓冲任务，不会一次排队几十万张；解码图片同时驻留的数量受线程数限制。`--workers 1` 恢复串行，线程数不改变标签、划分或逐框审计内容。进度按完成任务更新，结果按输入顺序汇总。
+
+提速依赖磁盘吞吐、图片编码与 CPU；110 核不意味着应开 110 个线程。可先用 16，磁盘空闲且内存充足再试 32，内存或 I/O 压力大则降为 8。此处 workers 属于转换脚本，与训练 DataLoader 的 workers 是独立设置。不会跳过图片解码、哈希或原框核验，也不使用仅靠文件时间戳复用哈希的缓存。预览框图与报告汇总按序执行，保证输出顺序可复现。
+
+输出目录必须为空。Ctrl+C 会取消未开始的任务并等待正在执行的文件任务退出，不留下后台写入线程。中断后源数据不变，但部分输出不能用于训练，修复问题后换一个新的 `--output`。只有全部审计通过，才写入最终 `data.yaml`；不是可断点恢复的转换任务。
 
 ## 类别层级怎么处理
 
@@ -148,3 +152,5 @@ ENA24 无可靠分组元数据时整体留在 train；其他数据若也有缺�
 python train.py --mode val --split test --data datasets/lila_yolo_90505/data.yaml \
   --model /你的模型/best.pt --device 0
 ```
+
+正在运行的旧进程不会自动加载新代码。先 Ctrl+C 停止旧进程，再 `git pull --ff-only` 并添加 `--workers 16` 重跑。若此前仍在 Validate and hash 且输出目录未创建/为空，可沿用该输出路径；已有部分文件时必须换空输出目录。此前已做的校验不缓存，重跑会重新全量检查。

@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 import hashlib
+from functools import partial
+from contextlib import closing
 import json
 from itertools import combinations
 import math
@@ -18,6 +20,7 @@ import yaml
 from tqdm import tqdm
 
 from lila_selection import EMPTY_NAMES, EXCLUDED_NAMES, items, safe_name
+from lila_parallel import bounded_map
 
 DEFAULT_DATASETS = ['swg-camera-traps', 'caltech-camera-traps', 'ena24',
                     'oregon-critters', 'nkhotakota-camera-traps']
@@ -314,6 +317,78 @@ def split_records(records, val_fraction, seed, test_fraction=0):
     return len(components)
 
 
+def validate_record(record, class_ids, plan_only=False, strict_boxes=False):
+    """One task owns one record; images are closed before returning to the coordinator."""
+    unknown_dimensions = 0
+    width, height = record['image'].get('width'), record['image'].get('height')
+    try:
+        if not plan_only:
+            with Image.open(record['source']) as image:
+                if image.getexif().get(274, 1) != 1:
+                    raise ValueError(
+                        'EXIF orientation must be normalized before conversion'
+                    )
+                if (width is not None and width != image.width) or (
+                    height is not None and height != image.height
+                ):
+                    raise ValueError(
+                        f'Image dimensions {image.size} differ from metadata {(width, height)}'
+                    )
+                width, height = image.size
+                image.load()
+            # PNG EXIF reads can consume the stream; verify a freshly opened image.
+            with Image.open(record['source']) as image:
+                image.verify()
+            with record['source'].open('rb') as stream:
+                record['digest'] = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if plan_only and record['boxes'] and (not width or not height):
+            # A plan needs class counts, not usable labels; actual conversion reads the image.
+            unknown_dimensions = 1
+            record['labels'], count = [
+                (class_ids[name], 0, 0, 0, 0) for name, _ in record['boxes']
+            ], 0
+        else:
+            record['labels'], count = yolo_boxes(record, width, height, class_ids)
+            if count and strict_boxes:
+                raise ValueError(
+                    'Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping'
+                )
+        return count, unknown_dimensions, None
+    except (OSError, ValueError) as exc:
+        return 0, 0, f'{record["dataset"]}/{record["name"]}: {exc}'
+
+
+def write_record(record, output, copy_mode):
+    # Flatten with a stable digest so JPEG/PNG stems and cross-dataset names cannot collide.
+    key = hashlib.sha256(
+        (record['dataset'] + '/' + record['name']).encode()
+    ).hexdigest()
+    relative = Path(record['dataset']) / (key + record['source'].suffix.lower())
+    image = output / 'images' / record['split'] / relative
+    label = output / 'labels' / record['split'] / relative.with_suffix('.txt')
+    image.parent.mkdir(parents=True, exist_ok=True)
+    label.parent.mkdir(parents=True, exist_ok=True)
+    mode = copy_mode
+    if mode in ('auto', 'hardlink'):
+        try:
+            os.link(record['source'], image)
+            mode = 'hardlink'
+        except OSError:
+            if copy_mode == 'hardlink':
+                raise
+            mode = 'copy'
+    if mode == 'copy':
+        shutil.copy2(record['source'], image)
+    label.write_text(
+        ''.join(
+            str(b[0]) + ' ' + ' '.join(f'{v:.8f}' for v in b[1:]) + '\n'
+            for b in record['labels']
+        ),
+        encoding='utf-8',
+    )
+    return mode
+
+
 def prepare(
     source,
     output,
@@ -328,50 +403,49 @@ def prepare(
     audit_hook=None,
     strict_boxes=False,
     test_fraction=0,
+    workers=8,
 ):
     fractions = split_fractions(val_fraction, test_fraction)
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError('--workers must be a positive integer')
     source, output = Path(source).resolve(), Path(output).resolve()
     if source == output or source in output.parents or output in source.parents:
         raise ValueError('Input and output directories must not contain each other')
     if output.exists() and any(output.iterdir()):
-        raise ValueError(f'Output is non-empty: {output}; choose a new output directory')
-    records, mapping, skipped, fallback = read_records(source, datasets or DEFAULT_DATASETS, class_map, group_map)
+        raise ValueError(
+            f'Output is non-empty: {output}; choose a new output directory'
+        )
+    records, mapping, skipped, fallback = read_records(
+        source, datasets or DEFAULT_DATASETS, class_map, group_map
+    )
     names = sorted({name for r in records for name, _ in r['boxes']})
     if not names:
         raise ValueError('No positive classes remain')
     class_ids = {name: index for index, name in enumerate(names)}
     clipped, missing, unknown_dimensions = 0, [], 0
-    for r in tqdm(records, desc='Validate and hash' if not plan_only else 'Plan labels', unit='img'):
-        width, height = r['image'].get('width'), r['image'].get('height')
-        try:
-            if not plan_only:
-                with Image.open(r['source']) as image:
-                    if image.getexif().get(274, 1) != 1:
-                        raise ValueError('EXIF orientation must be normalized before conversion')
-                    if ((width is not None and width != image.width) or
-                            (height is not None and height != image.height)):
-                        raise ValueError(f'Image dimensions {image.size} differ from metadata {(width, height)}')
-                    width, height = image.size
-                    image.load()
-                # PNG EXIF reads can consume the stream; verify a freshly opened image.
-                with Image.open(r['source']) as image:
-                    image.verify()
-                with r['source'].open('rb') as stream:
-                    r['digest'] = hashlib.file_digest(stream, 'sha256').hexdigest()
-            if plan_only and r['boxes'] and (not width or not height):
-                # A plan needs class counts, not usable labels; actual conversion reads the image.
-                unknown_dimensions += 1
-                r['labels'], count = [(class_ids[name], 0, 0, 0, 0) for name, _ in r['boxes']], 0
-            else:
-                r['labels'], count = yolo_boxes(r, width, height, class_ids)
-                if count and strict_boxes:
-                    raise ValueError('Original bbox needs edge clipping; review it or explicitly use --allow-one-pixel-clipping')
+    function = partial(
+        validate_record,
+        class_ids=class_ids,
+        plan_only=plan_only,
+        strict_boxes=strict_boxes,
+    )
+    with tqdm(
+        total=len(records),
+        desc='Validate and hash' if not plan_only else 'Plan labels',
+        unit='img',
+    ) as progress, closing(
+        bounded_map(function, records, 1 if plan_only else workers, progress)
+    ) as results:
+        for count, unknown, issue in results:
             clipped += count
-        except (OSError, ValueError) as exc:
-            if len(missing) < 20:
-                missing.append(f'{r["dataset"]}/{r["name"]}: {exc}')
+            unknown_dimensions += unknown
+            if issue is not None and len(missing) < 20:
+                missing.append(issue)
     if missing:
-        raise ValueError('Input files or annotations invalid; finish downloads before conversion. First issues:\n'+'\n'.join(missing))
+        raise ValueError(
+            'Input files or annotations invalid; finish downloads before conversion. First issues:\n'
+            + '\n'.join(missing)
+        )
     components = split_records(records, val_fraction, seed, test_fraction)
     overlaps = split_overlap(records)
     if any(n for pair in overlaps.values() for n in pair.values()):
@@ -382,7 +456,9 @@ def prepare(
         digest = r.get('digest')
         if digest is not None:
             if digest in duplicates and duplicates[digest] != r['labels']:
-                raise ValueError(f'Identical image with conflicting annotations: {r["dataset"]}/{r["name"]}')
+                raise ValueError(
+                    f'Identical image with conflicting annotations: {r["dataset"]}/{r["name"]}'
+                )
             duplicates[digest] = r['labels']
     stats = {split: {'images': 0, 'negative_images': 0, 'boxes': Counter(), 'datasets': Counter()} for split in fractions}
     dataset_stats = {d: {s: {'images': 0, 'negative_images': 0, 'boxes': 0} for s in stats} for d in sorted(datasets or DEFAULT_DATASETS)}
@@ -398,7 +474,7 @@ def prepare(
         ds['boxes'] += len(r['labels'])
     if not all(stats[s]['boxes'] for s in stats):
         raise ValueError('Every split must contain positive boxes; adjust grouping or split fractions')
-    report = {'source': str(source), 'seed': seed, 'requested_val_fraction': val_fraction,
+    report = {'source': str(source), 'seed': seed, 'processing_workers': 1 if plan_only else workers, 'requested_val_fraction': val_fraction,
               'actual_val_fraction': stats['val']['images']/len(records), 'groups': components,
               'requested_test_fraction': test_fraction, 'requested_split_fractions': fractions,
               'actual_split_fractions': {s: stats[s]['images']/len(records) for s in stats},
@@ -418,27 +494,9 @@ def prepare(
             stream.write(json.dumps({k: r.get(k) for k in ('dataset', 'name', 'role', 'location', 'sequence', 'group', 'component', 'split', 'digest')})+'\n')
     if not plan_only:
         used_modes = Counter()
-        for r in tqdm(records, desc='Write YOLO', unit='img'):
-            # Flatten with a stable digest so JPEG/PNG stems and cross-dataset names cannot collide.
-            key = hashlib.sha256((r['dataset']+'/'+r['name']).encode()).hexdigest()
-            relative = Path(r['dataset'])/(key+r['source'].suffix.lower())
-            image = output/'images'/r['split']/relative
-            label = output/'labels'/r['split']/relative.with_suffix('.txt')
-            image.parent.mkdir(parents=True, exist_ok=True)
-            label.parent.mkdir(parents=True, exist_ok=True)
-            mode = copy_mode
-            if mode in ('auto', 'hardlink'):
-                try:
-                    os.link(r['source'], image)
-                    mode = 'hardlink'
-                except OSError:
-                    if copy_mode == 'hardlink':
-                        raise
-                    mode = 'copy'
-            if mode == 'copy':
-                shutil.copy2(r['source'], image)
-            used_modes[mode] += 1
-            label.write_text(''.join(str(b[0])+' '+' '.join(f'{v:.8f}' for v in b[1:])+'\n' for b in r['labels']), encoding='utf-8')
+        with tqdm(total=len(records), desc='Write YOLO', unit='img') as progress, closing(bounded_map(partial(write_record, output=output, copy_mode=copy_mode), records, workers, progress)) as results:
+            for mode in results:
+                used_modes[mode] += 1
         report['image_storage_modes'] = dict(used_modes)
         (output/'report.json').write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
         if audit_hook is not None:
@@ -459,6 +517,7 @@ def main():
     p.add_argument('--val-fraction', type=float, default=0.2)
     p.add_argument('--test-fraction', type=float, default=0, help='Optional independent test split; use 0.05 with --val-fraction 0.05 for 90/5/5')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--workers', type=int, default=8, help='Bounded concurrent image validation and writing; use 1 for serial')
     p.add_argument('--copy-mode', choices=['auto', 'copy', 'hardlink'], default='auto')
     p.add_argument('--plan-only', action='store_true', help='Check metadata and plan splits without image I/O or training YAML')
     p.add_argument('--class-map', type=Path, help='JSON object: normalized name or dataset:category_id -> target name (null excludes whole image)')
@@ -472,7 +531,7 @@ def main():
             if overrides[key] is not None and not isinstance(overrides[key], dict):
                 raise ValueError(f'--{key.replace("_", "-")} must contain a JSON object')
         prepare(args.source, args.output, datasets=args.datasets, val_fraction=args.val_fraction,
-                seed=args.seed, copy_mode=args.copy_mode, plan_only=args.plan_only, test_fraction=args.test_fraction, **overrides)
+                seed=args.seed, copy_mode=args.copy_mode, plan_only=args.plan_only, test_fraction=args.test_fraction, workers=args.workers, **overrides)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         p.exit(1, f'Error: {exc}\n')
 

@@ -165,6 +165,63 @@ class AuditedLilaTests(unittest.TestCase):
             for expected in ('test 框', 'test 图片', 'val_vs_test', '90.00%', '5.00%'):
                 self.assertIn(expected, text)
 
+    def test_parallel_conversion_matches_serial_labels_splits_and_box_audit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture(root / 'source', 'caltech-camera-traps', ['opossum', 'bird'])
+            fixture(root / 'source', 'ena24', ['american crow'])
+            reports = []
+            for workers in (1, 4):
+                reports.append(
+                    merge(
+                        root / 'source',
+                        root / f'out_{workers}',
+                        datasets=['caltech-camera-traps', 'ena24'],
+                        copy_mode='copy',
+                        workers=workers,
+                    )
+                )
+            self.assertEqual(reports[0]['stats'], reports[1]['stats'])
+            self.assertEqual(
+                reports[0]['actual_split_fractions'],
+                reports[1]['actual_split_fractions'],
+            )
+            for name in (
+                'split_manifest.jsonl',
+                'box_audit.jsonl',
+                'preview_index.json',
+            ):
+                self.assertEqual(
+                    (root / 'out_1' / name).read_bytes(),
+                    (root / 'out_4' / name).read_bytes(),
+                )
+            for label in (root / 'out_1/labels').rglob('*.txt'):
+                self.assertEqual(
+                    label.read_bytes(),
+                    (root / 'out_4' / label.relative_to(root / 'out_1')).read_bytes(),
+                )
+            self.assertEqual(reports[1]['audit']['processing_workers'], 4)
+            self.assertEqual(reports[1]['audit']['max_in_flight_tasks'], 8)
+
+    def test_parallel_validation_still_rejects_bad_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture(root / 'source', 'caltech-camera-traps', ['opossum'])
+            (root / 'source/caltech-camera-traps/images/frame_5.png').write_bytes(
+                b'corrupt image'
+            )
+            with self.assertRaisesRegex(
+                ValueError, 'Input files or annotations invalid'
+            ):
+                merge(
+                    root / 'source',
+                    root / 'out',
+                    datasets=['caltech-camera-traps'],
+                    copy_mode='copy',
+                    workers=4,
+                )
+            self.assertFalse((root / 'out/data.yaml').exists())
+
     def test_fully_excluded_dataset_still_has_zero_three_way_statistics(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
