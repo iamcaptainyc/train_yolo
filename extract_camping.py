@@ -1,4 +1,4 @@
-"""Extract up to 30,000 AP-10K/Animals-first images with the reviewed 70 camping classes."""
+"""Extract up to 30,000 AP-10K/Animals-first images with the reviewed 68 camping classes."""
 import argparse
 from pathlib import Path
 from fractions import Fraction
@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--lila', type=Path, default=Path('yolo_datasets/lila_camping'))
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'))
     parser.add_argument('--lila-source', type=Path, default=Path('datasets/lila'))
-    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping70_ap10k_30k'))
+    parser.add_argument('--output', type=Path, default=Path('yolo_datasets/camping68_ap10k_30k'))
     parser.add_argument('--max-images', type=int, default=30000, help='Hard total limit INCLUDING negatives; at most 30000')
     parser.add_argument('--class-target', type=int, default=1200, help='Soft image target per class, not a rare-class merging threshold')
     parser.add_argument('--negative-fraction', type=float, default=.05)

@@ -116,16 +116,6 @@
       "group": "小型及其他动物",
       "parent": null
     },
-    "bat": {
-      "chinese": "蝙蝠",
-      "group": "小型及其他动物",
-      "parent": null
-    },
-    "pangolin": {
-      "chinese": "穿山甲",
-      "group": "小型及其他动物",
-      "parent": null
-    },
     "civet": {
       "chinese": "灵猫",
       "group": "小型及其他动物",
@@ -395,6 +385,7 @@
   "excluded": [
     "aardvark",
     "animal",
+    "bat",
     "galago",
     "gibbon",
     "harbor_seal",
@@ -403,6 +394,7 @@
     "mammal",
     "mule",
     "mustelid",
+    "pangolin",
     "person",
     "rodent",
     "sea_lion",

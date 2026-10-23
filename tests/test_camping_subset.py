@@ -22,10 +22,10 @@ def record(i, name, source='animals', split='train', component=None):
 
 
 class SubsetTests(unittest.TestCase):
-    def test_70_classes_and_safe_boundaries(self):
+    def test_68_classes_and_safe_boundaries(self):
         rules = policy()
         meta = merger.class_metadata()
-        self.assertEqual(len(rules['classes']), 70)
+        self.assertEqual(len(rules['classes']), 68)
         self.assertIsNone(target_name('hyena', {}, rules))
         self.assertIsNone(target_name('spotted_hyena', {'spotted_hyena': {'parent': 'hyena'}}, rules))
         for name in ('rabbit', 'mouse', 'cat', 'dog', 'wolf', 'sheep', 'goat', 'cattle', 'bear', 'polar_bear'):
@@ -50,7 +50,7 @@ class SubsetTests(unittest.TestCase):
             self.assertEqual([r['rows'][0][0] for r in kept],list(expected.values()))
             for r in kept:
                 self.assertEqual(r['rows'][0][1],r['source_rows'][0][1])
-        for name in ('snail','shark','seal','sea_lion','harbor_seal'):
+        for name in ('snail','shark','seal','sea_lion','harbor_seal','bat','pangolin'):
             kept,rejected,_=remap([record(0,['rabbit',name])],meta)
             self.assertFalse(kept)
             self.assertEqual(len(rejected),1)

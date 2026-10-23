@@ -597,7 +597,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 for remainder in refinement.get('parent_remainders', {}).values():
                     for origin in remainder['sources']:
                         if origin['reason'] == 'below_min_images_folded_to_parent':
-                            origin['reason'] = 'reviewed_camping70_class_mapping'
+                            origin['reason'] = 'reviewed_camping68_class_mapping'
 
             inventory = signature([refinement, sampling, grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
             old_inventory = previous.get('inventory') if previous else None
