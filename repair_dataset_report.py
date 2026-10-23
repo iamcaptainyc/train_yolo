@@ -71,6 +71,7 @@ def recount(root, ops):
         else:
             atomic_json(baseline, {'classes': list(names.values())})
     report = json.loads(baseline.read_text(encoding='utf-8')) if baseline.exists() else {'classes': list(names.values())}
+    names = {idx: name for idx, name in names.items() if idx >= report.get('class_id_start', 0)}
     # Original sampling/provenance/audit remain available in the immutable baseline.
     # Retire derived fields that cannot be rebuilt without original group manifests.
     historical = {}

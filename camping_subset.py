@@ -242,6 +242,9 @@ def markdown(report):
              '这是来源优先，不是图像清晰度评分。没有重新解码或哈希图片。', '',
              f"LILA 框面积门槛：**严格大于 {report.get('compact', {}).get('lila_area_filter', {}).get('minimum_bbox_area_ratio', 0):.6f}**；任意一个正框达标即保留整图和全部框；全部不达标才排除。原本空标签的负样本不受面积门槛限制。", '',
              '## 来源和划分', '', '| 来源 | 划分 | 图片 | 负样本 | 框 |', '| --- | --- | ---: | ---: | ---: |']
+    start = report.get('class_id_start', 0)
+    if start:
+        lines[4:4] = [f'动物类别 ID 从 **{start}** 开始。0–{start-1} 为 reserved 预留编号，不计入动物类别数；YOLO 输出通道数为 {start + len(report["classes"])}。', '']
     for source, splits in report['dataset_split_stats'].items():
         for split, row in splits.items():
             lines.append(f"| {source} | {split} | {row['images']} | {row['negative_images']} | {row['boxes']} |")
@@ -251,7 +254,7 @@ def markdown(report):
               '同图多类分别计数，列相加不等于总图数。无样本类别不分配训练 ID，不制造空类别。', '',
               '| ID | 中文 | 英文 | AP-10K | Animals | LILA | 总图片 | train | val | test |',
               '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
-    ids = {n: i for i, n in enumerate(report['classes'])}
+    ids = report.get('class_ids', {n: i for i, n in enumerate(report['classes'])})
     for n, info in rules['classes'].items():
         counts = [stats[s]['class_images'].get(n, 0) for s in ('train', 'val', 'test')]
         source = report['compact']['class_source_images'].get(n, {})

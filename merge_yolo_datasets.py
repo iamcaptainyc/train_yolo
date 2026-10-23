@@ -354,7 +354,7 @@ def make_report(datasets, records, excluded, ids, metadata, reused, hashes, cont
         d['boxes'] += len(r['rows'])
     return {
         'schema': 1, 'generated_at_utc': datetime.now(timezone.utc).isoformat(),
-        'classes': list(ids), 'stats': stats, 'dataset_split_stats': sources,
+        'classes': list(ids), 'class_ids': dict(ids), 'class_id_start': min(ids.values(), default=0), 'stats': stats, 'dataset_split_stats': sources,
         'source_yaml_files': {d['alias']: str(d['yaml']) for d in datasets},
         'source_class_mapping': {d['alias']: [
             {'source_id': i, 'source_name': name, 'target': d['mapping'][i], 'target_id': ids.get(d['mapping'][i])}
@@ -389,7 +389,8 @@ def markdown(report):
     lines += ['', '## 统一英文类别（按图片数）', '',
               '同一图片中同类有多个框也只计一张；多类图片分别计入各类别。图片数按输入图片记录计，不声称是内容去重后的唯一图片数。', '',
               '| 新 ID | 英文类别 | 中文含义 | 总图片 | train 图片 | val 图片 | test 图片 | 总框 |', '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |']
-    for i, name in enumerate(report['classes']):
+    for name in report['classes']:
+        i = report.get('class_ids', {}).get(name, report['classes'].index(name))
         counts = [report['stats'][s]['class_images'].get(name, 0) for s in SPLITS]
         boxes = sum(report['stats'][s]['boxes'].get(name, 0) for s in SPLITS)
         lines.append(f"| {i} | {name} | {report['hierarchy'][name].get('chinese', '')} | {sum(counts)} | " + ' | '.join(map(str, counts)) + f' | {boxes} |')
@@ -459,6 +460,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
           preserve_splits=False, min_class_boxes=None, val_fraction=.05,
           test_fraction=.05, seed=42, lila_source=None, group_map=None,
           min_class_images=100, max_class_images=10000, cap_class_images=0, subset_options=None, ap10k=None, ap10k_split=1):
+    class_id_start = (subset_options or {}).get('class_id_start', 0)
+    if isinstance(class_id_start, bool) or not isinstance(class_id_start, int) or class_id_start < 0:
+        raise ValueError('--class-id-start must be a nonnegative integer')
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
     if min_class_boxes is not None:  # Deprecated spelling; now always counts images.
@@ -591,7 +595,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             names = sorted({name for r in records for name, _ in r['rows']})
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
                 raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
-            ids = {name: i for i, name in enumerate(names)}
+            ids = {name: i for i, name in enumerate(names, start=class_id_start)}
             refinement = finish_refinement_report(refinement, records, metadata)
             if compact_info is not None:
                 for remainder in refinement.get('parent_remainders', {}).values():
@@ -686,7 +690,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 atomic_text(output / 'MERGE_REPORT.md', text)
             else:
                 atomic_text(output / 'MERGE_REPORT.md', markdown(report))
-            atomic_text(output / 'data.yaml', yaml.safe_dump({'path': output.as_posix(), **{s: 'images/' + s for s in SPLITS}, 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True))
+            yaml_names = {i: f'reserved_{i}' for i in range(class_id_start)}
+            yaml_names.update({i: name for name, i in ids.items()})
+            atomic_text(output / 'data.yaml', yaml.safe_dump({'path': output.as_posix(), **{s: 'images/' + s for s in SPLITS}, 'nc': len(yaml_names), 'names': yaml_names}, sort_keys=False, allow_unicode=True))
             state_value['status'] = 'COMPLETE'
             atomic_text(state_path, json.dumps(state_value, ensure_ascii=False, indent=2))
             (output / 'PROCESSING_REPORT.md').unlink(missing_ok=True)

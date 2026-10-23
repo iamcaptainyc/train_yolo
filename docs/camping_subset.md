@@ -116,3 +116,15 @@ python tune.py --data yolo_datasets/camping68_ap10k_30k/data.yaml --batch 128 --
 | 蜗牛、鲨鱼、海豹、海狮（含 harbor_seal）、蝙蝠、穿山甲 | 排除 |
 
 以上为用户指定的应用分组，不表示同一生物物种。统一名称后再计算类别配额，因此合并后的类共用一份抽样配额。混有排除类别的图片整图排除，不能删框后作为背景；原图保留。三来源仍最多抽取 30000 张（含负样本），不足时如实报告，不重复图片凑数。
+
+## 类别起始 ID
+
+`--class-id-start 10` 将实际动物类别按名称排序后从 10 编号，默认 0。标签第一列、data.yaml、class_mapping.json 和报告同步使用新 ID，框坐标不变。
+
+```bash
+python extract_camping.py --ap10k /你的路径/ap-10k --class-id-start 10 --workers 16
+```
+
+未指定 `--output` 时，输出自动命名为 `yolo_datasets/camping68_ap10k_30k_id10/`。起始 ID 参与检查点身份，改变 ID 必须使用新输出目录。
+
+YOLO 要求类别名称从 0 连续到 nc-1，所以 data.yaml 中 0–9 使用 reserved_0…reserved_9 占位，没有训练标注；实际有 68 类时 nc=78。报告仍只统计实际动物类别。这会增加检测头的输出类别数，不代表已经训练了预留的十类。原始数据不会被改写。
