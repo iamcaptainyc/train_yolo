@@ -25,6 +25,7 @@ def delta(record, baseline):
 
 def write_report(root, records, winners, models, complete=False):
     root = Path(root)
+    sizes = [size for size in ('n', 's') if any(Path(model).stem[-1] == size for model in models)]
     baselines = {r['model']: r for r in records if r['trial'] == 0}
     best = {}
     for model in models:
@@ -36,10 +37,10 @@ def write_report(root, records, winners, models, complete=False):
              f'已记录 {len(records)} 个候选，其中 {sum(usable(r) for r in records)} 个完成训练与验证。', '',
              '选优依据：**验证集 mAP50-95，越高越好**。测试集仅用于最终评估，不参与排名。', '',
              '所有精度指标以百分数显示；相对基线变化用百分点表示。空白项（—）表示没有有效结果，不是 0。', '',
-             '## 最佳 n / s 模型', '',
+             '## 所选尺寸的最佳模型', '',
              '| Size | 推荐模型 | 候选 | 验证 mAP50-95 | 较同模型基线 | 测试状态 | 权重 |',
              '| --- | --- | --- | --- | --- | --- | --- |']
-    for size in ('n', 's'):
+    for size in sizes:
         r = winners.get(size)
         if not r:
             lines.append(f'| {size} | 暂无有效候选 | — | — | — | 未评估 | — |')
@@ -54,7 +55,7 @@ def write_report(root, records, winners, models, complete=False):
             values = ' | '.join(metric(r, split, key) for key in ('map50_95', 'map50', 'precision', 'recall'))
             lines.append(f'| {size} | {label} | {values} |')
     lines += ['', '## 按 Size 比较架构', '']
-    for size in ('n', 's'):
+    for size in sizes:
         lines += [f'### {size} 模型', '', '| 模型 | 最佳候选 | 基线验证 mAP50-95 | 最佳验证 mAP50-95 | 提升 | 结论 |',
                   '| --- | --- | --- | --- | --- | --- |']
         for model in models:

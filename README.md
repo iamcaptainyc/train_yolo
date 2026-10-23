@@ -324,3 +324,5 @@ Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`�
 ## 提取不超过 30000 张的 81 类小数据集
 
 运行 `python extract_camping.py --ap10k /路径/ap-10k --workers 16`，先统一 AP-10K、Animals Detection 与已处理的 LILA，再全局均衡抽样，最后按分组重新划分。优先 AP-10K→Animals→LILA；LILA 至少一个框的面积占比严格大于 1/16 才保留整图和全部框。硬链接，总数含负样本不超过 30000，详见 [小数据集提取说明](docs/camping_subset.md)。
+
+只训练指定模型：`python tune.py --data 数据集/data.yaml --models yolo11s.pt`；两个模型用 `--models yolo11n.pt yolo11s.pt`。不指定则训练原四个模型。模型选择参与自动命名；切换模型组合时不复用旧的显式输出目录。`--trials` 仍是每个模型的试验总次数。

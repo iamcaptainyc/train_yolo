@@ -74,6 +74,23 @@ class SearchIntegrationTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             search_yolo.run(args)
 
+    def test_one_or_two_selected_models_and_resume_identity(self):
+        for chosen in [('yolo11s.pt',), ('yolo11n.pt', 'yolo11s.pt')]:
+            with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as tmp:
+                args, gpu = self.args(Path(tmp)), FakeGPU()
+                full_output = search_yolo.automatic_output(args)
+                args.models = chosen
+                self.assertNotEqual(full_output, search_yolo.automatic_output(args))
+                self.run_fake(args, gpu)
+                self.assertEqual([j['model'] for j in gpu.calls if j['phase'] == 'train'], list(chosen))
+                report = json.loads((args.output/'summary.json').read_text())
+                self.assertEqual({r['model'] for r in report['iterations']}, set(chosen))
+                self.run_fake(args, gpu)
+                self.assertEqual(len([j for j in gpu.calls if j['phase'] == 'train']), len(chosen))
+                args.models = search_yolo.MODELS
+                with self.assertRaisesRegex(ValueError, 'configuration/data changed'):
+                    self.run_fake(args, gpu)
+
     def test_round_robin_resume_and_validation_only_selection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

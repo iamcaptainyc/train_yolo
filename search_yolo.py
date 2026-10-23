@@ -24,6 +24,12 @@ SPACE_VERSION = 3
 BATCH_CHOICES = [64, 128, 256]
 
 
+def selected_models(args):
+    requested = getattr(args, 'models', MODELS)
+    # Canonical order makes equivalent selections share a resumable experiment.
+    return tuple(model for model in MODELS if model in requested)
+
+
 def trial_directory(root, model, number):
     return root/Path(model).stem.replace('yolov', 'v').replace('yolo', 'v')/f't{number:03d}'
 
@@ -31,7 +37,7 @@ def trial_directory(root, model, number):
 def experiment_identity(args):
     return json.loads(json.dumps({
         'data': dataset_identity(args.data), 'weights_dir': str(args.weights_dir),
-        'models': MODELS, 'epochs': args.epochs, 'imgsz': args.imgsz, 'batch': args.batch,
+        'models': selected_models(args), 'epochs': args.epochs, 'imgsz': args.imgsz, 'batch': args.batch,
         'patience': args.patience, 'seed': args.seed, 'amp': args.amp,
         'space_version': SPACE_VERSION, 'test_policy': args.test_policy,
         'metric': 'validation mAP50-95'}))
@@ -140,7 +146,7 @@ def train_and_validate(config, args):
 
 def collect_records(root, studies):
     records = []
-    for model in MODELS:
+    for model in studies:
         for trial in studies[model].get_trials(deepcopy=False):
             if trial.state.name == 'WAITING':
                 continue
@@ -208,7 +214,7 @@ def refresh_reports(root, studies):
             shutil.copy2(source, temporary)
             temporary.replace(target)
     write_json(best_dir/'selection.json', {'selection_metric': 'validation mAP50-95', 'models': winners})
-    write_report(root, records, winners, MODELS)
+    write_report(root, records, winners, tuple(studies))
     return records, winners
 
 
@@ -237,7 +243,7 @@ def run(args):
         raise ValueError('Output is not an existing compatible search or an empty directory')
     write_json(manifest, identity)
     initial = {}
-    for model in MODELS:
+    for model in selected_models(args):
         result = run_job({'phase': 'prepare', 'model': model,
                           'source': str(args.weights_dir/model), 'target': str(root/'initial_weights'/model),
                           'result': str(root/'initial_weights'/(model+'.json')),
@@ -258,7 +264,8 @@ def search_studies(args, root, initial, storage):
     import optuna
     from optuna.trial import TrialState
     studies = {}
-    for index, model in enumerate(MODELS):
+    for model in selected_models(args):
+        index = MODELS.index(model)
         study = optuna.create_study(study_name=Path(model).stem, direction='maximize',
                                    storage=storage, load_if_exists=True,
                                    sampler=optuna.samplers.TPESampler(seed=args.seed+index, n_startup_trials=3),
@@ -352,16 +359,18 @@ def search_studies(args, root, initial, storage):
         print(f'Best {size}: {record["model"]} trial {record["trial"]}; '
               f'val mAP50-95={record["val"]["metrics"]["map50_95"]:.5f}; '
               f'test={record["test"].get("metrics")}; weights={root/"best"/f"best_{size}.pt"}', flush=True)
-    if set(winners) != {'n', 's'} or any(r['state'] != 'COMPLETE' for r in records):
-        raise ValueError('Some trials failed or no complete n/s pair exists; inspect iterations.csv and stage logs')
+    if set(winners) != {Path(model).stem[-1] for model in studies} or any(r['state'] != 'COMPLETE' for r in records):
+        raise ValueError('Some trials failed or a selected model size has no complete candidate; inspect iterations.csv and stage logs')
     if args.test_policy == 'every-trial' and any(r['test'].get('status') != 'ok' for r in records if r['state'] == 'COMPLETE'):
         raise ValueError('Some test stages failed; rerun the same command to retry evaluation only')
-    write_report(root, records, winners, MODELS, complete=True)
+    write_report(root, records, winners, tuple(studies), complete=True)
     print(f'Human-readable report: {root / "REPORT.md"}', flush=True)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS),
+                   help='Train only the selected models (default: all four)')
     p.add_argument('--data', type=Path, required=True)
     p.add_argument('--output', type=Path, default=None, help='Optional; otherwise derive a short resumable experiment name')
     p.add_argument('--weights-dir', type=Path, default=Path('weights'))
@@ -389,8 +398,8 @@ def main():
         dataset_identity(args.data)
         args.output = (args.output or automatic_output(args)).expanduser().resolve()
         if args.dry_run:
-            print(json.dumps({'models_in_order': MODELS, 'rounds': args.trials,
-                              'total_trials': len(MODELS)*args.trials, 'max_epochs_per_trial': args.epochs,
+            print(json.dumps({'models_in_order': selected_models(args), 'rounds': args.trials,
+                              'total_trials': len(selected_models(args))*args.trials, 'max_epochs_per_trial': args.epochs,
                               'batch_choices': [args.batch] if args.batch is not None else BATCH_CHOICES,
                               'eval_batch': args.eval_batch, 'workers': args.workers,
                               'selection_metric': 'validation mAP50-95', 'test_policy': args.test_policy,
