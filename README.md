@@ -323,4 +323,4 @@ Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`�
 
 ## 提取不超过 30000 张的 82 类小数据集
 
-运行 `python extract_camping.py --workers 16`，默认从已处理的 LILA Camping 和 Animals Detection 读取，按类别/划分优先选 Animals，LILA 补充；硬链接、分组划分、均衡选图。总数含负样本不超过 30000，完整用法及类别规则见 [小数据集提取说明](docs/camping_subset.md)。
+运行 `python extract_camping.py --ap10k /路径/ap-10k --workers 16`，先统一 AP-10K、Animals Detection 与已处理的 LILA，再全局均衡抽样，最后按分组重新划分。优先 AP-10K→Animals→LILA；LILA 至少一个框的面积占比严格大于 1/16 才保留整图和全部框。硬链接，总数含负样本不超过 30000，详见 [小数据集提取说明](docs/camping_subset.md)。

@@ -323,7 +323,12 @@ def audit_one(record, output, ids, source_mapping):
     assert_unchanged(record)
     if not os.path.samefile(record['image'], output / record['image_rel']):
         raise ValueError(f'Output is not a source hardlink: {record["image_rel"]}')
-    expected = unique_rows(parse_label(record['label'], source_mapping))
+    if record['dataset'] == 'ap10k':
+        from ap10k_input import rows_from_coco
+        expected = unique_rows(rows_from_coco(record['ap_image'], record['ap_annotations'],
+                                              record['ap_original_names'], record['ap_mapping']))
+    else:
+        expected = unique_rows(parse_label(record['label'], source_mapping))
     if 'source_rows' in record:
         if expected != record['source_rows']:
             raise ValueError(f'Source labels changed after refinement: {record["label"]}')
@@ -453,7 +458,7 @@ def markdown(report):
 def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
           preserve_splits=False, min_class_boxes=None, val_fraction=.05,
           test_fraction=.05, seed=42, lila_source=None, group_map=None,
-          min_class_images=100, max_class_images=10000, cap_class_images=0, subset_options=None):
+          min_class_images=100, max_class_images=10000, cap_class_images=0, subset_options=None, ap10k=None, ap10k_split=1):
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
     if min_class_boxes is not None:  # Deprecated spelling; now always counts images.
@@ -467,6 +472,11 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
     from merge_yolo_refine import RULE_FILE
     metadata = class_metadata()
     datasets = [load_dataset(lila, 'lila', metadata), load_dataset(animals, 'animals', metadata)]
+    if ap10k is not None:
+        if subset_options is None or ap10k_split not in (1, 2, 3):
+            raise ValueError('AP-10K integration requires compact mode and one split scheme (1/2/3)')
+        from ap10k_input import load_ap10k
+        datasets.append(load_ap10k(ap10k, ap10k_split))
     for d in datasets:
         for source in (d['root'], d['yaml'].parent, *d['directories'].values()):
             if output == source or output in source.parents or source in output.parents:
@@ -490,8 +500,12 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             from camping_subset import POLICY_FILE
             if preserve_splits or min_class_images or cap_class_images:
                 raise ValueError('Compact extraction requires grouped resplitting and no rare folding/old cap')
-            config['compact'] = {**subset_options, 'version': 1,
+            config['compact'] = {**subset_options, 'version': 2,
                                  'policy_sha256': hashlib.sha256(POLICY_FILE.read_bytes()).hexdigest()}
+        if ap10k is not None:
+            from ap10k_input import AP_NAMES
+            config['ap10k'] = {'scheme': ap10k_split, 'annotations': datasets[-1]['manifest'],
+                               'mapping_policy_sha256': signature(AP_NAMES)}
         if previous and previous['config'] != config:
             raise ValueError('Merge inputs or policy changed; use a new output directory')
         # Never expose a stale certificate while resuming or failing.
@@ -505,12 +519,19 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
         try:
             for dataset in datasets:
                 for split, directory in dataset['directories'].items():
-                    images = sorted(p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
+                    if dataset.get('native_ap10k'):
+                        from ap10k_input import scan_ap10k
+                        images = dataset['loaded'][split]
+                        tasks = ((dataset, split, image, anns) for image, anns in images)
+                        scanner = scan_ap10k
+                    else:
+                        images = sorted(p for p in directory.rglob('*') if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
+                        tasks = ((dataset, split, p) for p in images)
+                        scanner = scan_one
                     if not images:
                         raise ValueError(f'No images in {dataset["alias"]}/{split}: {directory}')
                     input_counts[dataset['alias']][split] = len(images)
-                    tasks = ((dataset, split, p) for p in images)
-                    with tqdm(total=len(images), desc=f'Scan labels {dataset["alias"]}/{split}', unit='img') as progress, closing(bounded_map(scan_one, tasks, workers, progress)) as results:
+                    with tqdm(total=len(images), desc=f'Scan labels {dataset["alias"]}/{split}', unit='img') as progress, closing(bounded_map(scanner, tasks, workers, progress)) as results:
                         for r in results:
                             (excluded if r.get('error') else records).append(r)
             from merge_yolo_split import fold_rare, attach_groups, resplit
@@ -522,6 +543,10 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 from camping_subset import remap
                 records, rejected, compact_info = remap(records, metadata)
                 excluded.extend(rejected)
+                from camping_subset import filter_lila_area
+                records, rejected, area_info = filter_lila_area(records, subset_options.get('lila_min_area', 0))
+                excluded.extend(rejected)
+                compact_info['lila_area_filter'] = area_info
             duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes, preserve_splits)
             for index, reason in duplicates.items():
                 records[index]['error'] = reason
@@ -531,16 +556,21 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                        else {'minimum_total_images': 0, 'changes': [], 'rare_without_safe_parent': []})
             grouping, splitting = {}, {}
             if not preserve_splits:
-                print('Recover camera/sequence metadata and reallocate whole groups...', flush=True)
+                print('Recover full-pool camera/sequence/identity groups...', flush=True)
                 grouping = attach_groups(records, datasets, lila_source, group_map)
-                splitting = resplit(records, val_fraction, test_fraction, seed)
+                if subset_options is not None:
+                    grouping['before_sampling'] = resplit(records, val_fraction, test_fraction, seed, groups_only=True)
+                else:
+                    splitting = resplit(records, val_fraction, test_fraction, seed)
             if subset_options is not None:
-                from camping_subset import deduplicate, sample
+                from camping_subset import deduplicate, sample_global
                 records, repeated = deduplicate(records)
                 excluded.extend(repeated)
-                records, sampled_out, sampling = sample(
+                print('Sample globally: AP-10K -> Animals -> LILA; then split selected groups...', flush=True)
+                records, sampled_out, sampling = sample_global(
                     records, subset_options['max_images'], subset_options['negative_fraction'],
-                    subset_options['class_target'], seed, val_fraction, test_fraction)
+                    subset_options['class_target'], seed)
+                splitting = resplit(records, val_fraction, test_fraction, seed)
             else:
                 records, sampled_out, sampling = soft_cap(records, cap_class_images, min_class_images, seed)
             excluded.extend(sampled_out)
@@ -601,6 +631,14 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                         class_sources[name][r['dataset']] += 1
                 compact_info['class_source_images'] = dict(class_sources)
                 report['compact'] = compact_info
+                report['audit']['same_split_identical_duplicates'] = 'known file identities deduplicated; AP-10K then Animals preferred'
+                report['audit']['coordinate_token_scope'] = ['lila', 'animals']
+                if ap10k is not None:
+                    report['ap10k'] = {'root': str(datasets[-1]['root']), 'split_scheme': ap10k_split,
+                                       'annotation_files': datasets[-1]['manifest'],
+                                       'original_categories': datasets[-1]['original_names'], 'mapping': datasets[-1]['mapping']}
+                    report['audit']['ap10k_bbox_conversion'] = 'COCO xywh / image dimensions -> YOLO cxcywh, 10 decimals; recomputed during audit'
+
                 report['sampling'].update(total_selected=len(records),
                     negative_images=sum(not r['rows'] for r in records),
                     source_images=dict(Counter(r['dataset'] for r in records)),

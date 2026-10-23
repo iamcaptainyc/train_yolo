@@ -112,14 +112,14 @@ def attach_groups(records, datasets, source_override=None, group_map_path=None):
                 r['train_only'] = True
                 fallback[slug] += 1
         elif key not in override:
-            r['group_keys'] = [('individual_image', key)]
+            r.setdefault('group_keys', []).append(('individual_image', key))
             single_images += 1
     return {'metadata': evidence, 'lila_missing_group_images_train_only': dict(fallback),
             'animals_individual_image_groups': single_images,
-            'limitation': 'Animals without explicit groups are individual images; unknown sequences and independently copied/near-duplicate images are not proven disjoint.'}
+            'limitation': 'Animals/AP-10K without explicit groups are individual images; unknown sequences and independently copied/near-duplicate images are not proven disjoint.'}
 
 
-def resplit(records, val_fraction, test_fraction, seed):
+def resplit(records, val_fraction, test_fraction, seed, groups_only=False):
     fractions = {'train': 1 - val_fraction - test_fraction, 'val': val_fraction, 'test': test_fraction}
     union, seen = Union(len(records)), {}
     for i, r in enumerate(records):
@@ -142,6 +142,14 @@ def resplit(records, val_fraction, test_fraction, seed):
         counts = Counter(n for i in indices for n, _ in records[i]['rows'])
         groups.append({'indices': indices, 'counts': counts, 'size': len(indices),
                        'fixed': any(records[i].get('train_only') for i in indices), 'split': 'train'})
+    if groups_only:
+        for component, group in enumerate(groups):
+            for i in group['indices']:
+                records[i]['component'] = component
+                records[i]['group_keys'].append(('preselection_component', component))
+                if group['fixed']:
+                    records[i]['train_only'] = True
+        return {'groups': len(groups), 'method': 'freeze full-pool connected groups before sampling'}
     rng = random.Random(seed)
     rng.shuffle(groups)
     by_class = defaultdict(list)

@@ -7,6 +7,13 @@ from pathlib import Path
 import random
 
 POLICY_FILE = Path(__file__).parent/'configs/camping82.json'
+SOURCE_PRIORITY = ('ap10k', 'animals', 'lila')
+
+
+def source_rank(source):
+    return SOURCE_PRIORITY.index(source) if source in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
+
+
 SAMPLING_REASON = 'camping82 balanced whole-image sampling; source file retained'
 
 
@@ -58,7 +65,7 @@ def remap(records, metadata):
 def deduplicate(records):
     """Known identical files get one sampling slot; prefer the Animals record."""
     seen, kept, rejected = set(), [], []
-    order = sorted(range(len(records)), key=lambda i: (records[i]['dataset'] != 'animals', i))
+    order = sorted(range(len(records)), key=lambda i: (source_rank(records[i]['dataset']), i))
     chosen = set()
     for i in order:
         r = records[i]
@@ -72,7 +79,7 @@ def deduplicate(records):
         if i in chosen:
             kept.append(r)
         else:
-            r['error'] = 'camping82 duplicate file identity; kept one record, preferring Animals'
+            r['error'] = 'camping82 duplicate file identity; kept one record, preferring AP-10K then Animals'
             rejected.append(r)
     return kept, rejected
 
@@ -84,7 +91,7 @@ class Queue:
             r = records[index]
             buckets[r['dataset']][r.get('component', r['relative'])].append(index)
         self.sources = []
-        for source in sorted(buckets, key=lambda s: (s != 'animals', s)):
+        for source in sorted(buckets, key=lambda s: (source_rank(s), s)):
             groups = list(buckets[source].values())
             rng.shuffle(groups)
             for group in groups:
@@ -92,7 +99,7 @@ class Queue:
             self.sources.append(deque(deque(group) for group in groups))
 
     def pop(self, chosen):
-        # Exhaust available Animals for this class/split before using LILA.
+        # Exhaust AP-10K, then Animals, then LILA candidates for this class.
         for groups in self.sources:
             while groups:
                 group = groups.popleft()
@@ -182,13 +189,45 @@ def sample(records, maximum, negative_fraction, class_limit, seed, val_fraction,
         raise ValueError('Internal error: total image budget exceeded')
     stats = {'maximum_images': maximum, 'total_selected': len(kept), 'removed_images': len(rejected),
              'negative_fraction_target': negative_fraction, 'negative_images': sum(not r['rows'] for r in kept),
-             'soft_class_target_images': class_limit, 'source_priority': ['animals', 'lila'],
+             'soft_class_target_images': class_limit, 'source_priority': list(SOURCE_PRIORITY),
              'source_images': dict(source_counts), 'available_class_images': dict(available),
              'selected_class_images': dict(counts),
              'remaining_over_limit': {n: c for n, c in counts.items() if c > class_limit},
              'positive_split_budgets': pos_budgets, 'negative_split_budgets': neg_budgets,
              'note': 'Known groups were allocated before sampling; source preference within each class/split; '
                      'multi-class co-occurrence may exceed soft class targets. Scarce groups may leave budget unused.'}
+    return kept, rejected, stats
+
+
+def filter_lila_area(records, minimum):
+    if not 0 <= minimum < 1:
+        raise ValueError('LILA minimum bbox area ratio must be in [0, 1)')
+    kept, rejected = [], []
+    for r in records:
+        if r['dataset'] == 'lila' and r['rows'] and not any(float(coords[2])*float(coords[3]) > minimum for _,coords in r['rows']):
+            r['error'] = f'LILA has no bbox area ratio strictly > {minimum}; exclude whole image'
+            rejected.append(r)
+        else:
+            kept.append(r)
+    return kept, rejected, {'minimum_bbox_area_ratio': minimum, 'comparison': 'strictly greater',
+                            'images_excluded': len(rejected), 'multi_box_rule': 'ANY animal box must pass; retain ALL boxes including smaller ones',
+                            'negative_rule': 'original empty labels are exempt; they have no bbox'}
+
+
+def sample_global(records, maximum, negative_fraction, class_limit, seed):
+    # Input source splits carry no allocation constraint here; groups already frozen.
+    splits = [r['split'] for r in records]
+    try:
+        for r in records:
+            r['split'] = 'train'
+        kept, rejected, stats = sample(records, maximum, negative_fraction, class_limit, seed, 0, 0)
+    finally:
+        for r, original in zip(records, splits):
+            r['split'] = original
+    stats['global_positive_budget'] = sum(stats.pop('positive_split_budgets').values())
+    stats['global_negative_budget'] = sum(stats.pop('negative_split_budgets').values())
+    stats['order'] = 'merge -> full-pool grouping -> global sample -> grouped resplit'
+    stats['note'] = 'Source preference is global per class; original splits are not retained. Full-pool component links survive sampling.'
     return kept, rejected, stats
 
 
@@ -199,8 +238,9 @@ def markdown(report):
     total = sum(s['images'] for s in stats.values())
     lines = ['# 露营动物小数据集提取报告', '',
              f"状态：输出检查通过。共 **{total:,} 张**，上限 **{sample_info['maximum_images']:,} 张**；实际有样本类别 **{len(report['classes'])} / 82**。", '',
-             '按类别和目标划分优先选 Animals Detection，不足再用 LILA；LILA 在不同分组间轮换取样。'
+             '先合并来源与类别，再按类别全局优先选 AP-10K，其次 Animals Detection，最后 LILA；抽样完成后才划分集合。'
              '这是来源优先，不是图像清晰度评分。没有重新解码或哈希图片。', '',
+             f"LILA 框面积门槛：**严格大于 {report.get('compact', {}).get('lila_area_filter', {}).get('minimum_bbox_area_ratio', 0):.6f}**；任意一个正框达标即保留整图和全部框；全部不达标才排除。原本空标签的负样本不受面积门槛限制。", '',
              '## 来源和划分', '', '| 来源 | 划分 | 图片 | 负样本 | 框 |', '| --- | --- | ---: | ---: | ---: |']
     for source, splits in report['dataset_split_stats'].items():
         for split, row in splits.items():
@@ -209,23 +249,23 @@ def markdown(report):
         lines.append(f"| 合计 | {split} | {row['images']} | {row['negative_images']} | {sum(row['boxes'].values())} |")
     lines += ['', '## 全部候选类别及实际图片数量', '',
               '同图多类分别计数，列相加不等于总图数。无样本类别不分配训练 ID，不制造空类别。', '',
-              '| ID | 中文 | 英文 | Animals | LILA | 总图片 | train | val | test |',
-              '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+              '| ID | 中文 | 英文 | AP-10K | Animals | LILA | 总图片 | train | val | test |',
+              '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     ids = {n: i for i, n in enumerate(report['classes'])}
     for n, info in rules['classes'].items():
         counts = [stats[s]['class_images'].get(n, 0) for s in ('train', 'val', 'test')]
         source = report['compact']['class_source_images'].get(n, {})
-        lines.append(f"| {ids.get(n, '无样本')} | {info['chinese']} | {n} | {source.get('animals', 0)} | {source.get('lila', 0)} | {sum(counts)} | " + ' | '.join(map(str, counts)) + ' |')
+        lines.append(f"| {ids.get(n, '无样本')} | {info['chinese']} | {n} | {source.get('ap10k', 0)} | {source.get('animals', 0)} | {source.get('lila', 0)} | {sum(counts)} | " + ' | '.join(map(str, counts)) + ' |')
     lines += ['', '## 合并来源', '', '| 输入来源 | 输入类别 | 输出类别 | 抽样前符合范围的图片数 |', '| --- | --- | --- | ---: |']
     for row in report['compact']['mapping']:
         lines.append(f"| {row['dataset']} | {row['source']} | {row['target']} | {row['images']} |")
     lines += ['', '## 检查与限制', '',
               '- 总图片数包含正样本和负样本，严格不超过上限；不复制稀缺图来凑配额。',
-              '- 目标 90%/5%/5%，先绑定相机/序列/已知同图分组，再在各集合抽样；允许不足额，不能拆组造成泄漏。',
-              '- 原始分组缺失的 LILA 子数据集保守限于训练集。Animals 无序列元数据时按单图分组，不能证明未知近似图完全隔离。',
-              '- 标签四个坐标 token 与源标签逐项核对；只改类别 ID，必要时合并同类同框重复行。图片检查硬链接身份，不重新认证源物种或画面质量。',
+              '- 目标 90%/5%/5%，先绑定完整池中的相机/序列/已知同图分组，全局抽样后再按保留分组划分；允许不足额，不能拆组造成泄漏。',
+              '- 原始分组缺失的 LILA 子数据集保守限于训练集。Animals/AP-10K 无序列元数据时按单图分组，不能证明未知近似图完全隔离。',
+              '- 已有 YOLO 坐标 token 与源标签逐项核对；AP-10K 从 COCO xywh 与原图尺寸计算归一化坐标，审计时重新计算核对。只改类别或格式，保留全部有效框。图片检查硬链接身份，不重新认证源物种或清晰度。',
               '- 一张图只要含有范围外/无法安全映射的正标签就整图排除，不能删掉该框当背景。只有原本空标签的图片能作负样本。',
-              '- 黑熊、棕熊、北极熊、大熊猫分开；bear 表示其他/未明确熊，不代表无威胁。wolf 沿用胡狼/郊狼业务分组；狗独立。',
+              '- 黑熊、棕熊、北极熊、大熊猫分开；bear 表示其他/未明确熊，不代表无威胁。wolf 现在可含 AP-10K 原始 wolf 和原 LILA 胡狼/郊狼业务分组，不能把全部 wolf 样本视为纯灰狼；狗独立。',
               '- 图像主体不复制；新标签和报告占少量空间。源图片不删除。',
               '- Ctrl+C 后同命令重跑：重扫标签与元数据，不解码图片；复用已写好且一致的硬链接/标签。', '',
               '各集合缺少的类别：`'+json.dumps(report['missing_classes'], ensure_ascii=False)+'`。', '',
