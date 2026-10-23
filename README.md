@@ -315,7 +315,7 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 
 ## 定位与修复 JPEG 解码警告
 
-先暂停训练，然后运行 `python repair_images.py yolo_datasets/camping_animals/images --workers 16`。递归检查图片，只修复有问题且可解码的 JPEG，保护硬链接的其他路径；支持进度和 Ctrl+C 续跑，只记录问题图片。结果见 `runs/image_repair/REPORT.md`，详见 [图片修复说明](docs/image_repair.md)。
+先暂停训练，然后运行 `python repair_images.py yolo_datasets/camping_animals/images --workers 16`。递归检查图片，只修复有问题且可解码的 JPEG，原位同步修复所有硬链接；无法解码则删除图片及标签，并重算数据集报告数量；支持进度和 Ctrl+C 续跑，只记录问题图片。结果见 `runs/image_repair/REPORT.md`，详见 [图片修复说明](docs/image_repair.md)。
 
 ## 训练被终止的诊断日志
 

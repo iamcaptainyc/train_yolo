@@ -47,8 +47,8 @@ class RepairImagesTests(unittest.TestCase):
             pixels, warning = decode(path)
             self.assertEqual(pixels.shape, (64, 96, 3))
             self.assertFalse(warning)
-            self.assertEqual(sibling.read_bytes(), damaged)
-            self.assertNotEqual(path.stat().st_ino, sibling.stat().st_ino)
+            self.assertEqual(sibling.read_bytes(), path.read_bytes())
+            self.assertEqual(path.stat().st_ino, sibling.stat().st_ino)
             self.assertEqual(inspect_image(path)['status'], 'healthy')
 
     def test_missing_end_marker_and_check_only(self):
@@ -61,13 +61,113 @@ class RepairImagesTests(unittest.TestCase):
             self.assertEqual(inspect_image(path)['status'], 'repaired')
             self.assertEqual(inspect_image(path)['status'], 'healthy')
 
-    def test_undecodable_image_kept_and_reported(self):
+    def test_undecodable_image_deleted_and_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'bad.jpg'
             path.write_bytes(b'not a jpeg')
             result = inspect_image(path)
-            self.assertEqual(result['status'], 'failed')
-            self.assertEqual(path.read_bytes(), b'not a jpeg')
+            self.assertEqual(result['status'], 'deleted')
+            self.assertFalse(path.exists())
+
+    def test_deletion_label_report_counts_and_resume(self):
+        import yaml
+        from repair_images import scan
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = root/'images/train/animals'
+            labels = root/'labels/train/animals'
+            images.mkdir(parents=True)
+            labels.mkdir(parents=True)
+            self.image(images, 'healthy.jpg')
+            (images/'bad.jpg').write_bytes(b'broken')
+            (labels/'healthy.txt').write_text('0 .5 .5 .2 .2\n0 .3 .3 .1 .1\n')
+            (labels/'bad.txt').write_text('1 .5 .5 .2 .2\n')
+            (root/'data.yaml').write_text(yaml.safe_dump({'names': ['cat','dog']}))
+            (root/'SUBSET_REPORT.md').write_text('OLD COUNT 2')
+            (root/'labels/train.cache').write_bytes(b'old cache')
+            args = Namespace(roots=[root/'images'], output=root/'repair', workers=2, restart=False, check_only=False)
+            pool = Mock()
+            pool.submit.side_effect = lambda fn,*params: Mock(result=Mock(return_value=fn(*params)))
+            with patch('repair_images.ProcessPoolExecutor',return_value=pool):
+                self.assertEqual(scan(args),0)
+                self.assertEqual(scan(args),0)
+            self.assertFalse((images/'bad.jpg').exists())
+            self.assertFalse((labels/'bad.txt').exists())
+            self.assertFalse((root/'labels/train.cache').exists())
+            report = json.loads((root/'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['stats']['train']['images'],1)
+            self.assertEqual(report['stats']['train']['class_images'],{'cat':1})
+            self.assertEqual(report['stats']['train']['boxes'],{'cat':2})
+            self.assertEqual(report['image_repair']['deleted_labels_this_operation_log'],1)
+            self.assertEqual(report['excluded_images'],1)
+            self.assertIn('OLD COUNT 2',(root/'SUBSET_REPORT.before_image_repair.md').read_text())
+            self.assertNotIn('OLD COUNT 2',(root/'SUBSET_REPORT.md').read_text(encoding='utf-8'))
+
+    def test_interrupt_after_deletion_resumes_changed_path_list(self):
+        from repair_images import scan
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); images=root/'images/train'; images.mkdir(parents=True)
+            labels=root/'labels/train'; labels.mkdir(parents=True)
+            (images/'0.jpg').write_bytes(b'bad')
+            (labels/'0.txt').write_text('0 .5 .5 .1 .1')
+            for i in range(1,4):
+                self.image(images,f'{i}.jpg')
+            args=Namespace(roots=[root/'images'],output=root/'repair',workers=1,restart=False,check_only=False)
+            calls=0
+            def submit(fn,*params):
+                nonlocal calls
+                calls+=1
+                result=fn(*params)
+                return Mock(result=Mock(side_effect=[KeyboardInterrupt(),result] if calls==1 else [result]))
+            pool=Mock(); pool.submit.side_effect=submit
+            with patch('repair_images.ProcessPoolExecutor',return_value=pool):
+                self.assertEqual(scan(args),130)
+                self.assertEqual(scan(args),0)
+            state=json.loads((args.output/'checkpoint.json').read_text())
+            self.assertEqual(state['counts'],{'deleted':1,'healthy':3})
+            self.assertEqual(state['deleted_labels'],1)
+            self.assertEqual(state['next_index'],4)
+
+    def test_delete_failure_is_not_reported_as_success_and_is_recoverable(self):
+        from repair_operations import recover
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); image=root/'images/train/bad.jpg'; image.parent.mkdir(parents=True)
+            label=root/'labels/train/bad.txt'; label.parent.mkdir(parents=True)
+            image.write_bytes(b'bad'); label.write_text('0 .5 .5 .1 .1')
+            operations=root/'operations'
+            with patch('repair_operations.finish',side_effect=PermissionError('blocked')):
+                result=inspect_image(image,operations=operations)
+            self.assertEqual(result['status'],'failed')
+            self.assertTrue(image.exists())
+            label.unlink()  # Simulate a crash between label and image deletion.
+            recover(operations)
+            self.assertFalse(image.exists())
+            self.assertFalse(label.exists())
+
+    def test_check_only_keeps_undecodable_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            image=root/'images/train/bad.png'; image.parent.mkdir(parents=True)
+            label=root/'labels/train/bad.txt'; label.parent.mkdir(parents=True)
+            image.write_bytes(b'bad'); label.write_text('0 .5 .5 .1 .1')
+            self.assertEqual(inspect_image(image,True)['status'],'detected')
+            self.assertTrue(image.exists())
+            self.assertTrue(label.exists())
+
+    def test_recover_incomplete_inplace_write_preserves_hardlinks(self):
+        from repair_operations import recover
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); image=self.image(root)
+            image.write_bytes(image.read_bytes()[:-2])
+            alias=root/'alias.jpg'; os.link(image,alias)
+            operations=root/'operations'
+            with patch('repair_operations.finish', side_effect=OSError('simulated kill')):
+                self.assertEqual(inspect_image(image,operations=operations)['status'],'failed')
+            image.write_bytes(b'partial write')
+            recover(operations)
+            self.assertTrue(os.path.samefile(image,alias))
+            self.assertEqual(inspect_image(alias)['status'],'healthy')
+            self.assertFalse(list(root.glob('*.repair-*.jpg')))
 
     def test_interrupt_drains_pending_images_and_resumes(self):
         from repair_images import scan
