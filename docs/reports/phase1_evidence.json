@@ -1,0 +1,218 @@
+{
+  "date": "2026-10-23",
+  "experiment": "animals_search_batch",
+  "dataset": {
+    "path": "/root/autodl-tmp/capt/code/train_yolo/yolo_datasets/animals-detection-images-dataset/data.yaml",
+    "sha256": "9d4fc10903aaf2b18687156e00e49cde3ae279fd746f51f2fce34d97884f0c79",
+    "converter_report_sha256": "02026c18ec1ea1ce9ba739b4ddc10578f0d15bb7f8512c1c5df979984a75580f"
+  },
+  "images": {
+    "train": 18404,
+    "val": 3245,
+    "test": 6003,
+    "total": 27652
+  },
+  "boxes": {
+    "train": null,
+    "val": 4271,
+    "test": 7576
+  },
+  "classes": 80,
+  "completed_trials": 26,
+  "excluded": [
+    {
+      "model": "yolo11n.pt",
+      "trial": 6,
+      "state": "RUNNING"
+    }
+  ],
+  "selection_metric": "validation mAP50-95",
+  "best_per_model": {
+    "yolov8n.pt": {
+      "trial": 5,
+      "params": {
+        "batch": 64,
+        "optimizer": "AdamW",
+        "lr0": 0.0002903052418995387,
+        "lrf": 0.042289483373950984,
+        "momentum": 0.9073916934015231,
+        "weight_decay": 0.0007235090560805141,
+        "hsv_s": 0.7807364831442782,
+        "hsv_v": 0.41530681252298174,
+        "scale": 0.547658737977805,
+        "mosaic": 0.7633663684593938
+      },
+      "train": {
+        "status": "ok",
+        "best_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8n/trial_0005/training/weights/best.pt",
+        "checkpoint_sha256": "5c90be18d9cd3465881b5e9b112b39c585c25e2934843873acbbdff663e3ee08",
+        "last_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8n/trial_0005/training/weights/last.pt",
+        "train_dir": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8n/trial_0005/training",
+        "recorded_epochs": 85,
+        "elapsed_seconds_this_attempt": 1998.5778547860682,
+        "environment": {
+          "python": "3.11.14 (main, Oct 21 2025, 18:31:21) [GCC 11.2.0]",
+          "torch": "2.10.0+cu128",
+          "ultralytics": "8.4.182"
+        }
+      },
+      "val": {
+        "precision": 0.7606975747244775,
+        "recall": 0.742023158699561,
+        "map50": 0.8088019575614638,
+        "map50_95": 0.681292289230746
+      },
+      "test": {
+        "precision": 0.6142713991435815,
+        "recall": 0.6490380798109415,
+        "map50": 0.6766561707365398,
+        "map50_95": 0.5707233358319173
+      }
+    },
+    "yolov8s.pt": {
+      "trial": 6,
+      "params": {
+        "batch": 64,
+        "optimizer": "AdamW",
+        "lr0": 0.0007236545222886589,
+        "lrf": 0.03912897060526847,
+        "momentum": 0.860650069891231,
+        "weight_decay": 0.00024270152672272802,
+        "hsv_s": 0.3363059356800273,
+        "hsv_v": 0.4004768410729906,
+        "scale": 0.6199436854524876,
+        "mosaic": 0.4707163855549013
+      },
+      "train": {
+        "status": "ok",
+        "best_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8s/trial_0006/training/weights/best.pt",
+        "checkpoint_sha256": "a8c1ac928e3c8f1322c36caa2be95b62266bca0821b69468420cba1adbeaef2a",
+        "last_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8s/trial_0006/training/weights/last.pt",
+        "train_dir": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolov8s/trial_0006/training",
+        "recorded_epochs": 121,
+        "elapsed_seconds_this_attempt": 3904.20535171777,
+        "environment": {
+          "python": "3.11.14 (main, Oct 21 2025, 18:31:21) [GCC 11.2.0]",
+          "torch": "2.10.0+cu128",
+          "ultralytics": "8.4.182"
+        }
+      },
+      "val": {
+        "precision": 0.8174544437357147,
+        "recall": 0.7440707108293754,
+        "map50": 0.8223739690369083,
+        "map50_95": 0.7068778083074888
+      },
+      "test": {
+        "precision": 0.7162833319648815,
+        "recall": 0.6527829694909884,
+        "map50": 0.7012333361430511,
+        "map50_95": 0.6043922209764092
+      }
+    },
+    "yolo11n.pt": {
+      "trial": 4,
+      "params": {
+        "batch": 64,
+        "optimizer": "AdamW",
+        "lr0": 0.0001702612024272644,
+        "lrf": 0.01610289963468189,
+        "momentum": 0.9511962468092952,
+        "weight_decay": 0.00048200737254334053,
+        "hsv_s": 0.45219957621426926,
+        "hsv_v": 0.44549870528607904,
+        "scale": 0.25006214557930256,
+        "mosaic": 0.7732012377439901
+      },
+      "train": {
+        "status": "ok",
+        "best_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11n/trial_0004/training/weights/best.pt",
+        "checkpoint_sha256": "9841d1749f3660ebddf1d8dbcf62ed452acbcc299bcf165d68c9f3153365ed71",
+        "last_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11n/trial_0004/training/weights/last.pt",
+        "train_dir": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11n/trial_0004/training",
+        "recorded_epochs": 61,
+        "elapsed_seconds_this_attempt": 1541.9610801562667,
+        "environment": {
+          "python": "3.11.14 (main, Oct 21 2025, 18:31:21) [GCC 11.2.0]",
+          "torch": "2.10.0+cu128",
+          "ultralytics": "8.4.182"
+        }
+      },
+      "val": {
+        "precision": 0.7599582789172736,
+        "recall": 0.7436854367668662,
+        "map50": 0.8072439763497016,
+        "map50_95": 0.6872597213271368
+      },
+      "test": {
+        "precision": 0.6764586897339712,
+        "recall": 0.630453457719313,
+        "map50": 0.6843608336221804,
+        "map50_95": 0.5861118185681694
+      }
+    },
+    "yolo11s.pt": {
+      "trial": 2,
+      "params": {
+        "batch": 128,
+        "optimizer": "SGD",
+        "lr0": 0.00439396790718075,
+        "lrf": 0.01044033352347903,
+        "momentum": 0.9238854645553456,
+        "weight_decay": 0.00021294261551091685,
+        "hsv_s": 0.6489511902858085,
+        "hsv_v": 0.31166959330959754,
+        "scale": 0.6059791016971711,
+        "mosaic": 0.8468323807998888
+      },
+      "train": {
+        "status": "ok",
+        "best_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11s/trial_0002/training/weights/best.pt",
+        "checkpoint_sha256": "ad6b9c787a6b24a2ff67fac5e486af864ac0afbe4508bdc03d09ec273959e31f",
+        "last_checkpoint": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11s/trial_0002/training/weights/last.pt",
+        "train_dir": "/root/autodl-tmp/capt/code/train_yolo/runs/animals_search_batch/models/yolo11s/trial_0002/training",
+        "recorded_epochs": 92,
+        "elapsed_seconds_this_attempt": 3018.245113350451,
+        "environment": {
+          "python": "3.11.14 (main, Oct 21 2025, 18:31:21) [GCC 11.2.0]",
+          "torch": "2.10.0+cu128",
+          "ultralytics": "8.4.182"
+        }
+      },
+      "val": {
+        "precision": 0.8047831554006869,
+        "recall": 0.7890632743832294,
+        "map50": 0.8388908009754734,
+        "map50_95": 0.7241666763434026
+      },
+      "test": {
+        "precision": 0.6942109571232367,
+        "recall": 0.6868396759565327,
+        "map50": 0.7220352820589764,
+        "map50_95": 0.6291936485072936
+      }
+    }
+  },
+  "exports": {
+    "n": {
+      "model": "yolo11n.pt",
+      "trial": 4,
+      "file": "best_n.pt",
+      "sha256": "9841d1749f3660ebddf1d8dbcf62ed452acbcc299bcf165d68c9f3153365ed71",
+      "verified": true
+    },
+    "s": {
+      "model": "yolo11s.pt",
+      "trial": 2,
+      "file": "best_s.pt",
+      "sha256": "ad6b9c787a6b24a2ff67fac5e486af864ac0afbe4508bdc03d09ec273959e31f",
+      "verified": true
+    }
+  },
+  "source_sha256": {
+    "run.json": "4a612b4d81c785e762bdee4254d7deb5592b78d3c60bc4249d5492fd20f2926e",
+    "summary.json": "9df9c5f1693bd3b7541193a00f629ee6eefa5a0e41ed5a753d418fbb63837700",
+    "iterations.csv": "a22ad5a1092436c17b547381b5d37c0db285349c927a7a880046d7c48a3756a3",
+    "best/selection.json": "7a31c15300bb3206f3a0122624a423af0398dd240dd726a8e8554992c08e6fe4"
+  }
+}
