@@ -453,7 +453,7 @@ def markdown(report):
 def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
           preserve_splits=False, min_class_boxes=None, val_fraction=.05,
           test_fraction=.05, seed=42, lila_source=None, group_map=None,
-          min_class_images=100, max_class_images=10000, cap_class_images=0):
+          min_class_images=100, max_class_images=10000, cap_class_images=0, subset_options=None):
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError('--workers must be a positive integer')
     if min_class_boxes is not None:  # Deprecated spelling; now always counts images.
@@ -486,10 +486,16 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                   'val_fraction': val_fraction, 'test_fraction': test_fraction, 'seed': seed,
                   'lila_source': str(Path(lila_source).resolve()) if lila_source else None,
                   'group_map_sha256': hashlib.sha256(Path(group_map).read_bytes()).hexdigest() if group_map else None}
+        if subset_options is not None:
+            from camping_subset import POLICY_FILE
+            if preserve_splits or min_class_images or cap_class_images:
+                raise ValueError('Compact extraction requires grouped resplitting and no rare folding/old cap')
+            config['compact'] = {**subset_options, 'version': 1,
+                                 'policy_sha256': hashlib.sha256(POLICY_FILE.read_bytes()).hexdigest()}
         if previous and previous['config'] != config:
             raise ValueError('Merge inputs or policy changed; use a new output directory')
         # Never expose a stale certificate while resuming or failing.
-        for name in ('data.yaml', 'MERGE_REPORT.md'):
+        for name in ('data.yaml', 'MERGE_REPORT.md', 'SUBSET_REPORT.md'):
             (output / name).unlink(missing_ok=True)
         def status(value, error=None):
             atomic_text(state_path, json.dumps({'schema': 1, 'config': config, 'status': value, 'error': error,
@@ -511,18 +517,32 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             from merge_yolo_refine import refine_large, finish_refinement_report, soft_cap
             print('Check ALL classes against original annotations (no image sampling)...', flush=True)
             refinement = refine_large(records, datasets, metadata, max_class_images, lila_source)
+            compact_info = None
+            if subset_options is not None:
+                from camping_subset import remap
+                records, rejected, compact_info = remap(records, metadata)
+                excluded.extend(rejected)
             duplicates, hashes = exclusions_for_duplicates(records, check_content_hashes, preserve_splits)
             for index, reason in duplicates.items():
                 records[index]['error'] = reason
                 excluded.append(records[index])
             records = [r for i, r in enumerate(records) if i not in duplicates]
-            folding = fold_rare(records, datasets, metadata, min_class_images)
+            folding = (fold_rare(records, datasets, metadata, min_class_images) if subset_options is None
+                       else {'minimum_total_images': 0, 'changes': [], 'rare_without_safe_parent': []})
             grouping, splitting = {}, {}
             if not preserve_splits:
                 print('Recover camera/sequence metadata and reallocate whole groups...', flush=True)
                 grouping = attach_groups(records, datasets, lila_source, group_map)
                 splitting = resplit(records, val_fraction, test_fraction, seed)
-            records, sampled_out, sampling = soft_cap(records, cap_class_images, min_class_images, seed)
+            if subset_options is not None:
+                from camping_subset import deduplicate, sample
+                records, repeated = deduplicate(records)
+                excluded.extend(repeated)
+                records, sampled_out, sampling = sample(
+                    records, subset_options['max_images'], subset_options['negative_fraction'],
+                    subset_options['class_target'], seed, val_fraction, test_fraction)
+            else:
+                records, sampled_out, sampling = soft_cap(records, cap_class_images, min_class_images, seed)
             excluded.extend(sampled_out)
             trained = {name for r in records if r['split'] == 'train' for name, _ in r['rows']}
             for r in records:
@@ -533,6 +553,10 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             records = [r for r in records if not r.get('error')]
             with (output / 'excluded_images.jsonl').open('w', encoding='utf-8') as stream:
                 for r in excluded:
+                    if subset_options is not None:
+                        from camping_subset import SAMPLING_REASON
+                        if r['error'] == SAMPLING_REASON:
+                            continue  # Normal unselected images need only aggregate counts.
                     stream.write(json.dumps({'dataset': r['dataset'], 'split': r['split'], 'image': str(r['image']), 'reason': r['error']}, ensure_ascii=False) + '\n')
             names = sorted({name for r in records for name, _ in r['rows']})
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
@@ -564,6 +588,19 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             report['rare_class_policy'] = folding
             report['refinement'] = refinement
             report['sampling'] = sampling
+            if compact_info is not None:
+                class_sources = defaultdict(Counter)
+                for r in records:
+                    for name in {n for n, _ in r['rows']}:
+                        class_sources[name][r['dataset']] += 1
+                compact_info['class_source_images'] = dict(class_sources)
+                report['compact'] = compact_info
+                report['sampling'].update(total_selected=len(records),
+                    negative_images=sum(not r['rows'] for r in records),
+                    source_images=dict(Counter(r['dataset'] for r in records)),
+                    selected_class_images=dict(Counter(n for r in records for n in {n for n, _ in r['rows']})))
+                if len(records) > subset_options['max_images']:
+                    raise ValueError('Output exceeded total image limit')
             destinations = defaultdict(set)
             for r in records:
                 for old, target in zip(r['source_rows'], r['target_names'], strict=True):
@@ -598,7 +635,13 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             atomic_text(output / 'report.json', json.dumps(report, ensure_ascii=False, indent=2))
             atomic_text(output / 'class_mapping.json', json.dumps(report['source_class_mapping'], ensure_ascii=False, indent=2))
             atomic_text(output / 'class_hierarchy.json', json.dumps({'classes': report['hierarchy']}, ensure_ascii=False, indent=2))
-            atomic_text(output / 'MERGE_REPORT.md', markdown(report))
+            if compact_info is not None:
+                from camping_subset import markdown as subset_markdown
+                text = subset_markdown(report)
+                atomic_text(output / 'SUBSET_REPORT.md', text)
+                atomic_text(output / 'MERGE_REPORT.md', text)
+            else:
+                atomic_text(output / 'MERGE_REPORT.md', markdown(report))
             atomic_text(output / 'data.yaml', yaml.safe_dump({'path': output.as_posix(), **{s: 'images/' + s for s in SPLITS}, 'nc': len(names), 'names': dict(enumerate(names))}, sort_keys=False, allow_unicode=True))
             state_value['status'] = 'COMPLETE'
             atomic_text(state_path, json.dumps(state_value, ensure_ascii=False, indent=2))
@@ -608,6 +651,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
         except BaseException as exc:
             (output / 'data.yaml').unlink(missing_ok=True)
             (output / 'MERGE_REPORT.md').unlink(missing_ok=True)
+            (output / 'SUBSET_REPORT.md').unlink(missing_ok=True)
             current = json.loads(state_path.read_text(encoding='utf-8'))
             current.update(status='INTERRUPTED' if isinstance(exc, KeyboardInterrupt) else 'FAILED', error=str(exc))
             atomic_text(state_path, json.dumps(current, ensure_ascii=False, indent=2))

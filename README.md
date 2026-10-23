@@ -320,3 +320,7 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 ## 训练被终止的诊断日志
 
 Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`，记录完整控制台输出、每 5 秒资源快照、训练/验证阶段和退出诊断。原命令无需改动，下次异常优先查看 `DIAGNOSIS.md`。详见 [诊断日志说明](docs/training_diagnostics.md)。
+
+## 提取不超过 30000 张的 82 类小数据集
+
+运行 `python extract_camping.py --workers 16`，默认从已处理的 LILA Camping 和 Animals Detection 读取，按类别/划分优先选 Animals，LILA 补充；硬链接、分组划分、均衡选图。总数含负样本不超过 30000，完整用法及类别规则见 [小数据集提取说明](docs/camping_subset.md)。
