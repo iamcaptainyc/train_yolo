@@ -7,7 +7,7 @@ from pathlib import Path
 
 from lila_state import fingerprint, same_content_attributes
 
-# Explicit AP-10K original labels. Ambiguous or outside the agreed 82 classes are excluded.
+# Explicit AP-10K original labels. Ambiguous or without a reviewed common-name mapping are excluded.
 AP_NAMES = {
  'antelope':'antelope','argali sheep':'sheep','bison':None,'buffalo':'buffalo','cow':'cattle','sheep':'sheep',
  'arctic fox':'fox','dog':'dog','fox':'fox','wolf':'wolf','beaver':None,

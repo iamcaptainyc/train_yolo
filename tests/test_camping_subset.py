@@ -22,20 +22,40 @@ def record(i, name, source='animals', split='train', component=None):
 
 
 class SubsetTests(unittest.TestCase):
-    def test_81_classes_and_safe_boundaries(self):
+    def test_70_classes_and_safe_boundaries(self):
         rules = policy()
         meta = merger.class_metadata()
-        self.assertEqual(len(rules['classes']), 81)
+        self.assertEqual(len(rules['classes']), 70)
         self.assertIsNone(target_name('hyena', {}, rules))
         self.assertIsNone(target_name('spotted_hyena', {'spotted_hyena': {'parent': 'hyena'}}, rules))
-        for name in ('rabbit', 'mouse', 'cat', 'dog', 'wolf', 'sheep', 'goat', 'cattle', 'bear', 'black_bear', 'brown_bear', 'polar_bear'):
+        for name in ('rabbit', 'mouse', 'cat', 'dog', 'wolf', 'sheep', 'goat', 'cattle', 'bear', 'polar_bear'):
             self.assertEqual(target_name(name, meta, rules), name)
-        for name, expected in [('sun_bear','bear'),('asiatic_black_bear','black_bear'),('butterfly','insect'),('goldfish','fish'),('raven','crow')]:
+        for name, expected in [('sun_bear','bear'),('asiatic_black_bear','bear'),('butterfly','insect'),('goldfish','fish'),('raven','crow')]:
             self.assertEqual(target_name(name, meta, rules), expected)
         for name in ('rodent', 'mustelid', 'tick', 'wild_cat', 'sloth_bear'):
             self.assertIsNone(target_name(name, meta, rules))
         meta['red_muntjac'] = {'parent': 'deer'}
         self.assertEqual(target_name('red_muntjac', meta, rules), 'deer')
+
+    def test_user_merges_and_removed_classes_all_sources(self):
+        rules, meta = policy(), merger.class_metadata()
+        expected = {'cheetah':'leopard','jaguar':'leopard','snow_leopard':'leopard',
+                    'clouded_leopard':'leopard','cougar':'lion','red_panda':'raccoon',
+                    'brown_bear':'bear','black_bear':'bear','american_black_bear':'bear',
+                    'pigeon':'bird'}
+        for source in ('ap10k','animals','lila'):
+            rows=[record(i,n,source) for i,n in enumerate(expected)]
+            kept,rejected,_=remap(rows,meta)
+            self.assertFalse(rejected)
+            self.assertEqual([r['rows'][0][0] for r in kept],list(expected.values()))
+            for r in kept:
+                self.assertEqual(r['rows'][0][1],r['source_rows'][0][1])
+        for name in ('snail','shark','seal','sea_lion','harbor_seal'):
+            kept,rejected,_=remap([record(0,['rabbit',name])],meta)
+            self.assertFalse(kept)
+            self.assertEqual(len(rejected),1)
+        self.assertEqual(target_name('polar_bear',meta,rules),'polar_bear')
+        self.assertEqual(target_name('panda',meta,rules),'panda')
 
     def test_out_of_scope_box_excludes_whole_image_not_background(self):
         rows = [record(0, ['rabbit','tick']), record(1,'rabbit'), record(2,None)]
@@ -107,7 +127,7 @@ class SubsetTests(unittest.TestCase):
                 report=merger.merge(root/'lila',root/'animals',root/'out',**args)
             self.assertLessEqual(report['audit']['images_verified'],9)
             self.assertEqual(report['audit']['group_overlap'],0)
-            self.assertTrue({'black_bear','brown_bear','cattle','insect','rabbit'} <= set(report['classes']))
+            self.assertTrue({'bear','cattle','insect','rabbit'} <= set(report['classes']))
             self.assertNotIn('butterfly',report['classes'])
             self.assertNotIn('below_min_images_folded_to_parent', json.dumps(report['refinement']))
             self.assertTrue((root/'out/SUBSET_REPORT.md').is_file())

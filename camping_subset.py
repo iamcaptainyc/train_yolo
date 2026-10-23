@@ -1,4 +1,4 @@
-"""Reviewed 81-class remapping and bounded, Animals-first whole-image sampling."""
+"""Reviewed 70-class remapping and bounded, Animals-first whole-image sampling."""
 from collections import Counter, defaultdict, deque
 import heapq
 import json
@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import random
 
-POLICY_FILE = Path(__file__).parent/'configs/camping82.json'
+POLICY_FILE = Path(__file__).parent/'configs/camping70.json'
 SOURCE_PRIORITY = ('ap10k', 'animals', 'lila')
 
 
@@ -14,13 +14,13 @@ def source_rank(source):
     return SOURCE_PRIORITY.index(source) if source in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
 
 
-SAMPLING_REASON = 'camping82 balanced whole-image sampling; source file retained'
+SAMPLING_REASON = 'camping70 balanced whole-image sampling; source file retained'
 
 
 def policy():
     value = json.loads(POLICY_FILE.read_text(encoding='utf-8'))
-    if len(value['classes']) != 81 or not set(value['aliases'].values()) <= value['classes'].keys():
-        raise ValueError('Invalid reviewed camping82 policy')
+    if len(value['classes']) != 70 or not set(value['aliases'].values()) <= value['classes'].keys():
+        raise ValueError('Invalid reviewed camping70 policy')
     return value
 
 
@@ -48,7 +48,7 @@ def remap(records, metadata):
         targets = [target_name(n, metadata, rules) for n, _ in r['rows']]
         if any(n is None for n in targets):
             unsupported = sorted({n for (n, _), target in zip(r['rows'], targets) if target is None})
-            r['error'] = 'camping82 unsupported/ambiguous label; exclude WHOLE image: ' + ', '.join(unsupported)
+            r['error'] = 'camping70 unsupported/ambiguous label; exclude WHOLE image: ' + ', '.join(unsupported)
             rejected.append(r)
             continue
         changes.update({(r['dataset'], old, new) for (old, _), new in zip(r['rows'], targets)})
@@ -79,7 +79,7 @@ def deduplicate(records):
         if i in chosen:
             kept.append(r)
         else:
-            r['error'] = 'camping82 duplicate file identity; kept one record, preferring AP-10K then Animals'
+            r['error'] = 'camping70 duplicate file identity; kept one record, preferring AP-10K then Animals'
             rejected.append(r)
     return kept, rejected
 
@@ -274,7 +274,8 @@ def markdown(report):
               '- 原始分组缺失的 LILA 子数据集保守限于训练集。Animals/AP-10K 无序列元数据时按单图分组，不能证明未知近似图完全隔离。',
               '- 已有 YOLO 坐标 token 与源标签逐项核对；AP-10K 从 COCO xywh 与原图尺寸计算归一化坐标，审计时重新计算核对。只改类别或格式，保留全部有效框。图片检查硬链接身份，不重新认证源物种或清晰度。',
               '- 一张图只要含有范围外/无法安全映射的正标签就整图排除，不能删掉该框当背景。只有原本空标签的图片能作负样本。',
-              '- 黑熊、棕熊、北极熊、大熊猫分开；bear 表示其他/未明确熊，不代表无威胁。wolf 现在可含 AP-10K 原始 wolf 和原 LILA 胡狼/郊狼业务分组，不能把全部 wolf 样本视为纯灰狼；狗独立。',
+              '- 应用分组：豹/猎豹/美洲豹/雪豹统一 leopard；狮子/美洲狮统一 lion；浣熊/小熊猫统一 raccoon；鸽子并入 bird。这些标签不代表同一生物物种。蜗牛、鲨鱼、海豹、海狮排除。',
+              '- 棕熊、黑熊和其他熊合入 bear；北极熊、大熊猫单独保留。bear 不代表无威胁。wolf 现在可含 AP-10K 原始 wolf 和原 LILA 胡狼/郊狼业务分组，不能把全部 wolf 样本视为纯灰狼；狗独立。',
               '- 图像主体不复制；新标签和报告占少量空间。源图片不删除。',
               '- Ctrl+C 后同命令重跑：重扫标签与元数据，不解码图片；复用已写好且一致的硬链接/标签。', '',
               '各集合缺少的类别：`'+json.dumps(report['missing_classes'], ensure_ascii=False)+'`。', '',

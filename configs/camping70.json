@@ -2,7 +2,7 @@
   "schema": 1,
   "classes": {
     "bear": {
-      "chinese": "熊",
+      "chinese": "熊（含棕熊、黑熊）",
       "group": "熊类",
       "parent": null
     },
@@ -13,16 +13,6 @@
     },
     "panda": {
       "chinese": "大熊猫",
-      "group": "熊类",
-      "parent": null
-    },
-    "brown_bear": {
-      "chinese": "棕熊",
-      "group": "熊类",
-      "parent": null
-    },
-    "black_bear": {
-      "chinese": "黑熊",
       "group": "熊类",
       "parent": null
     },
@@ -47,7 +37,7 @@
       "parent": null
     },
     "lion": {
-      "chinese": "狮子",
+      "chinese": "狮子类（含美洲狮）",
       "group": "猫类",
       "parent": null
     },
@@ -57,22 +47,7 @@
       "parent": null
     },
     "leopard": {
-      "chinese": "豹",
-      "group": "猫类",
-      "parent": null
-    },
-    "cheetah": {
-      "chinese": "猎豹",
-      "group": "猫类",
-      "parent": null
-    },
-    "jaguar": {
-      "chinese": "美洲豹",
-      "group": "猫类",
-      "parent": null
-    },
-    "cougar": {
-      "chinese": "美洲狮",
+      "chinese": "豹类（含猎豹、美洲豹、雪豹）",
       "group": "猫类",
       "parent": null
     },
@@ -117,12 +92,7 @@
       "parent": null
     },
     "raccoon": {
-      "chinese": "浣熊",
-      "group": "小型及其他动物",
-      "parent": null
-    },
-    "red_panda": {
-      "chinese": "小熊猫",
+      "chinese": "浣熊类（含小熊猫）",
       "group": "小型及其他动物",
       "parent": null
     },
@@ -291,11 +261,6 @@
       "group": "鸟类",
       "parent": null
     },
-    "pigeon": {
-      "chinese": "鸽子",
-      "group": "鸟类",
-      "parent": null
-    },
     "crow": {
       "chinese": "乌鸦",
       "group": "鸟类",
@@ -376,11 +341,6 @@
       "group": "昆虫及其他无脊椎动物",
       "parent": null
     },
-    "snail": {
-      "chinese": "蜗牛",
-      "group": "昆虫及其他无脊椎动物",
-      "parent": null
-    },
     "crab": {
       "chinese": "螃蟹",
       "group": "昆虫及其他无脊椎动物",
@@ -388,21 +348,6 @@
     },
     "fish": {
       "chinese": "鱼",
-      "group": "鱼类与海洋哺乳动物",
-      "parent": null
-    },
-    "shark": {
-      "chinese": "鲨鱼",
-      "group": "鱼类与海洋哺乳动物",
-      "parent": null
-    },
-    "seal": {
-      "chinese": "海豹",
-      "group": "鱼类与海洋哺乳动物",
-      "parent": null
-    },
-    "sea_lion": {
-      "chinese": "海狮",
       "group": "鱼类与海洋哺乳动物",
       "parent": null
     }
@@ -413,7 +358,6 @@
     "caterpillar": "insect",
     "ladybug": "insect",
     "goldfish": "fish",
-    "harbor_seal": "seal",
     "raven": "crow",
     "sea_turtle": "turtle",
     "tortoise": "turtle",
@@ -427,46 +371,64 @@
     "baboon": "monkey",
     "macaque": "monkey",
     "sun_bear": "bear",
-    "asiatic_black_bear": "black_bear",
-    "american_black_bear": "black_bear",
+    "asiatic_black_bear": "bear",
+    "american_black_bear": "bear",
     "mink": "weasel",
     "yellow_throated_marten": "weasel",
     "yellow_bellied_weasel": "weasel",
     "back_striped_weasel": "weasel",
     "red_junglefowl": "chicken",
-    "marten": "weasel"
+    "marten": "weasel",
+    "cheetah": "leopard",
+    "jaguar": "leopard",
+    "cougar": "lion",
+    "red_panda": "raccoon",
+    "brown_bear": "bear",
+    "black_bear": "bear",
+    "pigeon": "bird",
+    "snow_leopard": "leopard",
+    "clouded_leopard": "leopard",
+    "king_cheetah": "leopard",
+    "puma": "lion",
+    "mountain_lion": "lion"
   },
   "excluded": [
-    "person",
-    "vehicle",
+    "aardvark",
     "animal",
-    "mammal",
-    "small_mammal",
-    "rodent",
-    "mustelid",
-    "wild_cat",
-    "tree_shrew",
     "galago",
     "gibbon",
-    "serow",
-    "warthog",
-    "mule",
-    "aardvark",
+    "harbor_seal",
+    "hyena",
     "jellyfish",
+    "mammal",
+    "mule",
+    "mustelid",
+    "person",
+    "rodent",
+    "sea_lion",
     "seahorse",
+    "seal",
+    "serow",
+    "shark",
     "shrimp",
+    "sloth_bear",
+    "small_mammal",
+    "snail",
     "squid",
     "starfish",
     "tick",
+    "tree_shrew",
+    "vehicle",
+    "warthog",
     "whale",
-    "worm",
-    "sloth_bear",
-    "hyena"
+    "wild_cat",
+    "worm"
   ],
   "notes": [
     "wolf contains original AP-10K wolf plus the user-defined LILA jackal/coyote group; not all samples establish gray-wolf identity.",
-    "bear means other/unspecified bear, never harmless; no visual species guessing.",
+    "bear includes brown/black/other bears; polar bear and panda stay separate; never implies harmless.",
     "No rare-class folding; unsupported labels exclude the entire image; no dropped positive boxes.",
-    "Global per-class source priority: AP-10K, Animals Detection, LILA; sample before final grouped splitting."
+    "Global per-class source priority: AP-10K, Animals Detection, LILA; sample before final grouped splitting.",
+    "User-defined visual groups: cheetah/jaguar/leopard -> leopard; cougar/lion -> lion; red panda/raccoon -> raccoon; pigeon -> bird. These are application labels, not biological species equivalence."
   ]
 }
