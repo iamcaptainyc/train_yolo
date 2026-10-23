@@ -107,6 +107,7 @@ class SubsetTests(unittest.TestCase):
             self.assertEqual(report['audit']['group_overlap'],0)
             self.assertTrue({'black_bear','brown_bear','cattle','insect','rabbit'} <= set(report['classes']))
             self.assertNotIn('butterfly',report['classes'])
+            self.assertNotIn('below_min_images_folded_to_parent', json.dumps(report['refinement']))
             self.assertTrue((root/'out/SUBSET_REPORT.md').is_file())
             self.assertNotIn('balanced whole-image sampling', (root/'out/excluded_images.jsonl').read_text())
             self.assertEqual(sum(x['images'] for x in report['stats'].values()),report['sampling']['total_selected'])

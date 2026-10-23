@@ -563,6 +563,12 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
             ids = {name: i for i, name in enumerate(names)}
             refinement = finish_refinement_report(refinement, records, metadata)
+            if compact_info is not None:
+                for remainder in refinement.get('parent_remainders', {}).values():
+                    for origin in remainder['sources']:
+                        if origin['reason'] == 'below_min_images_folded_to_parent':
+                            origin['reason'] = 'reviewed_camping82_class_mapping'
+
             inventory = signature([refinement, sampling, grouping, splitting, [[r['dataset'], r['split'], r['relative'], {k: v for k, v in r['image_stamp'].items() if k != 'ctime_ns'}, {k: v for k, v in r['label_stamp'].items() if k != 'ctime_ns'}, r['rows']] for r in records]])
             old_inventory = previous.get('inventory') if previous else None
             if old_inventory and old_inventory != inventory:
