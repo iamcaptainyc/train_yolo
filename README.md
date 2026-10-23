@@ -321,6 +321,6 @@ python prepare_lila_audited.py --source datasets/lila --output datasets/lila_yol
 
 Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`，记录完整控制台输出、每 5 秒资源快照、训练/验证阶段和退出诊断。原命令无需改动，下次异常优先查看 `DIAGNOSIS.md`。详见 [诊断日志说明](docs/training_diagnostics.md)。
 
-## 提取不超过 30000 张的 82 类小数据集
+## 提取不超过 30000 张的 81 类小数据集
 
 运行 `python extract_camping.py --ap10k /路径/ap-10k --workers 16`，先统一 AP-10K、Animals Detection 与已处理的 LILA，再全局均衡抽样，最后按分组重新划分。优先 AP-10K→Animals→LILA；LILA 至少一个框的面积占比严格大于 1/16 才保留整图和全部框。硬链接，总数含负样本不超过 30000，详见 [小数据集提取说明](docs/camping_subset.md)。

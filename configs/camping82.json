@@ -28,22 +28,17 @@
     },
     "dog": {
       "chinese": "狗",
-      "group": "狗狼狐狸与鬣狗",
+      "group": "狗狼狐狸",
       "parent": null
     },
     "wolf": {
       "chinese": "狼",
-      "group": "狗狼狐狸与鬣狗",
+      "group": "狗狼狐狸",
       "parent": null
     },
     "fox": {
       "chinese": "狐狸",
-      "group": "狗狼狐狸与鬣狗",
-      "parent": null
-    },
-    "hyena": {
-      "chinese": "鬣狗",
-      "group": "狗狼狐狸与鬣狗",
+      "group": "狗狼狐狸",
       "parent": null
     },
     "cat": {
@@ -465,7 +460,8 @@
     "tick",
     "whale",
     "worm",
-    "sloth_bear"
+    "sloth_bear",
+    "hyena"
   ],
   "notes": [
     "wolf contains original AP-10K wolf plus the user-defined LILA jackal/coyote group; not all samples establish gray-wolf identity.",

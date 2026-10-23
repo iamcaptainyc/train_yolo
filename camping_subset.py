@@ -1,4 +1,4 @@
-"""Reviewed 82-class remapping and bounded, Animals-first whole-image sampling."""
+"""Reviewed 81-class remapping and bounded, Animals-first whole-image sampling."""
 from collections import Counter, defaultdict, deque
 import heapq
 import json
@@ -19,7 +19,7 @@ SAMPLING_REASON = 'camping82 balanced whole-image sampling; source file retained
 
 def policy():
     value = json.loads(POLICY_FILE.read_text(encoding='utf-8'))
-    if len(value['classes']) != 82 or not set(value['aliases'].values()) <= value['classes'].keys():
+    if len(value['classes']) != 81 or not set(value['aliases'].values()) <= value['classes'].keys():
         raise ValueError('Invalid reviewed camping82 policy')
     return value
 
@@ -237,7 +237,7 @@ def markdown(report):
     sample_info = report['sampling']
     total = sum(s['images'] for s in stats.values())
     lines = ['# 露营动物小数据集提取报告', '',
-             f"状态：输出检查通过。共 **{total:,} 张**，上限 **{sample_info['maximum_images']:,} 张**；实际有样本类别 **{len(report['classes'])} / 82**。", '',
+             f"状态：输出检查通过。共 **{total:,} 张**，上限 **{sample_info['maximum_images']:,} 张**；实际有样本类别 **{len(report['classes'])} / {len(rules['classes'])}**。", '',
              '先合并来源与类别，再按类别全局优先选 AP-10K，其次 Animals Detection，最后 LILA；抽样完成后才划分集合。'
              '这是来源优先，不是图像清晰度评分。没有重新解码或哈希图片。', '',
              f"LILA 框面积门槛：**严格大于 {report.get('compact', {}).get('lila_area_filter', {}).get('minimum_bbox_area_ratio', 0):.6f}**；任意一个正框达标即保留整图和全部框；全部不达标才排除。原本空标签的负样本不受面积门槛限制。", '',
@@ -256,12 +256,21 @@ def markdown(report):
         counts = [stats[s]['class_images'].get(n, 0) for s in ('train', 'val', 'test')]
         source = report['compact']['class_source_images'].get(n, {})
         lines.append(f"| {ids.get(n, '无样本')} | {info['chinese']} | {n} | {source.get('ap10k', 0)} | {source.get('animals', 0)} | {source.get('lila', 0)} | {sum(counts)} | " + ' | '.join(map(str, counts)) + ' |')
+    lines += ['', '## 每类划分比例', '', '按包含该类的图片计数；同图多个同类框只计一次。大相机组、仅限训练的来源及多类共现可能限制比例。', '',
+              '| 类别 | train / val / test 实际比例 | 相对目标最大偏差（百分点） |', '| --- | --- | ---: |']
+    fractions = report['resplit']['target_fractions']
+    for n in report['classes']:
+        counts = [stats[s]['class_images'].get(n, 0) for s in ('train', 'val', 'test')]
+        total_class = sum(counts)
+        actual = [c / total_class for c in counts]
+        deviation = max(abs(value - fractions[split]) for value, split in zip(actual, ('train', 'val', 'test'))) * 100
+        lines.append(f"| {n} | " + ' / '.join(f'{v:.1%}' for v in actual) + f" | {deviation:.1f} |")
     lines += ['', '## 合并来源', '', '| 输入来源 | 输入类别 | 输出类别 | 抽样前符合范围的图片数 |', '| --- | --- | --- | ---: |']
     for row in report['compact']['mapping']:
         lines.append(f"| {row['dataset']} | {row['source']} | {row['target']} | {row['images']} |")
     lines += ['', '## 检查与限制', '',
               '- 总图片数包含正样本和负样本，严格不超过上限；不复制稀缺图来凑配额。',
-              '- 目标 90%/5%/5%，先绑定完整池中的相机/序列/已知同图分组，全局抽样后再按保留分组划分；允许不足额，不能拆组造成泄漏。',
+              '- 默认逐类目标 80%/10%/10%（自定义参数以 report.json 为准），先绑定完整池中的相机/序列/已知同图分组，全局抽样后再按保留分组划分；允许不足额，不能拆组造成泄漏。',
               '- 原始分组缺失的 LILA 子数据集保守限于训练集。Animals/AP-10K 无序列元数据时按单图分组，不能证明未知近似图完全隔离。',
               '- 已有 YOLO 坐标 token 与源标签逐项核对；AP-10K 从 COCO xywh 与原图尺寸计算归一化坐标，审计时重新计算核对。只改类别或格式，保留全部有效框。图片检查硬链接身份，不重新认证源物种或清晰度。',
               '- 一张图只要含有范围外/无法安全映射的正标签就整图排除，不能删掉该框当背景。只有原本空标签的图片能作负样本。',

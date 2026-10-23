@@ -490,7 +490,7 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
         output.mkdir(parents=True, exist_ok=True)
         config = {'inputs': {d['alias']: {'yaml': str(d['yaml']), 'sha256': d['yaml_sha256']} for d in datasets},
                   'content_hash_check': check_content_hashes, 'policy': signature([metadata, ALIASES, sorted(EXCLUDED)]),
-                  'split_policy_version': 3, 'preserve_splits': preserve_splits, 'min_class_images': min_class_images,
+                  'split_policy_version': 4, 'preserve_splits': preserve_splits, 'min_class_images': min_class_images,
                   'max_class_images': max_class_images, 'cap_class_images': cap_class_images,
                   'refinement_rules_sha256': hashlib.sha256(RULE_FILE.read_bytes()).hexdigest(),
                   'val_fraction': val_fraction, 'test_fraction': test_fraction, 'seed': seed,

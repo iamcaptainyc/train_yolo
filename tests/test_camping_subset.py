@@ -22,10 +22,12 @@ def record(i, name, source='animals', split='train', component=None):
 
 
 class SubsetTests(unittest.TestCase):
-    def test_82_classes_and_safe_boundaries(self):
+    def test_81_classes_and_safe_boundaries(self):
         rules = policy()
         meta = merger.class_metadata()
-        self.assertEqual(len(rules['classes']), 82)
+        self.assertEqual(len(rules['classes']), 81)
+        self.assertIsNone(target_name('hyena', {}, rules))
+        self.assertIsNone(target_name('spotted_hyena', {'spotted_hyena': {'parent': 'hyena'}}, rules))
         for name in ('rabbit', 'mouse', 'cat', 'dog', 'wolf', 'sheep', 'goat', 'cattle', 'bear', 'black_bear', 'brown_bear', 'polar_bear'):
             self.assertEqual(target_name(name, meta, rules), name)
         for name, expected in [('sun_bear','bear'),('asiatic_black_bear','black_bear'),('butterfly','insect'),('goldfish','fish'),('raven','crow')]:

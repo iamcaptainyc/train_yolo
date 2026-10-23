@@ -139,7 +139,7 @@ def resplit(records, val_fraction, test_fraction, seed, groups_only=False):
         components[union.find(i)].append(i)
     groups = []
     for indices in components.values():
-        counts = Counter(n for i in indices for n, _ in records[i]['rows'])
+        counts = Counter(n for i in indices for n in {n for n, _ in records[i]['rows']})
         groups.append({'indices': indices, 'counts': counts, 'size': len(indices),
                        'fixed': any(records[i].get('train_only') for i in indices), 'split': 'train'})
     if groups_only:
@@ -156,7 +156,7 @@ def resplit(records, val_fraction, test_fraction, seed, groups_only=False):
     for i, g in enumerate(groups):
         for n in g['counts']:
             by_class[n].append(i)
-    totals = Counter(n for r in records for n, _ in r['rows'])
+    totals = Counter(n for r in records for n in {n for n, _ in r['rows']})
     class_counts = {'train': totals.copy(), 'val': Counter(), 'test': Counter()}
     sizes = {'train': len(records), 'val': 0, 'test': 0}
 
@@ -173,25 +173,47 @@ def resplit(records, val_fraction, test_fraction, seed, groups_only=False):
     # Scarce classes first. Never remove a class's last training group.
     for n in sorted(by_class, key=lambda n: (len(by_class[n]), totals[n], n)):
         for split in ('val', 'test'):
-            if class_counts[split][n]:
+            if not fractions[split] or class_counts[split][n]:
                 continue
             candidates = [groups[i] for i in by_class[n] if can_move(groups[i])]
             if candidates:
                 move(min(candidates, key=lambda g: (g['size'], g['counts'][n])), split)
 
-    def gain(g, split):
-        target = len(records) * fractions[split]
-        size_gain = (abs(sizes[split] - target) - abs(sizes[split] + g['size'] - target)) / len(records)
-        class_gain = sum((abs(class_counts[split][n] - totals[n] * fractions[split]) -
-                          abs(class_counts[split][n] + c - totals[n] * fractions[split])) / totals[n]
-                         for n, c in g['counts'].items()) / max(1, len(totals))
-        return size_gain + .25 * class_gain
+    def gain(g, destination):
+        origin = g['split']
+        # Squared per-class IMAGE fraction error, equally weighted across species.
+        # Overall size is secondary; multi-box images count once for each class.
+        improvement = 0.0
+        for split, sign in ((origin, -1), (destination, 1)):
+            for n, count in g['counts'].items():
+                before = class_counts[split][n] / totals[n] - fractions[split]
+                after = before + sign * count / totals[n]
+                improvement += before * before - after * after
+            before = sizes[split] / len(records) - fractions[split]
+            after = before + sign * g['size'] / len(records)
+            improvement += .01 * (before * before - after * after)
+        return improvement
 
-    for g in sorted(groups, key=lambda g: -g['size']):
-        if can_move(g):
-            improvement, split = max((gain(g, s), s) for s in ('val', 'test'))
-            if improvement > 0:
-                move(g, split)
+    # Revisit whole groups so an early coverage decision can be corrected.
+    for _ in range(20):
+        changed = False
+        for g in sorted(groups, key=lambda g: -g['size']):
+            origin = g['split']
+            if g['fixed'] or any(class_counts[origin][n] <= c for n, c in g['counts'].items()):
+                continue
+            options = [(gain(g, s), s) for s in fractions if s != origin and fractions[s] > 0]
+            if not options:
+                continue
+            improvement, destination = max(options)
+            if improvement > 1e-12:
+                sizes[origin] -= g['size']
+                sizes[destination] += g['size']
+                class_counts[origin].subtract(g['counts'])
+                class_counts[destination].update(g['counts'])
+                g['split'] = destination
+                changed = True
+        if not changed:
+            break
     for component, g in enumerate(groups):
         for i in g['indices']:
             r = records[i]
@@ -211,4 +233,6 @@ def resplit(records, val_fraction, test_fraction, seed, groups_only=False):
     return {'target_fractions': fractions, 'seed': seed, 'groups': len(groups), 'group_overlap': 0,
             'class_independent_groups': {n: len(v) for n, v in sorted(by_class.items())},
             'missing_classes': {s: sorted(n for n in totals if not class_counts[s][n]) for s in fractions},
-            'method': 'whole connected camera/sequence/identity groups; rare-class coverage first, then ratio and class balance; heuristic, ratios not exact'}
+            'class_image_counts': {n: {s: class_counts[s][n] for s in fractions} for n in sorted(totals)},
+            'class_image_fractions': {n: {s: class_counts[s][n] / totals[n] for s in fractions} for n in sorted(totals)},
+            'method': 'whole connected groups; minimize equally weighted per-class image-fraction error; heuristic, ratios not exact'}

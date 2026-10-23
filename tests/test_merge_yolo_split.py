@@ -12,6 +12,20 @@ from test_merge_yolo_datasets import fixture
 
 
 class ResplitTests(unittest.TestCase):
+    def test_per_species_image_ratios_with_multiple_boxes(self):
+        records = []
+        for name, count in [('rabbit', 100), ('bear', 200)]:
+            for j in range(count):
+                i = len(records)
+                records.append({'rows': [(name, ('0.5',)*4)] * (1 + j % 5),
+                                'group_keys': [('image', i)], 'image_stamp': {'inode': 0},
+                                'split': 'train', 'image_rel': Path(f'images/train/{i}.jpg'),
+                                'label_rel': Path(f'labels/train/{i}.txt')})
+        result = resplit(records, .1, .1, 42)
+        self.assertEqual(result['class_image_counts']['rabbit'], {'train': 80, 'val': 10, 'test': 10})
+        self.assertEqual(result['class_image_counts']['bear'], {'train': 160, 'val': 20, 'test': 20})
+        self.assertEqual(result['group_overlap'], 0)
+
     def test_wolf_application_group_merges_coyote_and_jackal_before_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
