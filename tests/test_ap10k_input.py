@@ -120,19 +120,24 @@ class AP10KTests(unittest.TestCase):
             text=(root/'out/SUBSET_REPORT.md').read_text(encoding='utf-8')
             self.assertIn('AP-10K',text)
             self.assertIn('任意一个正框达标',text)
-            shifted_args={**args,'subset_options':{**args['subset_options'],'class_id_start':10}}
+            shifted_args={**args,'subset_options':{**args['subset_options'],'class_id_start':10,'flat_images':True}}
             with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
                 shifted=merge(root/'lila',root/'animals',root/'offset',**shifted_args)
                 resumed=merge(root/'lila',root/'animals',root/'offset',**shifted_args)
             self.assertEqual(resumed['audit']['resumed_output_files'],9)
             import yaml
             config=yaml.safe_load((root/'offset/data.yaml').read_text())
+            self.assertEqual(shifted['image_layout']['mode'],'flat')
+            for split in ('train','val','test'):
+                self.assertTrue(all(p.is_file() for p in (root/'offset/images'/split).iterdir()))
+                self.assertTrue(all(p.is_file() for p in (root/'offset/labels'/split).iterdir()))
             self.assertEqual(config['nc'],10+len(shifted['classes']))
             self.assertEqual(set(config['names']),set(range(config['nc'])))
             self.assertEqual(config['names'][0],'reserved_0')
             self.assertEqual(shifted['class_ids'],{n:i+10 for i,n in enumerate(shifted['classes'])})
             for label in (root/'offset/labels').rglob('*.txt'):
-                original=root/'out/labels'/label.relative_to(root/'offset/labels')
+                source, filename = label.name.split('__',1)
+                original=root/'out/labels'/label.parent.name/source/filename
                 a,b=label.read_text().split(),original.read_text().split()
                 self.assertEqual(int(a[0]),int(b[0])+10)
                 self.assertEqual(a[1:],b[1:])
@@ -144,6 +149,7 @@ class AP10KTests(unittest.TestCase):
             recount(root/'offset',[])
             updated=json.loads((root/'offset/report.json').read_text())
             self.assertEqual(updated['class_ids'],shifted['class_ids'])
+            self.assertEqual(updated['dataset_split_stats'],shifted['dataset_split_stats'])
             self.assertFalse(any(n.startswith('reserved_') for rows in updated['missing_classes'].values() for n in rows))
 
 

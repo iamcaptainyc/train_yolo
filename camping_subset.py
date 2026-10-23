@@ -242,6 +242,8 @@ def markdown(report):
              '这是来源优先，不是图像清晰度评分。没有重新解码或哈希图片。', '',
              f"LILA 框面积门槛：**严格大于 {report.get('compact', {}).get('lila_area_filter', {}).get('minimum_bbox_area_ratio', 0):.6f}**；任意一个正框达标即保留整图和全部框；全部不达标才排除。原本空标签的负样本不受面积门槛限制。", '',
              '## 来源和划分', '', '| 来源 | 划分 | 图片 | 负样本 | 框 |', '| --- | --- | ---: | ---: | ---: |']
+    if report.get('image_layout', {}).get('mode') == 'flat':
+        lines[4:4] = ['图片与标签直接保存在各自的 train/val/test 目录；来源前缀加完整路径摘要避免同名覆盖。图片仍为硬链接。', '']
     start = report.get('class_id_start', 0)
     if start:
         lines[4:4] = [f'动物类别 ID 从 **{start}** 开始。0–{start-1} 为 reserved 预留编号，不计入动物类别数；YOLO 输出通道数为 {start + len(report["classes"])}。', '']

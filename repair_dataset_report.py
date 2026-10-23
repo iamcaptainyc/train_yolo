@@ -39,8 +39,13 @@ def recount(root, ops):
         return
     names = yaml.safe_load(config_path.read_text(encoding='utf-8-sig'))['names']
     names = dict(enumerate(names)) if isinstance(names, list) else {int(k): v for k, v in names.items()}
+    prior_path = root/'report.json'
+    prior_report = json.loads(prior_path.read_text(encoding='utf-8')) if prior_path.exists() else {}
+    layout = prior_report.get('image_layout', {})
     stats = {s: {'images': 0, 'negative_images': 0, 'boxes': Counter(), 'class_images': Counter()} for s in ('train','val','test')}
     sources = defaultdict(lambda: {s: {'images': 0, 'negative_images': 0, 'boxes': 0} for s in stats})
+    for source in prior_report.get('dataset_split_stats', {}):
+        sources[source]  # Preserve explicit zero-count sources in the report.
     class_sources = defaultdict(Counter)
     for split, row in stats.items():
         base = root/'images'/split
@@ -53,6 +58,10 @@ def recount(root, ops):
             classes = [names[int(line.split()[0])] for line in label.read_text(encoding='utf-8').splitlines() if line.strip()]
             relative = image.relative_to(base)
             source = relative.parts[0] if len(relative.parts) > 1 else 'dataset'
+            if len(relative.parts) == 1 and layout.get('mode') == 'flat':
+                prefix, separator, tail = image.name.partition('__')
+                if separator and prefix in layout.get('sources', []):
+                    source = prefix
             row['images'] += 1
             row['negative_images'] += not classes
             row['boxes'].update(classes)

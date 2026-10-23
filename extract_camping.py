@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--animals', type=Path, default=Path('yolo_datasets/animals-detection-images-dataset'))
     parser.add_argument('--lila-source', type=Path, default=Path('datasets/lila'))
     parser.add_argument('--output', type=Path, default=None)
+    parser.add_argument('--flat-images', action='store_true', help='Put images and labels directly under each split, with unique source-prefixed filenames')
     parser.add_argument('--class-id-start', type=int, default=0, help='First animal class ID; preceding IDs are reserved in data.yaml')
     parser.add_argument('--max-images', type=int, default=30000, help='Hard total limit INCLUDING negatives; at most 30000')
     parser.add_argument('--class-target', type=int, default=1200, help='Soft image target per class, not a rare-class merging threshold')
@@ -36,6 +37,7 @@ def main():
         parser.error('--class-id-start must be a nonnegative integer')
     if args.output is None:
         suffix = f'_id{args.class_id_start}' if args.class_id_start else ''
+        suffix += '_flat' if args.flat_images else ''
         args.output = Path('yolo_datasets')/f'camping68_ap10k_30k{suffix}'
     if not 1 <= args.max_images <= 30000:
         parser.error('--max-images must be between 1 and 30000')
@@ -51,7 +53,8 @@ def main():
               lila_source=args.lila_source, group_map=args.group_map, seed=args.seed,
               subset_options={'max_images': args.max_images, 'negative_fraction': args.negative_fraction,
                               'class_target': args.class_target, 'lila_min_area': args.lila_min_area,
-                              **({'class_id_start': args.class_id_start} if args.class_id_start else {})})
+                              **({'class_id_start': args.class_id_start} if args.class_id_start else {}),
+                              **({'flat_images': True} if args.flat_images else {})})
     except KeyboardInterrupt:
         parser.exit(130, 'Interrupted. Rerun the same command to resume; source images were not modified.\n')
     except Exception as exc:

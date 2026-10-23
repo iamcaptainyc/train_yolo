@@ -461,6 +461,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
           test_fraction=.05, seed=42, lila_source=None, group_map=None,
           min_class_images=100, max_class_images=10000, cap_class_images=0, subset_options=None, ap10k=None, ap10k_split=1):
     class_id_start = (subset_options or {}).get('class_id_start', 0)
+    flat_images = (subset_options or {}).get('flat_images', False)
+    if not isinstance(flat_images, bool):
+        raise ValueError('flat_images must be boolean')
     if isinstance(class_id_start, bool) or not isinstance(class_id_start, int) or class_id_start < 0:
         raise ValueError('--class-id-start must be a nonnegative integer')
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
@@ -595,6 +598,13 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
             names = sorted({name for r in records for name, _ in r['rows']})
             if not names or any(not any(r['split'] == s and r['rows'] for r in records) for s in SPLITS):
                 raise ValueError('Every output split must contain positive boxes; insufficient independent groups')
+            if flat_images:
+                for record in records:
+                    for field, folder in (('image_rel', 'images'), ('label_rel', 'labels')):
+                        record[field] = Path(folder)/record['split']/(record['dataset']+'__'+record[field].name)
+                for field in ('image_rel', 'label_rel'):
+                    if len({r[field] for r in records}) != len(records):
+                        raise ValueError(f'Flat output filename collision: {field}')
             ids = {name: i for i, name in enumerate(names, start=class_id_start)}
             refinement = finish_refinement_report(refinement, records, metadata)
             if compact_info is not None:
@@ -625,6 +635,9 @@ def merge(lila, animals, output, *, workers=8, check_content_hashes=False,
                 if actual != expected:
                     raise ValueError(f'Unexpected or missing files in output {kind}; no training YAML issued')
             report = make_report(datasets, records, excluded, ids, metadata, reused, hashes, check_content_hashes)
+            report['image_layout'] = {'mode': 'flat' if flat_images else 'source_subdirectories',
+                                      'sources': sorted({r['dataset'] for r in records}),
+                                      'flat_filename_separator': '__' if flat_images else None}
             report['rare_class_policy'] = folding
             report['refinement'] = refinement
             report['sampling'] = sampling

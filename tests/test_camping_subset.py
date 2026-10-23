@@ -116,6 +116,28 @@ class SubsetTests(unittest.TestCase):
         self.assertEqual(kept[0]['target_names'],['insect','insect'])
         self.assertEqual(len(kept[0]['source_rows']),2)
 
+    def test_flat_multisource_output_and_report_recount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            fixture(root/'lila',['rabbit'],'lila')
+            fixture(root/'animals',['rabbit'],'animals')
+            args={'workers':2,'min_class_images':0,'max_class_images':0,
+                  'subset_options':{'max_images':12,'negative_fraction':0,'class_target':1200,'flat_images':True}}
+            result=merger.merge(root/'lila',root/'animals',root/'out',**args)
+            output=list((root/'out/images').rglob('*.jpg'))
+            self.assertEqual(len(output),12)
+            self.assertEqual(len({p.name for p in output}),12)
+            self.assertEqual({p.name.split('__')[0] for p in output},{'lila','animals'})
+            for image in output:
+                self.assertEqual(len(image.relative_to(root/'out/images').parts),2)
+                label=root/'out/labels'/image.parent.name/(image.stem+'.txt')
+                self.assertTrue(label.exists())
+                self.assertTrue(any(os.path.samefile(image,p) for p in (root/image.name.split('__')[0]/'images').rglob('*.jpg')))
+            from repair_dataset_report import recount
+            recount(root/'out',[])
+            updated=json.loads((root/'out/report.json').read_text())
+            self.assertEqual(updated['dataset_split_stats'],result['dataset_split_stats'])
+
     def test_full_pipeline_hardlinks_remap_cap_grouping_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

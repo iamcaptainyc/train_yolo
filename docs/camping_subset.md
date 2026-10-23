@@ -128,3 +128,13 @@ python extract_camping.py --ap10k /你的路径/ap-10k --class-id-start 10 --wor
 未指定 `--output` 时，输出自动命名为 `yolo_datasets/camping68_ap10k_30k_id10/`。起始 ID 参与检查点身份，改变 ID 必须使用新输出目录。
 
 YOLO 要求类别名称从 0 连续到 nc-1，所以 data.yaml 中 0–9 使用 reserved_0…reserved_9 占位，没有训练标注；实际有 68 类时 nc=78。报告仍只统计实际动物类别。这会增加检测头的输出类别数，不代表已经训练了预留的十类。原始数据不会被改写。
+
+## 平铺图片与标签
+
+加 `--flat-images` 后，图片直接保存到 `images/train`、`images/val`、`images/test`，标签直接保存到对应的 `labels/train` 等目录，不再创建来源子目录。文件名为 `ap10k__<摘要>.jpg`、`animals__<摘要>.jpg`、`lila__<摘要>.jpg`；摘要来自完整来源路径，不读取图片内容计算哈希。标签使用相同文件名主体。
+
+```bash
+python extract_camping.py --ap10k /你的路径/ap-10k --flat-images --class-id-start 10 --workers 16
+```
+
+默认输出自动加 `_flat`，上例为 `yolo_datasets/camping68_ap10k_30k_id10_flat/`。不传参数则保持来源子目录。切换布局需要新输出目录；原有输出不会原地搬动。抽样、类别编号、相机分组、硬链接规则不受影响，后续图片修复仍能找到标签并按来源更新报告。
