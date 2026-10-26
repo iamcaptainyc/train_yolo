@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hashlib
 import os
 from pathlib import Path
@@ -9,6 +10,8 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
+import threading
 import time
 
 
@@ -22,7 +25,70 @@ def batch(remote, output):
     # This tool downloads one exact path, never a remote wildcard expansion.
     if not remote.startswith('/') or any(c in remote for c in '*?[]'):
         raise ValueError('Remote path must be absolute, without wildcard characters')
-    return f'reget {quoted(remote)} {quoted("./" + output.name)}\nbye\n'
+    return (f'@ls -ln {quoted(remote)}\n'
+            f'@reget {quoted(remote)} {quoted("./" + output.name)}\n@bye\n')
+
+
+def remote_size(line):
+    # OpenSSH ls -ln: permissions, links, numeric owner, group, bytes, date, name.
+    # A symlink listing gives the link length, not target size: leave it unknown.
+    match = re.match(r'^-[rwxStTs-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+', line.strip())
+    return int(match[1]) if match else None
+
+
+def amount(value):
+    for unit in ('B', 'KiB', 'MiB', 'GiB', 'TiB'):
+        if value < 1024 or unit == 'TiB':
+            return f'{value:.1f}{unit}'
+        value /= 1024
+
+
+def duration(seconds):
+    if seconds is None:
+        return '--:--:--'
+    seconds = max(0, int(seconds))
+    return f'{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}'
+
+
+class Progress:
+    def __init__(self, stream=None):
+        self.stream = stream or sys.stdout
+        self.tty = self.stream.isatty()
+        self.last = 0
+        self.width = 0
+        self.samples = deque()
+
+    def show(self, current, total=None, state='Connecting', force=False):
+        now = time.monotonic()
+        self.samples.append((now, current))
+        while len(self.samples) > 2 and self.samples[1][0] < now - 10:
+            self.samples.popleft()
+        elapsed = now - self.samples[0][0]
+        rate = max(0, current - self.samples[0][1]) / elapsed if elapsed else 0
+        if not force and now - self.last < (0.25 if self.tty else 10):
+            return
+        self.last = now
+        fraction = min(1, current / total) if total else (1 if total == 0 and current == 0 else None)
+        percent = f'{fraction * 100:5.1f}%' if fraction is not None else '    --%'
+        filled = int(fraction * 16) if fraction is not None else 0
+        bar = '=' * filled + ' ' * (16 - filled)
+        eta = (max(0, total - current) / rate if rate else (0 if current == total else None)) if total is not None else None
+        line = (f'{percent} [{bar}] {amount(current)}/{amount(total) if total is not None else "?"}'
+                f' | {amount(rate)}/s | ETA {duration(eta)} | {state}')
+        if self.tty:
+            columns = shutil.get_terminal_size((120, 24)).columns
+            line = line[:max(1, columns - 1)]
+            self.stream.write('\r' + line + ' ' * max(0, min(self.width, columns - 1) - len(line)))
+            self.width = len(line)
+        else:
+            self.stream.write(line + '\n')
+        self.stream.flush()
+
+    def finish(self):
+        if self.tty and self.width:
+            self.stream.write('\n')
+            self.stream.flush()
+            self.width = 0
 
 
 def command(host, executable='sftp'):
@@ -60,7 +126,24 @@ def stop(proc):
 def transfer(cmd, script, output, stall_timeout=600):
     options = {'start_new_session': True} if os.name != 'nt' else {
         'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
-    proc = subprocess.Popen(cmd, cwd=output.parent, stdin=subprocess.PIPE, **options)
+    progress = Progress()
+    progress.show(size(output), state='Connecting / reading remote size', force=True)
+    proc = subprocess.Popen(cmd, cwd=output.parent, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
+    details = {'total': None}
+    messages = deque(maxlen=20)
+
+    def read_output():
+        for raw in iter(proc.stdout.readline, b''):
+            line = raw.decode('utf-8', errors='replace').strip()
+            total = remote_size(line)
+            if total is not None:
+                details['total'] = total
+            elif line and not line.startswith('sftp>'):
+                messages.append(line)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
     try:
         try:
             proc.stdin.write(script.encode('utf-8'))
@@ -68,24 +151,36 @@ def transfer(cmd, script, output, stall_timeout=600):
         except BrokenPipeError:
             pass
         previous = size(output)
-        last_change = last_print = time.monotonic()
-        printed_size = previous
+        initial = previous
+        last_change = time.monotonic()
         while proc.poll() is None:
-            time.sleep(1)
+            time.sleep(0.25)
             now, current = time.monotonic(), size(output)
             if current != previous:
                 previous, last_change = current, now
-            if now - last_print >= 10:
-                rate = max(0, current - printed_size) / (now - last_print) / 1024
-                print(f'{current / 1024**2:,.1f} MiB saved | {rate:,.1f} KiB/s', flush=True)
-                last_print, printed_size = now, current
+            idle = now - last_change
+            state = 'Downloading' if current > initial else 'Connecting / resuming'
+            if idle >= 5:
+                state = f'Waiting {int(idle)}s'
+            progress.show(current, details['total'], state)
             if stall_timeout and now - last_change >= stall_timeout:
+                progress.finish()
                 print(f'No file growth for {stall_timeout}s; reconnecting.', flush=True)
                 stop(proc)
                 return 124
+        reader.join(timeout=2)
+        progress.show(size(output), details['total'],
+                      'Transferred' if proc.returncode == 0 else 'Disconnected', force=True)
         return proc.returncode
     finally:
         stop(proc)
+        reader.join(timeout=2)
+        progress.finish()
+        if proc.returncode != 0:
+            for message in list(messages):
+                print(message, file=sys.stderr, flush=True)
+        if not reader.is_alive():
+            proc.stdout.close()
         if proc.stdin and not proc.stdin.closed:
             proc.stdin.close()
 
@@ -124,7 +219,13 @@ def download(host, remote, output, retries=10, retry_delay=10, stall_timeout=600
             raise ValueError(f'SFTP exit={code}; retry budget exhausted. Partial file retained; rerun to resume.')
         print(f'SFTP exit={code}; retry in {delay}s. Partial file retained. '
               'Authentication requires an SSH key/agent; use Ctrl+C to stop.', flush=True)
-        time.sleep(delay)
+        progress = Progress()
+        try:
+            for remaining in range(delay, 0, -1):
+                progress.show(size(output), state=f'Reconnecting in {remaining}s', force=remaining == delay)
+                time.sleep(1)
+        finally:
+            progress.finish()
         delay = min(delay * 2, 60)
 
 
