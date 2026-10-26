@@ -14,6 +14,8 @@ class DownloadTests(unittest.TestCase):
     def test_remote_listing_and_symlink_unknown(self):
         self.assertEqual(downloader.remote_size('-rw-r--r-- 1 1000 1000 17000000000 Oct 26 12:00 animals file.zip'), 17000000000)
         self.assertEqual(downloader.remote_size('-rw------- 1 root root 0 Jan 1 2026 empty.zip'), 0)
+        self.assertEqual(downloader.remote_size('-rw-r--r--    ? 0        0        17000000000 Oct 26 12:00 /data/animals.zip'), 17000000000)
+        self.assertEqual(downloader.remote_size('-rw-r--r--+   ? 1000     1000      1234 Oct 26 12:00 spaced file.zip'), 1234)
         self.assertIsNone(downloader.remote_size('lrwxrwxrwx 1 0 0 9 Oct 26 12:00 link -> file'))
         self.assertIsNone(downloader.remote_size('Permission denied'))
 
@@ -42,7 +44,7 @@ class DownloadTests(unittest.TestCase):
             target = Path(tmp)/'file.zip'
             target.write_bytes(b'prefix')
             program = ("import sys,time; from pathlib import Path; sys.stdin.read(); "
-                       "print('-rw-r--r-- 1 0 0 9 Oct 26 12:00 file.zip',flush=True); "
+                       "print('-rw-r--r--    ? 0        0               9 Oct 26 12:00 file.zip',flush=True); "
                        "time.sleep(.3); p=Path('file.zip'); p.write_bytes(p.read_bytes()+b'123')")
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):

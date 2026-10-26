@@ -30,9 +30,10 @@ def batch(remote, output):
 
 
 def remote_size(line):
-    # OpenSSH ls -ln: permissions, links, numeric owner, group, bytes, date, name.
+    # OpenSSH remote listings use '?' for link count (SFTP does not supply it).
+    # Ordinary ls listings may instead contain a numeric link count.
     # A symlink listing gives the link length, not target size: leave it unknown.
-    match = re.match(r'^-[rwxStTs-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+', line.strip())
+    match = re.match(r'^-[rwxStTs-]{9}[+@.]?\s+(?:\d+|\?)\s+\S+\s+\S+\s+(\d+)\s+', line.strip())
     return int(match[1]) if match else None
 
 
