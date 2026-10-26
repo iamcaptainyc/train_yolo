@@ -22,15 +22,15 @@ def record(i, name, source='animals', split='train', component=None):
 
 
 class SubsetTests(unittest.TestCase):
-    def test_68_classes_and_safe_boundaries(self):
+    def test_56_classes_and_safe_boundaries(self):
         rules = policy()
         meta = merger.class_metadata()
-        self.assertEqual(len(rules['classes']), 68)
+        self.assertEqual(len(rules['classes']), 56)
         self.assertIsNone(target_name('hyena', {}, rules))
         self.assertIsNone(target_name('spotted_hyena', {'spotted_hyena': {'parent': 'hyena'}}, rules))
         for name in ('rabbit', 'mouse', 'cat', 'dog', 'wolf', 'sheep', 'goat', 'cattle', 'bear', 'polar_bear'):
             self.assertEqual(target_name(name, meta, rules), name)
-        for name, expected in [('sun_bear','bear'),('asiatic_black_bear','bear'),('butterfly','insect'),('goldfish','fish'),('raven','crow')]:
+        for name, expected in [('sun_bear','bear'),('asiatic_black_bear','bear'),('goldfish','fish'),('raven','crow')]:
             self.assertEqual(target_name(name, meta, rules), expected)
         for name in ('rodent', 'mustelid', 'tick', 'wild_cat', 'sloth_bear'):
             self.assertIsNone(target_name(name, meta, rules))
@@ -42,7 +42,8 @@ class SubsetTests(unittest.TestCase):
         expected = {'cheetah':'leopard','jaguar':'leopard','snow_leopard':'leopard',
                     'clouded_leopard':'leopard','cougar':'lion','red_panda':'raccoon',
                     'brown_bear':'bear','black_bear':'bear','american_black_bear':'bear',
-                    'pigeon':'bird'}
+                    'pigeon':'bird','turkey':'bird','woodpecker':'bird','swan':'goose',
+                    'hamster':'mouse','mongoose':'mongoose','skunk':'skunk'}
         for source in ('ap10k','animals','lila'):
             rows=[record(i,n,source) for i,n in enumerate(expected)]
             kept,rejected,_=remap(rows,meta)
@@ -50,7 +51,9 @@ class SubsetTests(unittest.TestCase):
             self.assertEqual([r['rows'][0][0] for r in kept],list(expected.values()))
             for r in kept:
                 self.assertEqual(r['rows'][0][1],r['source_rows'][0][1])
-        for name in ('snail','shark','seal','sea_lion','harbor_seal','bat','pangolin'):
+        for name in ('snail','shark','seal','sea_lion','harbor_seal','bat','pangolin',
+                     'insect','butterfly','caterpillar','ladybug','moths_and_butterflies',
+                     'centipede','scorpion','spider','crab','frog','koala','opossum'):
             kept,rejected,_=remap([record(0,['rabbit',name])],meta)
             self.assertFalse(kept)
             self.assertEqual(len(rejected),1)
@@ -110,10 +113,10 @@ class SubsetTests(unittest.TestCase):
         self.assertEqual(len(rejected), 1)
 
     def test_alias_duplicate_box_keeps_all_original_targets_for_audit(self):
-        r=record(0,['butterfly','insect'])
+        r=record(0,['turkey','bird'])
         kept, _, _=remap([r],merger.class_metadata())
         self.assertEqual(len(kept[0]['rows']),1)
-        self.assertEqual(kept[0]['target_names'],['insect','insect'])
+        self.assertEqual(kept[0]['target_names'],['bird','bird'])
         self.assertEqual(len(kept[0]['source_rows']),2)
 
     def test_flat_multisource_output_and_report_recount(self):
@@ -141,15 +144,15 @@ class SubsetTests(unittest.TestCase):
     def test_full_pipeline_hardlinks_remap_cap_grouping_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            fixture(root/'lila', ['black_bear','rabbit','butterfly'], 'lila')
-            fixture(root/'animals', ['brown bear','bull','moths and butterflies'], 'animals')
+            fixture(root/'lila', ['black_bear','rabbit','turkey'], 'lila')
+            fixture(root/'animals', ['brown bear','bull','woodpecker'], 'animals')
             args={'workers':2,'min_class_images':0,'max_class_images':0,
                   'subset_options':{'max_images':9,'negative_fraction':0,'class_target':1200}}
             with patch('PIL.Image.open',side_effect=AssertionError('decoded image')), patch('hashlib.file_digest',side_effect=AssertionError('hashed image')):
                 report=merger.merge(root/'lila',root/'animals',root/'out',**args)
             self.assertLessEqual(report['audit']['images_verified'],9)
             self.assertEqual(report['audit']['group_overlap'],0)
-            self.assertTrue({'bear','cattle','insect','rabbit'} <= set(report['classes']))
+            self.assertTrue({'bear','cattle','bird','rabbit'} <= set(report['classes']))
             self.assertNotIn('butterfly',report['classes'])
             self.assertNotIn('below_min_images_folded_to_parent', json.dumps(report['refinement']))
             self.assertTrue((root/'out/SUBSET_REPORT.md').is_file())

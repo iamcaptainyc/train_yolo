@@ -1,4 +1,4 @@
-"""Reviewed 68-class remapping and bounded, Animals-first whole-image sampling."""
+"""Reviewed 56-class remapping and bounded, Animals-first whole-image sampling."""
 from collections import Counter, defaultdict, deque
 import heapq
 import json
@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import random
 
-POLICY_FILE = Path(__file__).parent/'configs/camping68.json'
+POLICY_FILE = Path(__file__).parent/'configs/camping56.json'
 SOURCE_PRIORITY = ('ap10k', 'animals', 'lila')
 
 
@@ -14,13 +14,13 @@ def source_rank(source):
     return SOURCE_PRIORITY.index(source) if source in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
 
 
-SAMPLING_REASON = 'camping68 balanced whole-image sampling; source file retained'
+SAMPLING_REASON = 'camping56 balanced whole-image sampling; source file retained'
 
 
 def policy():
     value = json.loads(POLICY_FILE.read_text(encoding='utf-8'))
-    if len(value['classes']) != 68 or not set(value['aliases'].values()) <= value['classes'].keys():
-        raise ValueError('Invalid reviewed camping68 policy')
+    if len(value['classes']) != 56 or not set(value['aliases'].values()) <= value['classes'].keys():
+        raise ValueError('Invalid reviewed camping56 policy')
     return value
 
 
@@ -48,7 +48,7 @@ def remap(records, metadata):
         targets = [target_name(n, metadata, rules) for n, _ in r['rows']]
         if any(n is None for n in targets):
             unsupported = sorted({n for (n, _), target in zip(r['rows'], targets) if target is None})
-            r['error'] = 'camping68 unsupported/ambiguous label; exclude WHOLE image: ' + ', '.join(unsupported)
+            r['error'] = 'camping56 unsupported/ambiguous label; exclude WHOLE image: ' + ', '.join(unsupported)
             rejected.append(r)
             continue
         changes.update({(r['dataset'], old, new) for (old, _), new in zip(r['rows'], targets)})
@@ -79,7 +79,7 @@ def deduplicate(records):
         if i in chosen:
             kept.append(r)
         else:
-            r['error'] = 'camping68 duplicate file identity; kept one record, preferring AP-10K then Animals'
+            r['error'] = 'camping56 duplicate file identity; kept one record, preferring AP-10K then Animals'
             rejected.append(r)
     return kept, rejected
 

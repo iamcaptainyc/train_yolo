@@ -1,4 +1,4 @@
-"""Extract up to 30,000 AP-10K/Animals-first images with the reviewed 68 camping classes."""
+"""Extract up to 30,000 AP-10K/Animals-first images with the reviewed 56 camping classes."""
 import argparse
 from pathlib import Path
 from fractions import Fraction
@@ -38,7 +38,7 @@ def main():
     if args.output is None:
         suffix = f'_id{args.class_id_start}' if args.class_id_start else ''
         suffix += '_flat' if args.flat_images else ''
-        args.output = Path('yolo_datasets')/f'camping68_ap10k_30k{suffix}'
+        args.output = Path('yolo_datasets')/f'camping56_ap10k_30k{suffix}'
     if not 1 <= args.max_images <= 30000:
         parser.error('--max-images must be between 1 and 30000')
     if not 0 <= args.lila_min_area < 1:

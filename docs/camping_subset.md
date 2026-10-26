@@ -2,7 +2,7 @@
 
 入口：`extract_camping.py`。输入为原始 AP-10K，以及之前转换好的 LILA Camping 和 Animals Detection。
 
-处理顺序：**合并 AP-10K 一套标注和另外两个来源 → 统一 68 类 → LILA 面积过滤 → 全局均衡抽样 → 分组划分 train/val/test → 写 YOLO 和报告**。优先级为 **AP-10K → Animals Detection → LILA**，每类尽量先用前两个来源。
+处理顺序：**合并 AP-10K 一套标注和另外两个来源 → 统一 56 类 → LILA 面积过滤 → 全局均衡抽样 → 分组划分 train/val/test → 写 YOLO 和报告**。优先级为 **AP-10K → Animals Detection → LILA**，每类尽量先用前两个来源。
 
 ## 命令
 
@@ -25,7 +25,7 @@ python extract_camping.py \
 python extract_camping.py --ap10k /你的数据路径/imlti/ap-10k/ap-10k --workers 16
 ```
 
-默认输出 `yolo_datasets/camping68_ap10k_30k/`。自定义名字用 `--output yolo_datasets/你的名字`。旧的两来源抽样检查点与新版不兼容，使用新输出目录，源数据不删除。
+默认输出 `yolo_datasets/camping56_ap10k_30k/`。自定义名字用 `--output yolo_datasets/你的名字`。旧的两来源抽样检查点与新版不兼容，使用新输出目录，源数据不删除。
 
 ## AP-10K 读取方式
 
@@ -50,16 +50,16 @@ python extract_camping.py --ap10k /你的数据路径/imlti/ap-10k/ap-10k --work
 
 面积不是清晰度分数。大目标也可能模糊，脚本不声称已评估画面质量。
 
-## 68 类映射
+## 56 类映射
 
-固定候选清单见 [camping68.json](../configs/camping68.json)。无有效样本的类别不分配训练 ID，报告会列出缺失项。
+固定候选清单见 [camping56.json](../configs/camping56.json)。无有效样本的类别不分配训练 ID，报告会列出缺失项。
 
-- 棕熊、黑熊、其他熊及马来熊合入 bear，北极熊 polar_bear 和大熊猫 panda 单独保留。bear 不表示无威胁。懒熊不在本次 68 类内，遇到明确标注排除。
+- 棕熊、黑熊、其他熊及马来熊合入 bear，北极熊 polar_bear 和大熊猫 panda 单独保留。bear 不表示无威胁。懒熊不在本次 56 类内，遇到明确标注排除。
 - 狼、狗、狐狸分开；wolf 包含 AP-10K 原始 wolf 与原 LILA 胡狼/郊狼业务分组，不能把所有样本看成纯灰狼。猪和野猪分开。
 - 兔、鼠、仓鼠、松鼠、猫、牛、绵羊、山羊等保持常见名称，不做少样本上卷。
 - AP-10K 的 argali sheep→sheep、arctic fox→fox、moose→deer、bobcat→lynx、king cheetah→leopard、snow leopard→leopard、mouse/rat→mouse、hippo→hippopotamus、rhino→rhinoceros。属于本项目的通俗上级分组，不把它们都说成同一生物物种。
 - AP-10K 的 bison、panther、beaver、mole、chimpanzee、gorilla、orangutan 没有本次安全对应的类别，整图排除，不猜成家牛、豹、鼠或猴。完整原名映射见 report.json 的 ap10k 字段及 class_mapping.json。
-- 鹿、羚羊、猴、松鼠等合并审核过的细类；昆虫统一 insect，蜘蛛/蝎子/蜈蚣独立，蜱虫不纳入。
+- 鹿、羚羊、猴、松鼠等合并审核过的细类；昆虫及其他节肢动物不纳入。
 - rodent/mustelid/wild_cat 等无法安全对应的粗标签不猜成鼠/鼬/家猫。**任何来源含范围外或无法安全映射的框，整图排除，不单独删掉该框。**
 
 LILA 仍读取原始 selected_annotations.json，通过框坐标匹配恢复作者类别，再做归并。无法唯一恢复的保留输入粗类并报告，不根据照片猜物种。
@@ -79,7 +79,7 @@ LILA 仍读取原始 selected_annotations.json，通过框坐标匹配恢复作�
 图片只用硬链接，原目录不改动；跨磁盘无法链接时明确报错。已有 YOLO 框坐标 token 原样保留；AP-10K 框按源 COCO 数值转换，并在输出审计中重新计算核对。只有检查通过才发出训练 data.yaml。
 
 ```text
-yolo_datasets/camping68_ap10k_30k/
+yolo_datasets/camping56_ap10k_30k/
   data.yaml
   images/{train,val,test}/{ap10k,animals,lila}/...
   labels/{train,val,test}/{ap10k,animals,lila}/...
@@ -97,7 +97,7 @@ Ctrl+C 后用同一命令恢复：重扫标签/标注元数据，不进行 Valid
 完成后先看 SUBSET_REPORT.md，再训练：
 
 ```bash
-python tune.py --data yolo_datasets/camping68_ap10k_30k/data.yaml --batch 128 --workers 4 --trials 1
+python tune.py --data yolo_datasets/camping56_ap10k_30k/data.yaml --batch 128 --workers 4 --trials 1
 ```
 
 本地测试验证 COCO 转换、严格面积边界、任意框达标保留所有框、来源优先、分组桥接、硬链接及断点复用。完整数据集需在服务器实际执行，最终数量和类别以报告为准。
@@ -125,9 +125,9 @@ python tune.py --data yolo_datasets/camping68_ap10k_30k/data.yaml --batch 128 --
 python extract_camping.py --ap10k /你的路径/ap-10k --class-id-start 10 --workers 16
 ```
 
-未指定 `--output` 时，输出自动命名为 `yolo_datasets/camping68_ap10k_30k_id10/`。起始 ID 参与检查点身份，改变 ID 必须使用新输出目录。
+未指定 `--output` 时，输出自动命名为 `yolo_datasets/camping56_ap10k_30k_id10/`。起始 ID 参与检查点身份，改变 ID 必须使用新输出目录。
 
-YOLO 要求类别名称从 0 连续到 nc-1，所以 data.yaml 中 0–9 使用 reserved_0…reserved_9 占位，没有训练标注；实际有 68 类时 nc=78。报告仍只统计实际动物类别。这会增加检测头的输出类别数，不代表已经训练了预留的十类。原始数据不会被改写。
+YOLO 要求类别名称从 0 连续到 nc-1，所以 data.yaml 中 0–9 使用 reserved_0…reserved_9 占位，没有训练标注；实际有 56 类时 nc=66。报告仍只统计实际动物类别。这会增加检测头的输出类别数，不代表已经训练了预留的十类。原始数据不会被改写。
 
 ## 平铺图片与标签
 
@@ -137,4 +137,10 @@ YOLO 要求类别名称从 0 连续到 nc-1，所以 data.yaml 中 0–9 使用 
 python extract_camping.py --ap10k /你的路径/ap-10k --flat-images --class-id-start 10 --workers 16
 ```
 
-默认输出自动加 `_flat`，上例为 `yolo_datasets/camping68_ap10k_30k_id10_flat/`。不传参数则保持来源子目录。切换布局需要新输出目录；原有输出不会原地搬动。抽样、类别编号、相机分组、硬链接规则不受影响，后续图片修复仍能找到标签并按来源更新报告。
+默认输出自动加 `_flat`，上例为 `yolo_datasets/camping56_ap10k_30k_id10_flat/`。不传参数则保持来源子目录。切换布局需要新输出目录；原有输出不会原地搬动。抽样、类别编号、相机分组、硬链接规则不受影响，后续图片修复仍能找到标签并按来源更新报告。
+
+## 本次类别调整
+
+删除 insect、centipede、scorpion、spider、crab、frog、koala、opossum；其细分类同样排除。turkey/woodpecker → bird，swan → goose，hamster → mouse；skunk、mongoose、civet 分别独立保留。共 56 个候选类别。天鹅和仓鼠的合并属于业务分组，分别展示为“鹅类（含天鹅）”“鼠类（含仓鼠）”。
+
+重新运行抽取命令即可，默认输出改为 camping56_ap10k_30k，避免与旧版结果混用。不要复用旧输出目录。仍然最多 30000 张；含被排除动物的混合图片整张排除，保留图片的所有有效框；原始图片不删除。旧 configs/camping68.json 仅作为历史配置保留，不再是默认规则。

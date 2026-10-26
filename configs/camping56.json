@@ -1,0 +1,379 @@
+{
+  "schema": 1,
+  "classes": {
+    "bear": {
+      "chinese": "熊（含棕熊、黑熊）",
+      "group": "熊类",
+      "parent": null
+    },
+    "polar_bear": {
+      "chinese": "北极熊",
+      "group": "熊类",
+      "parent": null
+    },
+    "panda": {
+      "chinese": "大熊猫",
+      "group": "熊类",
+      "parent": null
+    },
+    "dog": {
+      "chinese": "狗",
+      "group": "狗狼狐狸",
+      "parent": null
+    },
+    "wolf": {
+      "chinese": "狼",
+      "group": "狗狼狐狸",
+      "parent": null
+    },
+    "fox": {
+      "chinese": "狐狸",
+      "group": "狗狼狐狸",
+      "parent": null
+    },
+    "cat": {
+      "chinese": "猫",
+      "group": "猫类",
+      "parent": null
+    },
+    "lion": {
+      "chinese": "狮子类（含美洲狮）",
+      "group": "猫类",
+      "parent": null
+    },
+    "tiger": {
+      "chinese": "老虎",
+      "group": "猫类",
+      "parent": null
+    },
+    "leopard": {
+      "chinese": "豹类（含猎豹、美洲豹、雪豹）",
+      "group": "猫类",
+      "parent": null
+    },
+    "lynx": {
+      "chinese": "猞猁",
+      "group": "猫类",
+      "parent": null
+    },
+    "rabbit": {
+      "chinese": "兔",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "mouse": {
+      "chinese": "鼠类（含仓鼠）",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "squirrel": {
+      "chinese": "松鼠",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "marmot": {
+      "chinese": "旱獭",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "hedgehog": {
+      "chinese": "刺猬",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "porcupine": {
+      "chinese": "豪猪",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "raccoon": {
+      "chinese": "浣熊类（含小熊猫）",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "badger": {
+      "chinese": "獾",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "skunk": {
+      "chinese": "臭鼬",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "otter": {
+      "chinese": "水獭",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "civet": {
+      "chinese": "灵猫",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "weasel": {
+      "chinese": "鼬类",
+      "group": "小型及其他动物",
+      "parent": null
+    },
+    "cattle": {
+      "chinese": "牛",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "buffalo": {
+      "chinese": "水牛",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "sheep": {
+      "chinese": "绵羊",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "goat": {
+      "chinese": "山羊",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "horse": {
+      "chinese": "马",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "pig": {
+      "chinese": "猪",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "wild_boar": {
+      "chinese": "野猪",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "deer": {
+      "chinese": "鹿",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "antelope": {
+      "chinese": "羚羊",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "monkey": {
+      "chinese": "猴",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "elephant": {
+      "chinese": "大象",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "camel": {
+      "chinese": "骆驼",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "giraffe": {
+      "chinese": "长颈鹿",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "zebra": {
+      "chinese": "斑马",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "rhinoceros": {
+      "chinese": "犀牛",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "hippopotamus": {
+      "chinese": "河马",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "kangaroo": {
+      "chinese": "袋鼠",
+      "group": "家畜及其他陆生动物",
+      "parent": null
+    },
+    "bird": {
+      "chinese": "鸟",
+      "group": "鸟类",
+      "parent": null
+    },
+    "chicken": {
+      "chinese": "鸡",
+      "group": "鸟类",
+      "parent": null
+    },
+    "duck": {
+      "chinese": "鸭",
+      "group": "鸟类",
+      "parent": null
+    },
+    "goose": {
+      "chinese": "鹅类（含天鹅）",
+      "group": "鸟类",
+      "parent": null
+    },
+    "crow": {
+      "chinese": "乌鸦",
+      "group": "鸟类",
+      "parent": null
+    },
+    "parrot": {
+      "chinese": "鹦鹉",
+      "group": "鸟类",
+      "parent": null
+    },
+    "owl": {
+      "chinese": "猫头鹰",
+      "group": "鸟类",
+      "parent": null
+    },
+    "eagle": {
+      "chinese": "鹰",
+      "group": "鸟类",
+      "parent": null
+    },
+    "penguin": {
+      "chinese": "企鹅",
+      "group": "鸟类",
+      "parent": null
+    },
+    "ostrich": {
+      "chinese": "鸵鸟",
+      "group": "鸟类",
+      "parent": null
+    },
+    "snake": {
+      "chinese": "蛇",
+      "group": "爬行动物与两栖动物",
+      "parent": null
+    },
+    "lizard": {
+      "chinese": "蜥蜴",
+      "group": "爬行动物与两栖动物",
+      "parent": null
+    },
+    "crocodile": {
+      "chinese": "鳄鱼",
+      "group": "爬行动物与两栖动物",
+      "parent": null
+    },
+    "turtle": {
+      "chinese": "龟",
+      "group": "爬行动物与两栖动物",
+      "parent": null
+    },
+    "fish": {
+      "chinese": "鱼",
+      "group": "鱼类与海洋哺乳动物",
+      "parent": null
+    },
+    "mongoose": {
+      "chinese": "獴",
+      "group": "小型及其他动物",
+      "parent": null
+    }
+  },
+  "aliases": {
+    "goldfish": "fish",
+    "raven": "crow",
+    "sea_turtle": "turtle",
+    "tortoise": "turtle",
+    "chipmunk": "squirrel",
+    "flying_squirrel": "squirrel",
+    "red_fox": "fox",
+    "elk": "deer",
+    "chevrotain": "deer",
+    "bamboo_rat": "mouse",
+    "woodrat": "mouse",
+    "baboon": "monkey",
+    "macaque": "monkey",
+    "sun_bear": "bear",
+    "asiatic_black_bear": "bear",
+    "american_black_bear": "bear",
+    "mink": "weasel",
+    "yellow_throated_marten": "weasel",
+    "yellow_bellied_weasel": "weasel",
+    "back_striped_weasel": "weasel",
+    "red_junglefowl": "chicken",
+    "marten": "weasel",
+    "cheetah": "leopard",
+    "jaguar": "leopard",
+    "cougar": "lion",
+    "red_panda": "raccoon",
+    "brown_bear": "bear",
+    "black_bear": "bear",
+    "pigeon": "bird",
+    "snow_leopard": "leopard",
+    "clouded_leopard": "leopard",
+    "king_cheetah": "leopard",
+    "puma": "lion",
+    "mountain_lion": "lion",
+    "turkey": "bird",
+    "woodpecker": "bird",
+    "swan": "goose",
+    "hamster": "mouse"
+  },
+  "excluded": [
+    "aardvark",
+    "animal",
+    "bat",
+    "butterfly",
+    "caterpillar",
+    "centipede",
+    "crab",
+    "frog",
+    "galago",
+    "gibbon",
+    "harbor_seal",
+    "hyena",
+    "insect",
+    "jellyfish",
+    "koala",
+    "ladybug",
+    "mammal",
+    "moths_and_butterflies",
+    "mule",
+    "mustelid",
+    "opossum",
+    "pangolin",
+    "person",
+    "rodent",
+    "scorpion",
+    "sea_lion",
+    "seahorse",
+    "seal",
+    "serow",
+    "shark",
+    "shrimp",
+    "sloth_bear",
+    "small_mammal",
+    "snail",
+    "spider",
+    "squid",
+    "starfish",
+    "tick",
+    "tree_shrew",
+    "vehicle",
+    "warthog",
+    "whale",
+    "wild_cat",
+    "worm"
+  ],
+  "notes": [
+    "wolf contains original AP-10K wolf plus the user-defined LILA jackal/coyote group; not all samples establish gray-wolf identity.",
+    "bear includes brown/black/other bears; polar bear and panda stay separate; never implies harmless.",
+    "No rare-class folding; unsupported labels exclude the entire image; no dropped positive boxes.",
+    "Global per-class source priority: AP-10K, Animals Detection, LILA; sample before final grouped splitting.",
+    "User-defined visual groups: cheetah/jaguar/leopard -> leopard; cougar/lion -> lion; red panda/raccoon -> raccoon; pigeon -> bird. These are application labels, not biological species equivalence.",
+    "Application grouping: swan -> goose; hamster -> mouse; turkey/woodpecker -> bird. Skunk and mongoose stay separate. Excluded animals cause whole-image exclusion, not box erasure."
+  ]
+}
