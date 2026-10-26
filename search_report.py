@@ -80,6 +80,8 @@ def write_report(root, records, winners, models, complete=False):
                 status = '已中断，可继续'
             if r['test'].get('status') == 'failed':
                 status += '；测试失败'
+            elif r['test'].get('status') != 'ok' or any(k not in r['test'].get('metrics', {}) for k in ('map50','map50_95','precision','recall')):
+                status += '；测试待补齐'
             tag = f"t{r['trial']:03d}" + ('（基线）' if r['trial'] == 0 else '')
             if best.get(model) == r:
                 tag += ' ★'
@@ -104,7 +106,7 @@ def write_report(root, records, winners, models, complete=False):
               '- **Precision**：预测出的目标中有多少是对的；**Recall**：真实目标中有多少被找到。',
               '- ★ 表示同一模型当前最优；“提升”仅与该模型 t000 的验证结果比较，不是测试集提升。',
               '- auto 是传入的配置，不代表固定 AdamW；实际优化器与学习率请查看 train.log。',
-              '- 未逐候选测试时，测试列留空属正常；不能将缺失测试指标视为性能差。',
+              '- 默认逐候选测试；旧实验或显式 final 策略可能留空。用 tune.py --test-only --output 实验目录 补齐，不重新训练。',
               '- n/s 仅按验证精度分别选优，不意味着已经验证部署速度或所有物种的召回率。',
               '- 阶段性报告会持续更新；完成报告也只代表本次搜索预算内的最优结果。', '',
               '机器可读明细：[iterations.csv](iterations.csv)、[summary.json](summary.json)。', '']

@@ -50,7 +50,7 @@ python tune.py --data yolo_datasets/camping_all_classes/data.yaml --workers 16
 
 ## 评估和结果
 
-默认 `--test-policy final`：每个候选训练完成后重新验证 best.pt，全部候选结束后仅测试选中的 n、s，共两次测试。若要保留原来的逐候选测试方式，传 `--test-policy every-trial`；测试指标仍不参与选优。扩展预算后会评估新的获胜者，不应据测试分数调整搜索。
+默认 `--test-policy every-trial`：每个候选训练、验证完成后，测试自己的 best.pt，逐次保存四项 test 指标。显式传 `--test-policy final` 可只测试最终胜出的 n/s。选优始终依据 val mAP50-95，test 不参与调参。
 
 每阶段结果立即保存，包含：
 
@@ -104,3 +104,20 @@ CUDA/主机内存不足、SIGKILL、磁盘异常会停止整批并保留恢复�
 报告逐阶段更新。只有所有要求的阶段成功结束才标记“本次搜索完成”，中断时可查看阶段性结果。`auto` 标记的是配置，实际选中的优化器和学习率见候选训练日志。已有本版本搜索只需重跑同一命令，即可利用完成记录生成报告，无需重新训练；更早版本的搜索空间仍不能混用。
 
 只训练指定模型：`python tune.py --data 数据集/data.yaml --models yolo11s.pt`；两个模型用 `--models yolo11n.pt yolo11s.pt`。不指定则训练原四个模型。模型选择参与自动命名；切换模型组合时不复用旧的显式输出目录。`--trials` 仍是每个模型的试验总次数。
+
+## 补齐旧实验的 test 指标
+
+在原训练服务器运行，保留数据和各候选的 best.pt：
+
+```bash
+git pull --ff-only
+python tune.py --test-only --output runs/animals_search_batch --device 0 --eval-batch 32 --workers 4
+```
+
+将 output 换成实际实验目录。自动读取 run.json 的数据路径，兼容旧版 models/<模型>/trial_0000 和新版 v11n/t000；旧搜索空间也可以补测。仅测试已完成训练与验证的候选，不下载、不训练、不重跑 val、不增删 Optuna trial。完整且权重校验一致的已有 test 直接复用；缺失、失败或四项指标不全则重测。补测可中断，同一命令继续。
+
+可用 `--models yolo11n.pt yolo11s.pt` 限定模型，或加 `--dry-run` 查看待补数量。默认使用原数据配置；`--data` 可指定文件，但 YAML 与转换报告的内容指纹必须保持一致。数据内容原地变化仍无法通过配置指纹检测。不要拿另一个测试集的结果混入旧实验。
+
+补测更新 REPORT.md、iterations.csv、summary.json、rounds 和 best/selection.json，不改选优规则或重新导出 best 权重。test_backfill.json 记录失败原因、未完成而跳过的候选、剩余待补项。缺少 best.pt 无法补测，脚本会记录后继续其他候选；未完成的训练需原命令恢复。资源故障则停止本次补测。补测报告不声明原训练预算已完成。
+
+旧实验继续训练时仍应显式保留其原 `--test-policy`；默认策略变化会改变自动实验名。只补指标请使用 test-only，不要为此新建训练实验。

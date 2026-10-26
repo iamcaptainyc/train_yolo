@@ -7,6 +7,7 @@ import errno
 import hashlib
 import re
 import json
+import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -25,13 +26,15 @@ BATCH_CHOICES = [64, 128, 256]
 
 
 def selected_models(args):
-    requested = getattr(args, 'models', MODELS)
+    requested = getattr(args, 'models', None) or MODELS
     # Canonical order makes equivalent selections share a resumable experiment.
     return tuple(model for model in MODELS if model in requested)
 
 
 def trial_directory(root, model, number):
-    return root/Path(model).stem.replace('yolov', 'v').replace('yolo', 'v')/f't{number:03d}'
+    current = root/Path(model).stem.replace('yolov', 'v').replace('yolo', 'v')/f't{number:03d}'
+    legacy = root/'models'/Path(model).stem/f'trial_{number:04d}'
+    return legacy if legacy.is_dir() and not current.exists() else current
 
 
 def experiment_identity(args):
@@ -77,10 +80,20 @@ def sample_params(trial, fixed_batch=None):
             'mosaic': trial.suggest_float('mosaic', 0.0, 1.0)}
 
 
+def valid_evaluation(result, phase=None):
+    metrics = result.get('metrics') or {}
+    if not isinstance(metrics, dict):
+        return False
+    return (result.get('status') == 'ok' and (phase is None or result.get('split') == phase)
+            and all(isinstance(metrics.get(k), (int, float)) and not isinstance(metrics[k], bool)
+                    and math.isfinite(metrics[k]) and 0 <= metrics[k] <= 1
+                    for k in ('precision', 'recall', 'map50', 'map50_95')))
+
+
 def run_job(job):
     result_path = Path(job['result'])
     old = read_json(result_path, {})
-    if old.get('status') == 'ok':
+    if old.get('status') == 'ok' and (job['phase'] not in ('val', 'test') or valid_evaluation(old, job['phase'])):
         if job['phase'] == 'train':
             checkpoint = Path(old['best_checkpoint'])
             if not checkpoint.is_file() or digest(checkpoint) != old['checkpoint_sha256']:
@@ -110,7 +123,7 @@ def run_job(job):
     result = read_json(result_path, {})
     if code in (130, 143, -2, -15):
         raise KeyboardInterrupt
-    if code or result.get('status') != 'ok':
+    if code or result.get('status') != 'ok' or (job['phase'] in ('val', 'test') and not valid_evaluation(result, job['phase'])):
         raise JobError(job['phase'], code, result)
     return result
 
@@ -130,6 +143,9 @@ def choose_train_dir(directory):
 
 def evaluate(config, training, phase, args):
     directory = Path(config['trial_dir'])
+    checkpoint = Path(training['best_checkpoint'])
+    if not checkpoint.is_file() or digest(checkpoint) != training['checkpoint_sha256']:
+        raise ValueError(f'Trained checkpoint missing/changed: {checkpoint}')
     return run_job({**config, 'phase': phase, 'checkpoint': training['best_checkpoint'],
                     'eval_batch': args.eval_batch, 'device': args.device, 'workers': args.workers,
                     'result': str(directory/f'{phase}_result.json'), 'log': str(directory/f'{phase}.log')})
@@ -173,7 +189,7 @@ def select_winners(records):
     return winners
 
 
-def refresh_reports(root, studies):
+def refresh_reports(root, studies, export_best=True):
     records = collect_records(root, studies)
     winners = select_winners(records)
     write_json(root/'summary.json', {'selection_metric': 'validation mAP50-95',
@@ -203,7 +219,7 @@ def refresh_reports(root, studies):
         write_json(root/'rounds'/f'round_{number+1:04d}.json', [r for r in records if r['trial'] == number])
     best_dir = root/'best'
     best_dir.mkdir(exist_ok=True)
-    for size, winner in winners.items():
+    for size, winner in (winners.items() if export_best else []):
         source = Path(winner['train']['best_checkpoint'])
         target = best_dir/f'best_{size}.pt'
         expected = winner['train']['checkpoint_sha256']
@@ -361,17 +377,84 @@ def search_studies(args, root, initial, storage):
               f'test={record["test"].get("metrics")}; weights={root/"best"/f"best_{size}.pt"}', flush=True)
     if set(winners) != {Path(model).stem[-1] for model in studies} or any(r['state'] != 'COMPLETE' for r in records):
         raise ValueError('Some trials failed or a selected model size has no complete candidate; inspect iterations.csv and stage logs')
-    if args.test_policy == 'every-trial' and any(r['test'].get('status') != 'ok' for r in records if r['state'] == 'COMPLETE'):
+    if args.test_policy == 'every-trial' and any(not valid_evaluation(r['test'], 'test') for r in records if r['state'] == 'COMPLETE'):
         raise ValueError('Some test stages failed; rerun the same command to retry evaluation only')
     write_report(root, records, winners, tuple(studies), complete=True)
     print(f'Human-readable report: {root / "REPORT.md"}', flush=True)
 
 
+def test_only(args):
+    """Backfill existing completed trials, without prepare/train/val or study mutation."""
+    import optuna
+    root = args.output.resolve()
+    manifest = read_json(root/'run.json')
+    if not manifest or not (root/'optuna.sqlite3').is_file():
+        raise ValueError('--test-only requires an existing experiment with run.json and optuna.sqlite3')
+    data = (args.data or Path(manifest['data']['path'])).expanduser().resolve()
+    current = dataset_identity(data)
+    for key in ('sha256', 'converter_report_sha256'):
+        if current.get(key) != manifest['data'].get(key):
+            raise ValueError(f'Dataset {key} changed; cannot mix test metrics with this experiment')
+    requested = set(getattr(args, 'models', None) or manifest['models'])
+    if not requested <= set(manifest['models']):
+        raise ValueError('Requested models are not present in the saved experiment')
+    storage = optuna.storages.RDBStorage(url='sqlite:///'+(root/'optuna.sqlite3').as_posix(),
+                                        engine_kwargs={'connect_args': {'timeout': 60}})
+    try:
+        studies = {model: optuna.load_study(study_name=Path(model).stem, storage=storage)
+                   for model in manifest['models']}
+        records = collect_records(root, studies)
+        candidates = [r for r in records if r['model'] in requested and r['state'] == 'COMPLETE']
+        skipped = [{'model':r['model'],'trial':r['trial'],'reason':r['state']}
+                   for r in records if r['model'] in requested and r['state'] != 'COMPLETE']
+        if args.dry_run:
+            print(json.dumps({'mode':'test-only','output':str(root),'data':str(data),
+                'completed_candidates':len(candidates),
+                'missing_or_incomplete_tests':sum(not valid_evaluation(r['test'],'test') for r in candidates),
+                'skipped':skipped},ensure_ascii=False,indent=2))
+            return
+        errors = []
+        checked = 0
+        try:
+            for record in candidates:
+                print(f"[test-only] {record['model']} / t{record['trial']:03d}",flush=True)
+                try:
+                    if record['train'].get('status') != 'ok' or not record['config']:
+                        raise ValueError('Completed trial has no valid training result/configuration')
+                    config = {**record['config'], 'data':str(data), 'trial_dir':record['trial_dir']}
+                    evaluate(config, record['train'], 'test', args)
+                    write_json(Path(record['trial_dir'])/'status.json',
+                               {'state': 'COMPLETE', 'test_checked_at': time.time()})
+                    checked += 1
+                except Exception as exc:
+                    errors.append({'model':record['model'],'trial':record['trial'],'error':str(exc)})
+                    print(f'Test backfill failed: {exc}',file=sys.stderr,flush=True)
+                    if isinstance(exc, JobError) and exc.resource_failure:
+                        break
+                finally:
+                    refresh_reports(root, studies, export_best=False)
+        finally:
+            records, winners = refresh_reports(root, studies, export_best=False)
+            write_json(root/'test_backfill.json', {'mode':'test-only','checked':checked,
+                'candidates':len(candidates),'errors':errors,'skipped':skipped,
+                'remaining': [{'model':r['model'],'trial':r['trial']} for r in records
+                              if r['state']=='COMPLETE' and not valid_evaluation(r['test'],'test')]})
+            # A backfill does not certify that the original training budget finished.
+            write_report(root, records, winners, tuple(studies))
+        if errors:
+            raise ValueError('Some test backfills failed; see test_backfill.json; rerun to retry without training')
+        print(f'Test backfill complete: {checked} candidates checked; {len(skipped)} unfinished/failed trials skipped. Report: {root/"REPORT.md"}',flush=True)
+    finally:
+        storage.remove_session()
+        storage.engine.dispose()
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--models', nargs='+', choices=MODELS, default=list(MODELS),
+    p.add_argument('--models', nargs='+', choices=MODELS, default=None,
                    help='Train only the selected models (default: all four)')
-    p.add_argument('--data', type=Path, required=True)
+    p.add_argument('--data', type=Path, help='Required for training; test-only uses the saved dataset by default')
+    p.add_argument('--test-only', action='store_true', help='Backfill tests in --output without training or downloading weights')
     p.add_argument('--output', type=Path, default=None, help='Optional; otherwise derive a short resumable experiment name')
     p.add_argument('--weights-dir', type=Path, default=Path('weights'))
     p.add_argument('--trials', type=int, default=8, help='Target total trial attempts per model, including previous attempts')
@@ -385,16 +468,26 @@ def main():
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='final')
+    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='every-trial')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
-    args.data = args.data.expanduser().resolve()
+    if args.data is None and not args.test_only:
+        p.error('--data is required for training')
+    if args.test_only and (args.output is None or not args.output.expanduser().is_dir()):
+        p.error('--test-only requires --output pointing to an existing experiment')
+    args.data = args.data.expanduser().resolve() if args.data else None
     args.weights_dir = args.weights_dir.expanduser().resolve()
     if any(v < 1 for v in (args.trials, args.epochs, args.imgsz, args.eval_batch)) or (args.batch is not None and args.batch < 1) or args.workers < 0 or args.patience < 0:
         p.error('Trials/epochs/imgsz/batches must be positive; workers/patience must be non-negative')
     if not (args.device == 'cpu' or args.device.isdecimal()):
         p.error('--device must be one GPU index or cpu')
     try:
+        if args.test_only:
+            from filelock import FileLock
+            args.output = args.output.expanduser().resolve()
+            with FileLock(str(args.output/'.search.lock'), timeout=0):
+                test_only(args)
+            return
         dataset_identity(args.data)
         args.output = (args.output or automatic_output(args)).expanduser().resolve()
         if args.dry_run:

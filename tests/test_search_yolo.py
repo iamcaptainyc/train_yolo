@@ -74,6 +74,85 @@ class SearchIntegrationTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             search_yolo.run(args)
 
+    def backfill_fake(self, args, gpu):
+        args.dry_run = False
+        with patch('search_yolo.subprocess.Popen', side_effect=gpu.launch), \
+                patch('training_guard.supervise', side_effect=lambda command: gpu.launch(command).wait()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            search_yolo.test_only(args)
+
+    def test_backfill_final_policy_without_training_or_study_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), trials=2, test_policy='final'), FakeGPU()
+            self.run_fake(args, gpu)
+            before = json.loads((args.output/'summary.json').read_text())
+            self.assertEqual(len([j for j in gpu.calls if j['phase']=='test']), 2)
+            count = len(gpu.calls)
+            args.data = None  # Uses saved dataset; no new training options needed.
+            self.backfill_fake(args, gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]], ['test']*6)
+            after = json.loads((args.output/'summary.json').read_text())
+            self.assertEqual([(r['model'],r['trial'],r['state'],r['objective']) for r in before['iterations']],
+                             [(r['model'],r['trial'],r['state'],r['objective']) for r in after['iterations']])
+            self.assertEqual(before['winners']['n']['model'], after['winners']['n']['model'])
+            self.assertTrue(all(search_yolo.valid_evaluation(r['test'],'test') for r in after['iterations']))
+            count = len(gpu.calls)
+            self.backfill_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)
+
+    def test_backfill_retries_failure_and_incomplete_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), test_policy='final'), FakeGPU()
+            self.run_fake(args, gpu)
+            gpu.fail_test_once = True
+            count = len(gpu.calls)
+            with self.assertRaisesRegex(ValueError, 'backfills failed'):
+                self.backfill_fake(args, gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]], ['test']*2)
+            result = json.loads((args.output/'test_backfill.json').read_text())
+            self.assertEqual(len(result['errors']), 1)
+            target = search_yolo.trial_directory(args.output, 'yolo11n.pt', 0)/'test_result.json'
+            damaged = json.loads(target.read_text())
+            del damaged['metrics']['map50_95']
+            write_json(target, damaged)
+            count = len(gpu.calls)
+            self.backfill_fake(args, gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]], ['test']*2)
+            self.assertEqual(json.loads((args.output/'test_backfill.json').read_text())['remaining'], [])
+
+    def test_backfill_legacy_layout_and_search_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), test_policy='final'), FakeGPU()
+            write_json(args.output/'run.json', search_yolo.experiment_identity(args))
+            for model in search_yolo.MODELS:
+                (args.output/'models'/Path(model).stem/'trial_0000').mkdir(parents=True)
+            self.run_fake(args, gpu)
+            manifest = json.loads((args.output/'run.json').read_text())
+            manifest['space_version'] = 2
+            write_json(args.output/'run.json', manifest)
+            count = len(gpu.calls)
+            self.backfill_fake(args, gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]], ['test']*2)
+            self.assertTrue(all('/models/' in Path(j['trial_dir']).as_posix() for j in gpu.calls[count:]))
+
+    def test_backfill_missing_weight_continues_and_changed_data_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), test_policy='final'), FakeGPU()
+            self.run_fake(args, gpu)
+            trial = search_yolo.trial_directory(args.output,'yolov8n.pt',0)
+            training = json.loads((trial/'train_result.json').read_text())
+            Path(training['best_checkpoint']).unlink()
+            count = len(gpu.calls)
+            with self.assertRaisesRegex(ValueError,'backfills failed'):
+                self.backfill_fake(args,gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]], ['test'])
+            self.assertIn('checkpoint missing',json.loads((args.output/'test_backfill.json').read_text())['errors'][0]['error'])
+            args.data.write_text(args.data.read_text().replace('cat','dog'))
+            count = len(gpu.calls)
+            with self.assertRaisesRegex(ValueError,'Dataset sha256 changed'):
+                self.backfill_fake(args,gpu)
+            self.assertEqual(len(gpu.calls),count)
+
     def test_one_or_two_selected_models_and_resume_identity(self):
         for chosen in [('yolo11s.pt',), ('yolo11n.pt', 'yolo11s.pt')]:
             with self.subTest(chosen=chosen), tempfile.TemporaryDirectory() as tmp:
