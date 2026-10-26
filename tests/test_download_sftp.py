@@ -16,6 +16,7 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(downloader.remote_size('-rw------- 1 root root 0 Jan 1 2026 empty.zip'), 0)
         self.assertEqual(downloader.remote_size('-rw-r--r--    ? 0        0        17000000000 Oct 26 12:00 /data/animals.zip'), 17000000000)
         self.assertEqual(downloader.remote_size('-rw-r--r--+   ? 1000     1000      1234 Oct 26 12:00 spaced file.zip'), 1234)
+        self.assertEqual(downloader.remote_size('-rw-******    ? 0        0        16741556304 Oct 26 14:24 /root/autodl-tmp/capt/code/train_yolo/animals_30k.zip'), 16741556304)
         self.assertIsNone(downloader.remote_size('lrwxrwxrwx 1 0 0 9 Oct 26 12:00 link -> file'))
         self.assertIsNone(downloader.remote_size('Permission denied'))
 
@@ -64,6 +65,7 @@ class DownloadTests(unittest.TestCase):
 
     def run_download(self, target, transfer, **kwargs):
         with patch.object(downloader.shutil, 'which', return_value='sftp'), \
+                patch.object(downloader, 'query_size', return_value=None), \
                 patch.object(downloader, 'transfer', side_effect=transfer), \
                 patch.object(downloader.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
             downloader.download('26080-yc', '/data/animals.zip', target, **kwargs)
@@ -73,7 +75,7 @@ class DownloadTests(unittest.TestCase):
             target = Path(tmp)/'animals.zip'
             target.write_bytes(b'existing')
             offsets = []
-            def transfer(cmd, script, path, timeout):
+            def transfer(cmd, script, path, timeout, total=None):
                 offsets.append(path.stat().st_size)
                 self.assertIn('reget "/data/animals.zip" "./animals.zip"', script)
                 self.assertIn('BatchMode=yes', cmd)
@@ -83,6 +85,22 @@ class DownloadTests(unittest.TestCase):
             self.run_download(target, transfer, retries=1)
             self.assertEqual(offsets, [8, 11])
             self.assertEqual(target.read_bytes(), b'existing123123')
+
+    def test_separate_query_collects_buffered_windows_listing(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            program = ("import sys,time; data=sys.stdin.read(); "
+                       "assert '@reget' not in data; "
+                       "print('-rw-******    ? 0 0 16741556304 Oct 26 14:24 /data/file.zip'); "
+                       "time.sleep(.5)")  # No -u or flush: output arrives on exit.
+            total = downloader.query_size([sys.executable, '-c', program], '/data/file.zip', Path(tmp)/'file.zip')
+            self.assertEqual(total, 16741556304)
+
+    def test_unparsed_size_preserves_actual_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, 'unexpected listing'):
+                downloader.query_size([sys.executable, '-c',
+                    "import sys; sys.stdin.read(); print('unexpected listing')"],
+                    '/data/file.zip', Path(tmp)/'file.zip')
 
     def test_retry_exhaustion_keeps_partial(self):
         with tempfile.TemporaryDirectory() as tmp:

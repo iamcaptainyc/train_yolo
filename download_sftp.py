@@ -25,15 +25,15 @@ def batch(remote, output):
     # This tool downloads one exact path, never a remote wildcard expansion.
     if not remote.startswith('/') or any(c in remote for c in '*?[]'):
         raise ValueError('Remote path must be absolute, without wildcard characters')
-    return (f'@ls -ln {quoted(remote)}\n'
-            f'@reget {quoted(remote)} {quoted("./" + output.name)}\n@bye\n')
+    return f'@reget {quoted(remote)} {quoted("./" + output.name)}\n@bye\n'
 
 
 def remote_size(line):
     # OpenSSH remote listings use '?' for link count (SFTP does not supply it).
     # Ordinary ls listings may instead contain a numeric link count.
     # A symlink listing gives the link length, not target size: leave it unknown.
-    match = re.match(r'^-[rwxStTs-]{9}[+@.]?\s+(?:\d+|\?)\s+\S+\s+\S+\s+(\d+)\s+', line.strip())
+    # Windows OpenSSH may render unrepresented permission bits as '*'.
+    match = re.match(r'^-[rwxStTs*?-]{9}[+@.]?\s+(?:\d+|\?)\s+\S+\s+\S+\s+(\d+)\s+', line.strip())
     return int(match[1]) if match else None
 
 
@@ -124,14 +124,49 @@ def stop(proc):
         proc.wait()
 
 
-def transfer(cmd, script, output, stall_timeout=600):
+def query_size(cmd, remote, output):
+    """Finish a separate SFTP listing before transfer; do not depend on live flushing."""
     options = {'start_new_session': True} if os.name != 'nt' else {
         'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
     progress = Progress()
-    progress.show(size(output), state='Connecting / reading remote size', force=True)
+    progress.show(size(output), state='Querying remote file size', force=True)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, **options)
+    payload = f'@ls -ln {quoted(remote)}\n@bye\n'.encode('utf-8')
+    started = time.monotonic()
+    try:
+        while True:
+            try:
+                stdout, stderr = proc.communicate(input=payload, timeout=.25)
+                break
+            except subprocess.TimeoutExpired:
+                payload = None
+                progress.show(size(output), state='Querying remote file size')
+                if time.monotonic() - started >= 45:
+                    raise ValueError('Remote size query timed out after 45s')
+        if proc.returncode:
+            raise ValueError('Remote size query failed: ' + stderr.decode('utf-8', errors='replace').strip())
+        lines = stdout.decode('utf-8', errors='replace').splitlines()
+        totals = [n for line in lines if (n := remote_size(line)) is not None]
+        if len(totals) != 1:
+            raise ValueError('Cannot parse remote size; actual SFTP output: ' + repr('\n'.join(lines)[-2000:]))
+        return totals[0]
+    finally:
+        stop(proc)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream and not stream.closed:
+                stream.close()
+        progress.finish()
+
+
+def transfer(cmd, script, output, stall_timeout=600, total=None):
+    options = {'start_new_session': True} if os.name != 'nt' else {
+        'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    progress = Progress()
+    progress.show(size(output), total, state='Connecting / resuming', force=True)
     proc = subprocess.Popen(cmd, cwd=output.parent, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **options)
-    details = {'total': None}
+    details = {'total': total}
     messages = deque(maxlen=20)
 
     def read_output():
@@ -200,7 +235,16 @@ def download(host, remote, output, retries=10, retry_delay=10, stall_timeout=600
     while True:
         attempt += 1
         print(f'Attempt {attempt}; resume at {size(output):,} bytes: {output}', flush=True)
-        code = transfer(cmd, script, output, stall_timeout)
+        try:
+            total = query_size(cmd, remote, output)
+        except ValueError as exc:
+            print(f'Warning: {exc}. Download will continue with unknown total.', flush=True)
+            total = None
+        if total is not None:
+            print(f'Remote size: {total:,} bytes ({amount(total)})', flush=True)
+            if size(output) > total:
+                raise ValueError('Local file is larger than remote file; check that the remote ZIP is unchanged')
+        code = transfer(cmd, script, output, stall_timeout, total=total)
         if code == 0:
             if not output.is_file():
                 raise ValueError('SFTP reported success but the destination file is missing')
