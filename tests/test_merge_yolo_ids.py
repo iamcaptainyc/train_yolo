@@ -8,7 +8,7 @@ import unittest
 
 import yaml
 
-from merge_yolo_ids import merge
+from merge_yolo_ids import merge, parse_reserved_ids
 
 
 def dataset(root, names, rows, split_list=False):
@@ -37,7 +37,7 @@ class MergeIDsTests(unittest.TestCase):
             a = dataset(root/'a', {i:f'a{i}' for i in range(27)}, '26 0.5 0.5 0.2 0.3\n')
             bnames = {i:f'reserved_{i}' if i < 27 else f'b{i}' for i in range(83)}
             b = dataset(root/'b', bnames, '27 0.5 0.5 0.2 0.3\n82 0.4 0.4 0.2 0.2\n')
-            report = self.call_merge([a, b], root/'out')
+            report = self.call_merge([a, b], root/'out', reserved_ids={2:set(range(27))})
             config = yaml.safe_load((root/'out/data.yaml').read_text())
             self.assertEqual(config['nc'], 83)
             self.assertEqual(config['names'][0], 'a0')
@@ -88,7 +88,7 @@ class MergeIDsTests(unittest.TestCase):
                 if row is None:
                     (b/'labels/train/same_name.txt').unlink()
                 with self.assertRaises((ValueError,FileNotFoundError)):
-                    self.call_merge([a,b],root/'out')
+                    self.call_merge([a,b],root/'out', reserved_ids={2:{0}})
                 self.assertFalse((root/'out').exists())
 
     def test_shared_hardlink_across_splits_rejected(self):
@@ -101,6 +101,33 @@ class MergeIDsTests(unittest.TestCase):
             os.link(a/'images/train/same_name.jpg',image)
             with self.assertRaisesRegex(ValueError,'different splits'):
                 self.call_merge([a,b],root/'out')
+
+    def test_real_reserved_names_are_never_automatically_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'reserved',1:'reserved_1'},'0 0.5 0.5 0.2 0.2\n1 0.5 0.5 0.2 0.2\n')
+            b=dataset(root/'b',{2:'dog'},'2 0.5 0.5 0.2 0.2\n')
+            report=self.call_merge([a,b],root/'out')
+            self.assertEqual(report['names'],{0:'reserved',1:'reserved_1',2:'dog'})
+            self.assertEqual(report['ignored_reserved_ids'],{'d1':[],'d2':[]})
+            self.assertEqual(report['class_box_counts']['train'][1],1)
+
+    def test_padding_name_conflict_requires_explicit_declaration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'cat'},'0 0.5 0.5 0.2 0.2\n')
+            b=dataset(root/'b',{0:'reserved_0',1:'dog'},'1 0.5 0.5 0.2 0.2\n')
+            with self.assertRaisesRegex(ValueError,'Conflicting ID'):
+                self.call_merge([a,b],root/'out')
+            self.assertFalse((root/'out').exists())
+            with self.assertRaisesRegex(ValueError,'not declared'):
+                self.call_merge([a,b],root/'out',reserved_ids={2:{99}})
+
+    def test_reserved_arguments_are_scoped_to_source(self):
+        self.assertEqual(parse_reserved_ids(['2:0-2','2:4','3:0,6-7'],3),{2:{0,1,2,4},3:{0,6,7}})
+        for spec in ('0:1','4:0','2:9-1','2:-1','2:cat'):
+            with self.subTest(spec=spec),self.assertRaises(ValueError):
+                parse_reserved_ids([spec],3)
 
     def test_same_real_id_same_name_allowed_and_existing_output_protected(self):
         with tempfile.TemporaryDirectory() as tmp:

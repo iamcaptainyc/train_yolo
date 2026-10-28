@@ -1,4 +1,4 @@
-"""Merge YOLO detection datasets without changing class IDs; ignore unused reserved_N names."""
+"""Merge YOLO detection datasets preserving IDs; reserved IDs require explicit declaration."""
 from __future__ import annotations
 
 import argparse
@@ -38,12 +38,29 @@ def load_dataset(value):
         if cid in parsed:
             raise ValueError(f'Duplicate class ID {cid}: {path}')
         parsed[cid] = name.strip()
-    reserved = {cid for cid, name in parsed.items() if name == f'reserved_{cid}'}
     root = Path(config.get('path') or path.parent).expanduser()
     if not root.is_absolute():
         root = path.parent/root
     return {'yaml': path, 'config': config, 'root': root.resolve(),
-            'names': parsed, 'reserved': reserved}
+            'names': parsed, 'reserved': set()}
+
+
+def parse_reserved_ids(specs, source_count):
+    result = defaultdict(set)
+    for spec in specs or []:
+        if not re.fullmatch(r'[1-9]\d*:\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*', spec):
+            raise ValueError(f'Invalid --reserved-ids {spec!r}; use source:IDs, e.g. 2:0-26 or 3:0,2-5')
+        source, values = spec.split(':')
+        source = int(source)
+        if source > source_count:
+            raise ValueError(f'Reserved source index {source} exceeds dataset count {source_count}')
+        for item in values.split(','):
+            start, _, end = item.partition('-')
+            start, end = int(start), int(end or start)
+            if end < start or end - start > 100000:
+                raise ValueError(f'Invalid/oversized reserved range: {item}')
+            result[source].update(range(start, end+1))
+    return dict(result)
 
 
 def images_for(dataset, split):
@@ -100,8 +117,16 @@ def validate_label(path, dataset):
     return raw, counts
 
 
-def merge(datasets, output, copy_images=False):
+def merge(datasets, output, copy_images=False, reserved_ids=None):
     sources = [load_dataset(value) for value in datasets]
+    for index, ids in (reserved_ids or {}).items():
+        if not isinstance(index, int) or not 1 <= index <= len(sources):
+            raise ValueError(f'Invalid reserved source index: {index}')
+        source = sources[index-1]
+        ids = set(ids)
+        if not ids <= source['names'].keys():
+            raise ValueError(f'Reserved IDs not declared by source {index}: {sorted(ids - source["names"].keys())}')
+        source['reserved'] = ids
     output = Path(output).expanduser().resolve()
     for source in sources:
         for root in (source['yaml'].parent, source['root']):
@@ -176,6 +201,9 @@ def merge(datasets, output, copy_images=False):
         config['test'] = 'images/test'
     report = {'sources': [str(s['yaml']) for s in sources], 'class_ids_preserved': True,
               'ignored_reserved_ids': ignored, 'names': names, 'splits': split_stats,
+              'reserved_policy': 'explicit source/ID declarations only; no class-name matching',
+              'ignored_reserved_names': {f'd{i}': {cid:s['names'][cid] for cid in sorted(s['reserved'])}
+                                         for i, s in enumerate(sources, 1)},
               'class_image_counts': class_images, 'class_box_counts': boxes,
               'image_mode': 'copy' if copy_images else 'hardlink',
               'duplicate_check': 'same inode across splits only; no full content hash or visual/semantic audit'}
@@ -183,7 +211,8 @@ def merge(datasets, output, copy_images=False):
     lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。类别 ID 与坐标保持原值；原 train/val/test 划分保留。',
              '', f'图片保存方式：{report["image_mode"]}；图片按来源前缀平铺，标签单独写入。',
              '', '仅检查已知相同文件/硬链接跨划分重复，不校验所有图片内容或判断框的语义正确性。',
-             '', '## 忽略的占位类别', '', json.dumps(ignored, ensure_ascii=False),
+             '', '## 显式指定的占位类别', '', '默认不按类别名称忽略任何 ID；以下仅为用户指定且确认未被标签使用的占位项。',
+             '', json.dumps(report['ignored_reserved_names'], ensure_ascii=False),
              '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 |', '| --- | ---: | ---: |']
     lines += [f'| {s} | {split_stats[s]["images"]} | {split_stats[s]["negative_images"]} |' for s in SPLITS]
     lines += ['', '## 类别统计', '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 框总数 |', '| ---: | --- | ---: | ---: | ---: | ---: |']
@@ -199,11 +228,14 @@ def main():
     parser.add_argument('--datasets', type=Path, nargs='+', required=True, help='Dataset directories with data.yaml, or YAML paths')
     parser.add_argument('--output', type=Path, required=True, help='New directory, outside source datasets')
     parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
+    parser.add_argument('--reserved-ids', action='append', default=[],
+                        help='Explicit unused padding IDs, source index starts at 1: e.g. 2:0-26. Repeatable. No automatic name matching.')
     args = parser.parse_args()
     if len(args.datasets) < 2:
         parser.error('Provide at least two datasets')
     try:
-        report = merge(args.datasets, args.output, args.copy_images)
+        reserved = parse_reserved_ids(args.reserved_ids, len(args.datasets))
+        report = merge(args.datasets, args.output, args.copy_images, reserved_ids=reserved)
         print(f'Done: {len(report["names"])} classes; YAML: {args.output / "data.yaml"}')
     except KeyboardInterrupt:
         parser.exit(130, '\nStopped. Source datasets unchanged. Use a new output directory for retry.\n')

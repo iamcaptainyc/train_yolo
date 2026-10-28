@@ -329,4 +329,4 @@ Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`�
 
 补齐已有搜索实验的测试集指标（不重新训练）：`python tune.py --test-only --output runs/animals_search_batch`。默认新实验逐候选测试；详见 [搜索与补测说明](docs/model_search.md)。
 
-保留全局类别 ID 合并多个 YOLO 数据集：`python merge_yolo_ids.py --datasets 数据集A 数据集B --output 新输出目录`。自动忽略未使用的 `reserved_N` 占位名称，默认硬链接并保留原划分，详见 [通用 ID 合并说明](docs/merge_yolo_ids.md)。
+保留全局类别 ID 合并多个 YOLO 数据集：`python merge_yolo_ids.py --datasets 数据集A 数据集B --output 新输出目录`。默认保留所有类别名称；占位 ID 必须显式指定，例如 `--reserved-ids 2:0-26`。默认硬链接并保留原划分，详见 [通用 ID 合并说明](docs/merge_yolo_ids.md)。
