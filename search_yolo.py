@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import copy
 import csv
 import errno
 import hashlib
@@ -38,12 +39,18 @@ def trial_directory(root, model, number):
 
 
 def experiment_identity(args):
-    return json.loads(json.dumps({
+    identity = {
         'data': dataset_identity(args.data), 'weights_dir': str(args.weights_dir),
         'models': selected_models(args), 'epochs': args.epochs, 'imgsz': args.imgsz, 'batch': args.batch,
         'patience': args.patience, 'seed': args.seed, 'amp': args.amp,
         'space_version': SPACE_VERSION, 'test_policy': args.test_policy,
-        'metric': 'validation mAP50-95'}))
+        'metric': 'validation mAP50-95'}
+    if getattr(args, 'mode', 'standard') != 'standard':
+        identity.update(mode=args.mode, pruning_version=1, prune_epochs=args.prune_epochs)
+        if args.mode == 'progressive':
+            identity.update(search_imgsz=args.search_imgsz, search_epochs=args.search_epochs,
+                            promote=args.promote, trials=args.trials)
+    return json.loads(json.dumps(identity))
 
 
 def automatic_output(args):
@@ -64,6 +71,12 @@ class JobError(RuntimeError):
             errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EIO, errno.EACCES) or (
             'out of memory' in self.result.get('error', '').lower()) or self.result.get('error_type') in (
                 'MemoryError', 'OutOfMemoryError')
+
+
+class TrialWasPruned(Exception):
+    def __init__(self, result):
+        self.result = result
+        super().__init__(result.get('reason', 'Pruned'))
 
 
 def read_json(path, default=None):
@@ -93,6 +106,12 @@ def valid_evaluation(result, phase=None):
 def run_job(job):
     result_path = Path(job['result'])
     old = read_json(result_path, {})
+    if job['phase'] == 'train' and job.get('pruning'):
+        pruned = read_json(Path(job['trial_dir'])/'pruned.json', {})
+        if pruned.get('status') == 'pruned' or old.get('status') == 'pruned':
+            result = pruned or old
+            write_json(result_path, result)
+            return result
     if old.get('status') == 'ok' and (job['phase'] not in ('val', 'test') or valid_evaluation(old, job['phase'])):
         if job['phase'] == 'train':
             checkpoint = Path(old['best_checkpoint'])
@@ -123,6 +142,8 @@ def run_job(job):
     result = read_json(result_path, {})
     if code in (130, 143, -2, -15):
         raise KeyboardInterrupt
+    if not code and job['phase'] == 'train' and job.get('pruning') and result.get('status') == 'pruned':
+        return result
     if code or result.get('status') != 'ok' or (job['phase'] in ('val', 'test') and not valid_evaluation(result, job['phase'])):
         raise JobError(job['phase'], code, result)
     return result
@@ -155,7 +176,10 @@ def train_and_validate(config, args):
     directory = Path(config['trial_dir'])
     training = run_job({**config, 'phase': 'train', 'train_dir': str(choose_train_dir(directory)),
                         'device': args.device, 'workers': args.workers,
+                        'eval_batch': args.eval_batch,
                         'result': str(directory/'train_result.json'), 'log': str(directory/'train.log')})
+    if training.get('status') == 'pruned':
+        raise TrialWasPruned(training)
     validation = evaluate(config, training, 'val', args)
     return training, validation
 
@@ -197,7 +221,7 @@ def refresh_reports(root, studies, export_best=True):
     fields = ['round', 'model', 'size', 'trial', 'state', 'val_map50_95', 'val_map50', 'val_precision',
               'val_recall', 'test_map50_95', 'test_map50', 'test_precision', 'test_recall',
               'test_status', 'recorded_epochs', 'train_seconds_this_attempt', 'test_inference_ms',
-              'best_checkpoint', 'error', *PARAM_FIELDS]
+              'best_checkpoint', 'error', 'stage', 'train_imgsz', 'eval_imgsz', 'pruned_epoch', 'prune_reason', 'parent_trial', *PARAM_FIELDS]
     temporary = root/'iterations.csv.tmp'
     with temporary.open('w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -209,7 +233,11 @@ def refresh_reports(root, studies, export_best=True):
                    'train_seconds_this_attempt': r['train'].get('elapsed_seconds_this_attempt', ''),
                    'test_inference_ms': r['test'].get('speed_ms_per_image', {}).get('inference', ''),
                    'best_checkpoint': r['train'].get('best_checkpoint', ''),
-                   'error': r['status'].get('error', ''), **r['params']}
+                   'error': r['status'].get('error', ''),
+                   'stage': r['config'].get('stage', 'full'), 'train_imgsz': r['config'].get('imgsz', ''),
+                   'eval_imgsz': r['config'].get('eval_imgsz', r['config'].get('imgsz', '')),
+                   'pruned_epoch': r['train'].get('pruned_epoch', ''), 'prune_reason': r['train'].get('reason', ''),
+                   'parent_trial': r['config'].get('parent', {}).get('trial', ''), **r['params']}
             for split in ('val', 'test'):
                 for key, value in r[split].get('metrics', {}).items():
                     row[split+'_'+key] = value
@@ -270,26 +298,36 @@ def run(args):
     storage = optuna.storages.RDBStorage(url='sqlite:///'+(root/'optuna.sqlite3').as_posix(),
                                         engine_kwargs={'connect_args': {'timeout': 60}})
     try:
+        if getattr(args, 'mode', 'standard') == 'progressive':
+            return progressive_search(args, root, initial, storage)
         return search_studies(args, root, initial, storage)
     finally:
         storage.remove_session()
         storage.engine.dispose()
 
 
-def search_studies(args, root, initial, storage):
+def search_studies(args, root, initial, storage, plans=None):
     import optuna
     from optuna.trial import TrialState
     studies = {}
+    pruning = getattr(args, 'mode', 'standard') != 'standard'
+    milestones = [e for e in getattr(args, 'prune_epochs', []) if e < args.epochs]
+    if pruning:
+        from search_pruning import MilestonePruner
     for model in selected_models(args):
         index = MODELS.index(model)
         study = optuna.create_study(study_name=Path(model).stem, direction='maximize',
                                    storage=storage, load_if_exists=True,
                                    sampler=optuna.samplers.TPESampler(seed=args.seed+index, n_startup_trials=3),
-                                   pruner=optuna.pruners.NopPruner())
+                                   pruner=MilestonePruner(milestones) if pruning else optuna.pruners.NopPruner())
         if not study.get_trials():
-            study.enqueue_trial({})  # Official auto-optimizer baseline; no lr override.
-            for batch in ([args.batch] if args.batch is not None else BATCH_CHOICES):
-                study.enqueue_trial({**SEARCH_ANCHOR, 'batch': batch})
+            if plans is not None:
+                for plan in plans[model]:
+                    study.enqueue_trial(plan['params'])
+            else:
+                study.enqueue_trial({})  # Official auto-optimizer baseline; no lr override.
+                for batch in ([args.batch] if args.batch is not None else BATCH_CHOICES):
+                    study.enqueue_trial({**SEARCH_ANCHOR, 'batch': batch})
         studies[model] = study
     refresh_reports(root, studies)
 
@@ -318,7 +356,7 @@ def search_studies(args, root, initial, storage):
                     did_work = True
                     continue
                 number = candidate.number
-            elif len(attempted) < args.trials:
+            elif len(attempted) < (len(plans[model]) if plans is not None else args.trials):
                 queued = [t.number for t in trials if t.state == TrialState.WAITING]
                 next_number = min(queued) if queued else max((t.number for t in trials), default=-1)+1
                 # Seed per candidate rather than per process, so restarting the coordinator
@@ -329,16 +367,29 @@ def search_studies(args, root, initial, storage):
                 candidate = study.ask()
                 number = candidate.number
                 directory = trial_directory(root, model, number)
+                if plans is not None:
+                    params = plans[model][number]['params']
+                elif number == 0:
+                    params = {**BASELINE, 'batch': args.batch or BASELINE['batch']}
+                else:
+                    params = sample_params(candidate, args.batch)
                 config = {**{k: getattr(args, k) for k in ('epochs', 'imgsz', 'batch', 'patience', 'seed', 'amp')},
                           'data': str(args.data), 'model': model, 'trial': number, 'trial_dir': str(directory),
-                          'initial_checkpoint': initial[model], 'params': ({**BASELINE, 'batch': args.batch or BASELINE['batch']} if number == 0
-                                     else sample_params(candidate, args.batch))}
+                          'initial_checkpoint': initial[model], 'params': params}
                 config['batch'] = config['params']['batch']
+                if plans is not None:
+                    config['parent'] = plans[model][number]['parent']
+                if pruning:
+                    config.update(stage=getattr(args, 'stage', 'full'),
+                                  eval_imgsz=getattr(args, 'eval_imgsz', args.imgsz),
+                                  pruning={'storage': str(storage.url), 'study': Path(model).stem,
+                                           'milestones': milestones, 'baseline': number == 0})
                 write_json(directory/'config.json', config)
             else:
                 continue
             did_work = True
-            print(f'\nRound {number+1}/{args.trials}: {model}; params={config["params"]}', flush=True)
+            target_count = len(plans[model]) if plans is not None else args.trials
+            print(f'\nRound {number+1}/{target_count}: {model}; params={config["params"]}', flush=True)
             try:
                 write_json(directory/'status.json', {'state': 'RUNNING', 'started_at': time.time()})
                 training, validation = train_and_validate(config, args)
@@ -347,6 +398,10 @@ def search_studies(args, root, initial, storage):
                 refresh_reports(root, studies)
                 if args.test_policy == 'every-trial':
                     evaluate(config, training, 'test', args)
+            except TrialWasPruned as exc:
+                study.tell(number, state=TrialState.PRUNED)
+                write_json(directory/'status.json', {'state': 'PRUNED', **exc.result})
+                print(f'[PRUNED] {model} / t{number:03d}: {exc}', flush=True)
             except KeyboardInterrupt:
                 write_json(directory/'status.json', {'state': 'INTERRUPTED', 'error': 'Rerun the same command to continue'})
                 raise
@@ -375,12 +430,51 @@ def search_studies(args, root, initial, storage):
         print(f'Best {size}: {record["model"]} trial {record["trial"]}; '
               f'val mAP50-95={record["val"]["metrics"]["map50_95"]:.5f}; '
               f'test={record["test"].get("metrics")}; weights={root/"best"/f"best_{size}.pt"}', flush=True)
-    if set(winners) != {Path(model).stem[-1] for model in studies} or any(r['state'] != 'COMPLETE' for r in records):
+    if set(winners) != {Path(model).stem[-1] for model in studies} or any(r['state'] not in ('COMPLETE', 'PRUNED') for r in records):
         raise ValueError('Some trials failed or a selected model size has no complete candidate; inspect iterations.csv and stage logs')
     if args.test_policy == 'every-trial' and any(not valid_evaluation(r['test'], 'test') for r in records if r['state'] == 'COMPLETE'):
         raise ValueError('Some test stages failed; rerun the same command to retry evaluation only')
     write_report(root, records, winners, tuple(studies), complete=True)
     print(f'Human-readable report: {root / "REPORT.md"}', flush=True)
+
+
+def progressive_search(args, root, initial, storage):
+    """Isolate screening studies; promote configurations, never screening weights."""
+    import optuna
+    screen_root = root/'screen'
+    screen_root.mkdir(exist_ok=True)
+    screen = copy(args)
+    screen.epochs, screen.imgsz = args.search_epochs, args.search_imgsz
+    screen.eval_imgsz, screen.stage, screen.test_policy = args.imgsz, 'screen', 'none'
+    screen.patience = 0
+    write_json(screen_root/'run.json', {**experiment_identity(args), 'stage': 'screen',
+                                       'train_imgsz': screen.imgsz, 'eval_imgsz': args.imgsz})
+    screen_storage = optuna.storages.RDBStorage(url='sqlite:///'+(screen_root/'optuna.sqlite3').as_posix(),
+                                               engine_kwargs={'connect_args': {'timeout': 60}})
+    try:
+        search_studies(screen, screen_root, initial, screen_storage)
+        records = read_json(screen_root/'summary.json')['iterations']
+    finally:
+        screen_storage.remove_session()
+        screen_storage.engine.dispose()
+    plans = {}
+    for model in selected_models(args):
+        candidates = [r for r in records if r['model'] == model and r['state'] == 'COMPLETE']
+        baseline = next(r for r in candidates if r['trial'] == 0)
+        ranked = sorted((r for r in candidates if r['trial'] != 0),
+                        key=lambda r: (-r['val']['metrics']['map50_95'], r['trial']))
+        plans[model] = [{'params': r['params'], 'parent': {
+            'stage': 'screen', 'trial': r['trial'], 'trial_dir': r['trial_dir'],
+            'val_map50_95': r['val']['metrics']['map50_95'],
+            'initialization': 'official_pretrained'}} for r in [baseline, *ranked[:args.promote]]]
+    plan_path = root/'promotion.json'
+    old = read_json(plan_path)
+    if old is not None and old != plans:
+        raise ValueError('Screening promotion changed; use a new output directory')
+    write_json(plan_path, plans)
+    full = copy(args)
+    full.stage, full.eval_imgsz = 'full', args.imgsz
+    return search_studies(full, root, initial, storage, plans=plans)
 
 
 def test_only(args):
@@ -390,6 +484,8 @@ def test_only(args):
     manifest = read_json(root/'run.json')
     if not manifest or not (root/'optuna.sqlite3').is_file():
         raise ValueError('--test-only requires an existing experiment with run.json and optuna.sqlite3')
+    if manifest.get('stage') == 'screen':
+        raise ValueError('Screening candidates are not tested; pass the experiment root, not screen/')
     data = (args.data or Path(manifest['data']['path'])).expanduser().resolve()
     current = dataset_identity(data)
     for key in ('sha256', 'converter_report_sha256'):
@@ -451,6 +547,13 @@ def test_only(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--mode', choices=['standard', 'progressive', 'prune'], default='standard',
+                   help='standard: legacy search; progressive: small-to-large with pruning; prune: full size with pruning')
+    p.add_argument('--search-imgsz', type=int, default=448, help='Progressive screening training size')
+    p.add_argument('--search-epochs', type=int, default=80, help='Progressive screening epoch horizon')
+    p.add_argument('--promote', type=int, default=3, help='Progressive: promote up to N non-baseline configurations per model')
+    p.add_argument('--prune-epochs', type=int, nargs='+', default=[30, 80],
+                   help='Epoch checkpoints for successive halving; only checkpoints below the stage horizon apply')
     p.add_argument('--models', nargs='+', choices=MODELS, default=None,
                    help='Train only the selected models (default: all four)')
     p.add_argument('--data', type=Path, help='Required for training; test-only uses the saved dataset by default')
@@ -458,7 +561,7 @@ def main():
     p.add_argument('--output', type=Path, default=None, help='Optional; otherwise derive a short resumable experiment name')
     p.add_argument('--weights-dir', type=Path, default=Path('weights'))
     p.add_argument('--trials', type=int, default=8, help='Target total trial attempts per model, including previous attempts')
-    p.add_argument('--epochs', type=int, default=100)
+    p.add_argument('--epochs', type=int, default=None, help='Epoch horizon: standard=100, progressive/prune=250')
     p.add_argument('--patience', type=int, default=20)
     p.add_argument('--imgsz', type=int, default=640)
     p.add_argument('--batch', type=int, default=None,
@@ -468,9 +571,13 @@ def main():
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='every-trial')
+    p.add_argument('--test-policy', choices=['every-trial', 'final'], default=None)
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
+    args.epochs = args.epochs if args.epochs is not None else (100 if args.mode == 'standard' else 250)
+    args.test_policy = args.test_policy or ('every-trial' if args.mode == 'standard' else 'final')
+    if args.mode != 'standard' and args.batch is None:
+        args.batch = 64
     if args.data is None and not args.test_only:
         p.error('--data is required for training')
     if args.test_only and (args.output is None or not args.output.expanduser().is_dir()):
@@ -481,6 +588,14 @@ def main():
         p.error('Trials/epochs/imgsz/batches must be positive; workers/patience must be non-negative')
     if not (args.device == 'cpu' or args.device.isdecimal()):
         p.error('--device must be one GPU index or cpu')
+    if args.mode != 'standard' and not args.test_only:
+        if args.prune_epochs != sorted(set(args.prune_epochs)) or args.prune_epochs[0] < 1:
+            p.error('--prune-epochs must be positive, unique and increasing')
+        if args.prune_epochs[0] >= args.epochs:
+            p.error('At least one pruning checkpoint must precede --epochs')
+        if args.mode == 'progressive' and not (0 < args.search_imgsz < args.imgsz and
+                args.search_epochs > args.prune_epochs[0] and args.promote > 0):
+            p.error('Progressive requires 0 < search-imgsz < imgsz, search-epochs > first prune epoch, promote > 0')
     try:
         if args.test_only:
             from filelock import FileLock
@@ -492,7 +607,14 @@ def main():
         args.output = (args.output or automatic_output(args)).expanduser().resolve()
         if args.dry_run:
             print(json.dumps({'models_in_order': selected_models(args), 'rounds': args.trials,
-                              'total_trials': len(selected_models(args))*args.trials, 'max_epochs_per_trial': args.epochs,
+                              'mode': args.mode,
+                              'prune_epochs': args.prune_epochs if args.mode != 'standard' else [],
+                              'screen': {'imgsz':args.search_imgsz, 'epochs':args.search_epochs,
+                                         'promote_plus_baseline':args.promote} if args.mode == 'progressive' else None,
+                              'total_trials': len(selected_models(args))*args.trials if args.mode != 'progressive' else None,
+                              'max_total_trials': len(selected_models(args))*(args.trials + min(args.trials, args.promote+1))
+                                  if args.mode == 'progressive' else len(selected_models(args))*args.trials,
+                              'max_epochs_per_trial': args.epochs,
                               'batch_choices': [args.batch] if args.batch is not None else BATCH_CHOICES,
                               'eval_batch': args.eval_batch, 'workers': args.workers,
                               'selection_metric': 'validation mAP50-95', 'test_policy': args.test_policy,

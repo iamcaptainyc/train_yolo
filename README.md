@@ -250,7 +250,7 @@ python train.py --resume runs/animals/yolo11s/weights/last.pt --device 0
 
 ### Linux 训练异常退出保护
 
-需要自动比较 YOLOv8n/s、YOLO11n/s 时，运行 `python tune.py --data 数据集/data.yaml`，无需指定名称。默认先跑 auto 优化器基线，再比较 batch 并做四参数 Optuna 搜索，每模型 8 次，共 32 次训练；按验证集选优，只对最终 n/s 跑测试集。`--trials 1` 可先只比较基线；增加 trials 后同一命令自动续跑。可加 `--dry-run` 查看计划，详见 [四模型自动搜索说明](docs/model_search.md)。
+需要自动比较 YOLOv8n/s、YOLO11n/s 时，运行 `python tune.py --data 数据集/data.yaml`，无需指定名称。原有 `--mode standard` 默认先跑 auto 基线，再比较 batch 并搜索参数，每模型 8 次，逐候选测试。新增 `--mode progressive`（小尺寸筛选→正式尺寸训练）和 `--mode prune`（始终正式尺寸，30/80 轮剪枝→完整训练），均使用 Optuna Pruner、默认固定 batch=64、仅测试最终最佳 n/s。`--batch 128` 可指定固定 batch；`--dry-run` 查看计划。三种模式始终按验证集选优，详见 [完整命令与恢复说明](docs/model_search.md)。
 
 在 Linux/AutoDL 中，`python train.py ...` 默认由一个不加载 PyTorch/CUDA 的轻量守护进程启动真正的训练进程，参数保持原样。每次运行创建独立进程组。训练正常完成、异常退出或收到 SIGKILL 后，只要守护仍存活，就会终止本组尚存的 DataLoader 等子进程；先 SIGTERM，等待后对未退出进程使用 SIGKILL。Ctrl+C/SIGTERM 转发给本次任务，超时后强制停止。Linux subreaper 用于回收被训练主进程遗留的后代进程，避免交给容器 PID 1 后长期残留。
 

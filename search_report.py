@@ -1,4 +1,5 @@
 """Human-readable experiment summaries; metrics never influence model selection here."""
+import json
 from pathlib import Path
 
 
@@ -25,6 +26,7 @@ def delta(record, baseline):
 
 def write_report(root, records, winners, models, complete=False):
     root = Path(root)
+    manifest = json.loads((root/'run.json').read_text(encoding='utf-8')) if (root/'run.json').is_file() else {}
     sizes = [size for size in ('n', 's') if any(Path(model).stem[-1] == size for model in models)]
     baselines = {r['model']: r for r in records if r['trial'] == 0}
     best = {}
@@ -75,11 +77,16 @@ def write_report(root, records, winners, models, complete=False):
                   '| 候选 | 状态 | 验证 mAP50-95 | 较基线 | 测试 mAP50-95 | batch | 优化器配置 | lr0 | weight_decay | mosaic |',
                   '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
         for r in sorted((r for r in records if r['model'] == model), key=lambda r: r['trial']):
-            status = {'COMPLETE': '训练与验证完成', 'RUNNING': '未完成', 'FAIL': '失败'}.get(r['state'], r['state'])
+            status = {'COMPLETE': '训练与验证完成', 'RUNNING': '未完成', 'FAIL': '失败',
+                      'PRUNED': f"提前淘汰（第 {r['train'].get('pruned_epoch', '?')} 轮）"}.get(r['state'], r['state'])
             if r.get('status', {}).get('state') == 'INTERRUPTED':
                 status = '已中断，可继续'
             if r['test'].get('status') == 'failed':
                 status += '；测试失败'
+            elif r['state'] == 'PRUNED' or r.get('config', {}).get('stage') == 'screen':
+                status += '；不运行测试集'
+            elif manifest.get('test_policy') == 'final' and r not in winners.values() and not r['test']:
+                status += '；按策略未安排测试'
             elif r['test'].get('status') != 'ok' or any(k not in r['test'].get('metrics', {}) for k in ('map50','map50_95','precision','recall')):
                 status += '；测试待补齐'
             tag = f"t{r['trial']:03d}" + ('（基线）' if r['trial'] == 0 else '')
@@ -100,13 +107,31 @@ def write_report(root, records, winners, models, complete=False):
         lines += ['', '## 待处理问题', '']
         for r, error in errors:
             lines.append(f"- {r['model']} / t{r['trial']:03d}：{cell(error)}")
+    staged = [r for r in records if r.get('config', {}).get('pruning')]
+    if staged:
+        lines += ['', '## 分阶段预算与剪枝记录', '',
+                  'Pruner 为按轮数检查的 Successive Halving；PRUNED 是正常提前淘汰，不是训练失败。基线免剪枝。', '',
+                  '同一阶段沿用预设训练总轮数与学习率计划；通过最后检查点后不再剪枝，仍可正常早停。', '',
+                  '| 模型 / 候选 | 阶段 | 训练 / 验证尺寸 | 最大轮数 | 剪枝检查点 | 来源 | 终止原因 |',
+                  '| --- | --- | --- | --- | --- | --- | --- |']
+        for r in staged:
+            c = r['config']
+            parent = c.get('parent', {})
+            source = f"小尺寸 t{parent['trial']:03d} 参数；官方预训练权重重新开始" if parent else '官方预训练权重'
+            reason = r['train'].get('reason', '—')
+            lines.append(f"| {r['model']} / t{r['trial']:03d} | {c['stage']} | {c['imgsz']} / {c['eval_imgsz']} | {c['epochs']} | {cell(c['pruning']['milestones'])} | {source} | {cell(reason)} |")
+        if (root/'screen').is_dir():
+            lines += ['', '小尺寸阶段只筛选参数，不与正式训练结果混排：[筛选报告](screen/REPORT.md)、[晋级名单](promotion.json)。']
+        if any(r['config'].get('stage') == 'screen' for r in staged):
+            lines += ['', '**本页仅为小尺寸筛选结果，不是最终交付结果；本阶段不运行 test。**']
     lines += ['', '## 如何读这些指标', '',
               '- **mAP50-95**：综合多个框重叠阈值的检测指标，本报告的选优指标。',
               '- **mAP50**：只采用 IoU=0.5 的检测指标，通常比 mAP50-95 高。',
               '- **Precision**：预测出的目标中有多少是对的；**Recall**：真实目标中有多少被找到。',
               '- ★ 表示同一模型当前最优；“提升”仅与该模型 t000 的验证结果比较，不是测试集提升。',
               '- auto 是传入的配置，不代表固定 AdamW；实际优化器与学习率请查看 train.log。',
-              '- 默认逐候选测试；旧实验或显式 final 策略可能留空。用 tune.py --test-only --output 实验目录 补齐，不重新训练。',
+              '- standard 默认逐候选测试；progressive/prune 默认 final，仅测试最终 n/s 冠军。其他候选留空不代表失败。',
+              '- 用 tune.py --test-only --output 实验目录 可补测已完成候选，不重新训练；不补测 PRUNED。',
               '- n/s 仅按验证精度分别选优，不意味着已经验证部署速度或所有物种的召回率。',
               '- 阶段性报告会持续更新；完成报告也只代表本次搜索预算内的最优结果。', '',
               '机器可读明细：[iterations.csv](iterations.csv)、[summary.json](summary.json)。', '']

@@ -2,7 +2,63 @@
 
 使用短命令 `tune.py`（原 `search_yolo.py` 仍可用），依次训练 YOLOv8n、YOLOv8s、YOLO11n、YOLO11s。四个模型各有独立 Optuna study，以 **val mAP50-95** 选出本次预算内最好的 n 和 s。测试集不参与调参或选优。
 
-## 直接运行
+## 三种训练模式
+
+`--mode standard` 保留原有行为（默认），旧命令和旧实验仍可恢复。新增两种纯 Optuna 模式，无需大模型/API：
+
+| 模式 | 训练过程 | 默认参数 |
+| --- | --- | --- |
+| `standard` | 所有候选同尺寸训练，只有普通早停，不使用 Pruner | 640，最多 100 epoch；搜索 batch；逐候选 test |
+| `progressive` | 小尺寸搜索 → 晋级配置从官方权重重新进行大尺寸训练 | 448/80 epoch → 640/250 epoch；batch 固定 64；仅最终冠军 test |
+| `prune` | 始终使用正式尺寸，30/80 轮筛选，幸存者继续完整训练 | 640，最多 250 epoch；batch 固定 64；仅最终冠军 test |
+
+两个新模式每个模型独立使用 **SuccessiveHalvingPruner**，默认检查点 `--prune-epochs 30 80`。每轮向 Optuna 上报真实 epoch 的 val mAP50-95；只有检查点才决定是否淘汰。内部将检查点映射为 successive-halving 的资源阶梯，约保留已到达同一阶梯候选中较好的半数；这是异步筛选，不保证固定晋级人数。不会在 60、120 轮偷偷增加检查点。基线也记录指标作为比较依据，但免剪枝。
+
+同一阶段从开始就使用完整轮数的学习率计划：30→80→250 表示中间检查，不是反复修改 epochs 或重启优化器。通过最后检查点后不再剪枝，使用普通 patience 早停；新模式在最后有效检查点之前暂缓普通早停，防止绕过筛选。小尺寸筛选阶段关闭普通早停，最多运行 search-epochs 轮。Pruner 提前终止候选不属于网络通道剪枝。
+
+### 模式一：小尺寸筛选，再大尺寸训练
+
+```bash
+python tune.py \
+  --mode progressive \
+  --data yolo_datasets/animals_30k_v4/data.yaml \
+  --models yolo11n.pt yolo11s.pt \
+  --trials 12 --search-imgsz 448 --search-epochs 80 \
+  --imgsz 640 --epochs 250 --prune-epochs 30 80 \
+  --promote 3 --batch 128 --eval-batch 32 --workers 16
+```
+
+每模型搜索次数包含基线。先完成各模型的小尺寸筛选；80 轮是该阶段终点，因此小尺寸阶段只在第 30 轮剪枝。每模型从完成筛选的非基线候选中按验证分数最多选择 3 组，再额外带上官方基线。候选不足时按实际数量晋级。正式阶段在 30/80 轮剪枝，最多训练 250 轮。
+
+**只继承参数，不继承小尺寸权重**；正式阶段重新从同一官方预训练权重开始，正式阶段内的晋级不重新初始化。全部 train 图片都参与训练，不抽小子集。训练内验证、训练后的 val 和最终 test 始终使用正式 `--imgsz` 和 `--eval-batch`，避免不同验证尺寸干扰比较；因此小尺寸阶段仍有正式尺寸验证成本。
+
+筛选和正式训练使用独立 SQLite/Study：`screen/REPORT.md` 只供筛选，根目录 `REPORT.md` 才是正式结果。`promotion.json` 记录来源候选、参数及晋级分数。小尺寸结果不参与最终权重选优，也不运行 test。正式阶段同样允许 Pruner 淘汰参数迁移后表现不好的候选。
+
+### 模式二：始终使用正式尺寸，分阶段剪枝
+
+```bash
+python tune.py \
+  --mode prune \
+  --data yolo_datasets/animals_30k_v4/data.yaml \
+  --models yolo11n.pt yolo11s.pt \
+  --trials 12 --imgsz 640 --epochs 250 \
+  --prune-epochs 30 80 --batch 128 --eval-batch 32 --workers 16
+```
+
+所有候选始终按 640 训练：前 30 轮初筛 → 至 80 轮复筛 → 幸存者继续至 250 轮上限或早停。**三个阶段是同一次训练的连续预算，不会重新训练前 30/80 轮。** 默认仅测试最终最佳 n/s；如仍需要每个完整候选的 test，可以显式加 `--test-policy every-trial`，已剪枝候选不会测试。
+
+两种模式均无需手动命名，支持 `--dry-run` 预览；只训练一个模型就只传一个模型名。两个新模式未指定 `--batch` 时固定为 64；`--batch 128` 固定为 128。本次保留现有 lr0/weight_decay/mosaic 搜索空间，没有引入额外参数或修改网络结构。
+
+### 恢复与报告
+
+- Ctrl+C 或资源故障后重跑相同命令；已有 train/val/test 结果复用，训练从自己的 last.pt 恢复，不重置学习率计划。
+- `PRUNED` 是正常淘汰，保留最后权重、逐轮 `epochs.jsonl` 和 `pruned.json`，报告显示淘汰轮数及原因；恢复时不会重新训练。
+- 根目录 `iterations.csv` 增加阶段、训练/验证尺寸、淘汰轮数、淘汰原因、来源候选字段。报告按模型/size 展示最终指标，并链接筛选报告和晋级名单。
+- 模式、检查点、尺寸等参与实验指纹；改变这些设置需新实验。`progressive` 还固定筛选次数与晋级数量，防止已经开始正式训练后改变晋级名单；增加其 `--trials` 会产生新自动目录。`standard` / `prune` 可以增加 trials 续搜。
+- test 失败不需要重训。原命令可恢复；也可用 `python tune.py --test-only --output 实验根目录` 补测所有已完成的正式候选，跳过 `PRUNED`。补测不修改排名，不测试 `screen/`。
+- 首先建议 `--dry-run` 核对预算。本文预算与比例是起点，小尺寸最优不保证大尺寸最优，晋级多个配置与基线就是为了验证这一点。
+
+## 原有 standard 模式：直接运行
 
 ```bash
 git pull --ff-only

@@ -52,6 +52,23 @@ class Tee:
 
 
 def execute(job):
+    reporter = None
+    if job['phase'] == 'train' and job.get('pruning'):
+        from search_pruning import EpochReporter, PrunedRun
+        marker = Path(job['trial_dir'])/'pruned.json'
+        if marker.is_file():
+            return json.loads(marker.read_text(encoding='utf-8'))
+        reporter = EpochReporter(job)
+        try:
+            return execute_stage(job, reporter)
+        except PrunedRun as exc:
+            return exc.result
+        finally:
+            reporter.close()
+    return execute_stage(job)
+
+
+def execute_stage(job, reporter=None):
     phase = job['phase']
     if phase == 'prepare':
         from ultralytics.utils.downloads import attempt_download_asset
@@ -85,17 +102,27 @@ def execute(job):
         directory = Path(job['train_dir'])
         last, best = directory/'weights/last.pt', directory/'weights/best.pt'
         started = time.monotonic()
+        train_options = {}
+        if reporter is not None:
+            from search_pruning import validation_trainer
+            train_options['trainer'] = validation_trainer(job)
         if last.is_file():
             model = YOLO(str(last))
+            if reporter is not None:
+                model.add_callback('on_fit_epoch_end', reporter)
             from training_diagnostics import install_phase_logging
             install_phase_logging(model)
             checkpoint = model.ckpt or {}
+            if reporter is not None:
+                reporter.recover(checkpoint.get('epoch', -1))
             # A completed run may have been killed just before stage-result JSON was saved.
             finished = checkpoint.get('epoch', 0) < 0 or checkpoint.get('epoch', -1) >= job['epochs']-1
             if not (finished and best.is_file()):
-                model.train(resume=True, device=job['device'], workers=job['workers'])
+                model.train(resume=True, device=job['device'], workers=job['workers'], **train_options)
         else:
             model = YOLO(job['initial_checkpoint'])
+            if reporter is not None:
+                model.add_callback('on_fit_epoch_end', reporter)
             from training_diagnostics import install_phase_logging
             install_phase_logging(model)
             model.train(data=job['data'], epochs=job['epochs'], imgsz=job['imgsz'],
@@ -103,6 +130,7 @@ def execute(job):
                         patience=job['patience'], amp=job['amp'], cache=False, save=True, val=True,
                         project=str(directory.parent), name=directory.name, exist_ok=True,
                         close_mosaic=min(10, max(0, job['epochs']//5)), plots=True,
+                        **train_options,
                         **{'batch': job['batch'], **job['params']})
         if not best.is_file():
             raise ValueError(f'Training did not produce {best}')
@@ -120,7 +148,7 @@ def execute(job):
     model = YOLO(job['checkpoint'])
     from training_diagnostics import install_phase_logging
     install_phase_logging(model)
-    metrics = model.val(data=job['data'], split=phase, imgsz=job['imgsz'], batch=job['eval_batch'],
+    metrics = model.val(data=job['data'], split=phase, imgsz=job.get('eval_imgsz', job['imgsz']), batch=job['eval_batch'],
                         device=job['device'], workers=job['workers'],
                         project=str(Path(job['trial_dir'])/'evaluation'), name=phase, exist_ok=True,
                         conf=0.001, iou=0.7, max_det=300, plots=True, save_json=False)
