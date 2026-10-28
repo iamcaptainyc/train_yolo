@@ -119,14 +119,16 @@ def validate_label(path, dataset):
 
 def merge(datasets, output, copy_images=False, reserved_ids=None):
     sources = [load_dataset(value) for value in datasets]
+    requested_reserved = {}
+    absent_reserved = {}
     for index, ids in (reserved_ids or {}).items():
         if not isinstance(index, int) or not 1 <= index <= len(sources):
             raise ValueError(f'Invalid reserved source index: {index}')
         source = sources[index-1]
         ids = set(ids)
-        if not ids <= source['names'].keys():
-            raise ValueError(f'Reserved IDs not declared by source {index}: {sorted(ids - source["names"].keys())}')
-        source['reserved'] = ids
+        requested_reserved[f'd{index}'] = sorted(ids)
+        absent_reserved[f'd{index}'] = sorted(ids - source['names'].keys())
+        source['reserved'] = ids & source['names'].keys()
     output = Path(output).expanduser().resolve()
     for source in sources:
         for root in (source['yaml'].parent, source['root']):
@@ -201,6 +203,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
         config['test'] = 'images/test'
     report = {'sources': [str(s['yaml']) for s in sources], 'class_ids_preserved': True,
               'ignored_reserved_ids': ignored, 'names': names, 'splits': split_stats,
+              'requested_reserved_ids': requested_reserved, 'absent_reserved_ids': absent_reserved,
               'reserved_policy': 'explicit source/ID declarations only; no class-name matching',
               'ignored_reserved_names': {f'd{i}': {cid:s['names'][cid] for cid in sorted(s['reserved'])}
                                          for i, s in enumerate(sources, 1)},
@@ -213,6 +216,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
              '', '仅检查已知相同文件/硬链接跨划分重复，不校验所有图片内容或判断框的语义正确性。',
              '', '## 显式指定的占位类别', '', '默认不按类别名称忽略任何 ID；以下仅为用户指定且确认未被标签使用的占位项。',
              '', json.dumps(report['ignored_reserved_names'], ensure_ascii=False),
+             '', '请求范围中未在对应 YAML 声明的 ID（无需处理）：' + json.dumps(absent_reserved, ensure_ascii=False),
              '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 |', '| --- | ---: | ---: |']
     lines += [f'| {s} | {split_stats[s]["images"]} | {split_stats[s]["negative_images"]} |' for s in SPLITS]
     lines += ['', '## 类别统计', '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 框总数 |', '| ---: | --- | ---: | ---: | ---: | ---: |']
@@ -229,7 +233,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='New directory, outside source datasets')
     parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
     parser.add_argument('--reserved-ids', action='append', default=[],
-                        help='Explicit unused padding IDs, source index starts at 1: e.g. 2:0-26. Repeatable. No automatic name matching.')
+                        help='Unused padding ID range per source (1-based), e.g. 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
     args = parser.parse_args()
     if len(args.datasets) < 2:
         parser.error('Provide at least two datasets')

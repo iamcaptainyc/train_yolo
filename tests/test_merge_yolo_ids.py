@@ -120,8 +120,33 @@ class MergeIDsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Conflicting ID'):
                 self.call_merge([a,b],root/'out')
             self.assertFalse((root/'out').exists())
-            with self.assertRaisesRegex(ValueError,'not declared'):
-                self.call_merge([a,b],root/'out',reserved_ids={2:{99}})
+            result=self.call_merge([a,b],root/'out',reserved_ids={2:{0,99}})
+            self.assertEqual(result['ignored_reserved_ids']['d2'],[0])
+            self.assertEqual(result['absent_reserved_ids']['d2'],[99])
+
+    def test_requested_range_intersects_yaml_classes_0_to_28(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{i:f'a{i}' for i in range(29)},'26 0.5 0.5 0.2 0.2\n')
+            b=dataset(root/'b',{i:f'b{i}' for i in range(83)},'27 0.5 0.5 0.2 0.2\n82 0.5 0.5 0.2 0.2\n')
+            reserved=parse_reserved_ids(['1:27-82','2:0-26'],2)
+            result=self.call_merge([a,b],root/'out',reserved_ids=reserved)
+            self.assertEqual(result['names'],{**{i:f'a{i}' for i in range(27)},**{i:f'b{i}' for i in range(27,83)}})
+            self.assertEqual(result['ignored_reserved_ids']['d1'],[27,28])
+            self.assertEqual(result['absent_reserved_ids']['d1'],list(range(29,83)))
+            config=yaml.safe_load((root/'out/data.yaml').read_text())
+            self.assertEqual(config['nc'],83)
+            labels=[p.read_text() for p in (root/'out/labels/train').iterdir()]
+            self.assertEqual(set(labels),{'26 0.5 0.5 0.2 0.2\n','27 0.5 0.5 0.2 0.2\n82 0.5 0.5 0.2 0.2\n'})
+
+    def test_range_still_rejects_labels_using_ignored_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'cat',1:'old'},'1 0.5 0.5 0.2 0.2\n')
+            b=dataset(root/'b',{1:'dog'},'1 0.5 0.5 0.2 0.2\n')
+            with self.assertRaisesRegex(ValueError,'unknown/reserved ID 1'):
+                self.call_merge([a,b],root/'out',reserved_ids={1:set(range(1,83))})
+            self.assertFalse((root/'out').exists())
 
     def test_reserved_arguments_are_scoped_to_source(self):
         self.assertEqual(parse_reserved_ids(['2:0-2','2:4','3:0,6-7'],3),{2:{0,1,2,4},3:{0,6,7}})
