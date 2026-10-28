@@ -328,3 +328,5 @@ Linux 训练与 Optuna 子任务默认生成 `runs/diagnostics/<自动名称>/`�
 只训练指定模型：`python tune.py --data 数据集/data.yaml --models yolo11s.pt`；两个模型用 `--models yolo11n.pt yolo11s.pt`。不指定则训练原四个模型。模型选择参与自动命名；切换模型组合时不复用旧的显式输出目录。`--trials` 仍是每个模型的试验总次数。
 
 补齐已有搜索实验的测试集指标（不重新训练）：`python tune.py --test-only --output runs/animals_search_batch`。默认新实验逐候选测试；详见 [搜索与补测说明](docs/model_search.md)。
+
+保留全局类别 ID 合并多个 YOLO 数据集：`python merge_yolo_ids.py --datasets 数据集A 数据集B --output 新输出目录`。自动忽略未使用的 `reserved_N` 占位名称，默认硬链接并保留原划分，详见 [通用 ID 合并说明](docs/merge_yolo_ids.md)。
