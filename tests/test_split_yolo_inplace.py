@@ -194,6 +194,57 @@ split_in_place(root/'data.yaml',workers=2)
             self.assertEqual(snapshot(root),before)
             self.assertFalse((root/WORK).exists())
 
+    def test_layout_only_cli_converts_screenshot_and_preserves_splits_names_and_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=dataset(Path(tmp)/'merged6_obstacle_only','outside_complete',count=30)
+            (root/'data.yaml').unlink()
+            expected={s:{p.name:(p.read_bytes(),(root/s/'labels'/p.with_suffix('.txt').name).read_bytes())
+                         for p in (root/s/'images').glob('*.jpg')} for s in ('train','val','test')}
+            script=Path(__file__).resolve().parents[1]/'split_yolo.py'
+            result=subprocess.run([sys.executable,'-X','utf8',str(script),'--in-place','--layout-only',
+                                   '--datasets',str(root),'--workers','2'],capture_output=True,encoding='utf-8')
+            self.assertEqual(result.returncode,0,result.stderr)
+            for split,images in expected.items():
+                self.assertEqual({p.name for p in (root/'images'/split).glob('*.jpg')},set(images))
+                for name,(pixels,labels) in images.items():
+                    self.assertEqual((root/'images'/split/name).read_bytes(),pixels)
+                    self.assertEqual((root/'labels'/split/Path(name).with_suffix('.txt')).read_bytes(),labels)
+                self.assertFalse((root/split/'images').exists())
+            report=json.loads((root/'split_report.json').read_text())
+            self.assertTrue(report['source_splits_preserved'])
+            self.assertEqual(report['mode'],'layout_only')
+            self.assertEqual([report['splits'][s]['images'] for s in ('train','val','test')],[10,10,10])
+            self.assertFalse((root/'data.yaml').exists())
+
+    def test_layout_only_valid_alias_collision_and_yaml_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=dataset(Path(tmp)/'data','outside',count=20)
+            (root/'val').rename(root/'valid')
+            for folder in ('a','b'):
+                (root/'train/images'/folder).mkdir()
+                (root/'train/labels'/folder).mkdir()
+                (root/'train/images'/folder/'repeat.jpg').write_bytes(folder.encode())
+                (root/'train/labels'/folder/'repeat.txt').write_text('0 0.5 0.5 0.2 0.3\n')
+            result=self.quiet([root],workers=2,layout_only=True)
+            self.assertEqual(result[0]['status'],'ok',result)
+            self.assertEqual(len(list((root/'images/train').glob('*.jpg'))),12)
+            self.assertEqual(len(list((root/'images/val').glob('*.jpg'))),10)
+            self.assertEqual(len(list((root/'images/test').glob('*.jpg'))),0)
+            self.assertEqual(len(list(root.glob('images/*/repeat.jpg'))),0)  # collision names use path fingerprints
+            self.assertEqual(len(list((root/'labels/train').glob('*.txt'))),12)
+            config=yaml.safe_load((root/'data.yaml').read_text())
+            self.assertEqual(config['train'],'images/train')
+            self.assertEqual(config['val'],'images/val')
+
+    def test_layout_only_flat_input_fails_without_rewriting_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=dataset(Path(tmp)/'flat')
+            before=snapshot(root)
+            result=self.quiet([root],workers=2,layout_only=True)
+            self.assertEqual(result[0]['status'],'failed')
+            self.assertIn('Cannot identify an original split',result[0]['error'])
+            self.assertEqual(snapshot(root),before)
+
 
 if __name__=='__main__':
     unittest.main()

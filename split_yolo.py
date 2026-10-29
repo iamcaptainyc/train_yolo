@@ -151,7 +151,27 @@ def assign_splits(records, ratios, seed):
     return targets, len(groups)
 
 
-def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False, collected=None):
+def original_split(image, source):
+    aliases = {'train':'train','val':'val','valid':'val','validation':'val','test':'test'}
+    for root in dict.fromkeys((source['yaml'].parent,source['root'])):
+        if not image.is_relative_to(root):
+            continue
+        parts = image.relative_to(root).parts
+        for i,part in enumerate(parts[:-1]):
+            if part != 'images':
+                continue
+            candidates = [aliases[p.lower()] for p in
+                          ([parts[i-1]] if i else []) + ([parts[i+1]] if i+1 < len(parts)-1 else [])
+                          if p.lower() in aliases]
+            if len(set(candidates)) > 1:
+                raise ValueError(f'Ambiguous original split: {image}')
+            if candidates:
+                return candidates[0]
+    raise ValueError(f'Cannot identify an original split for {image}; omit --layout-only to reshuffle flat images')
+
+
+def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False, collected=None,
+                  layout_only=False):
     images, ignored = collected if collected is not None else collect_images(source)
     has_names = source.get('has_names',True)
 
@@ -167,7 +187,14 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
     with ThreadPoolExecutor(max_workers=workers) as pool:
         records = list(tqdm(bounded_map(pool, inspect, images, workers), total=len(images),
                             desc=f'Check {source["yaml"].parent.name}', unit='img'))
-    targets, group_count = assign_splits(records, ratios, seed)
+    if layout_only:
+        for record in records:
+            record['split'] = original_split(record['image'],source)
+        targets = {s:sum(r['split']==s for r in records) for s in SPLITS}
+        group_count = len({r['identity'] for r in records})
+    else:
+        targets, group_count = assign_splits(records, ratios, seed)
+    stems = Counter((r['split'],r['image'].stem.casefold()) for r in records) if layout_only else {}
     output.mkdir(parents=True, exist_ok=False)
     marker = output/'INCOMPLETE.txt'
     marker.write_text('Split incomplete. Do not use until the split report is generated.\n', encoding='utf-8')
@@ -178,7 +205,8 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
     def write(record):
         image, split = record['image'], record['split']
         token = hashlib.sha256(str(image).encode('utf-8')).hexdigest()
-        target = output/'images'/split/(token+image.suffix.lower())
+        filename = image.name if layout_only and stems[(split,image.stem.casefold())]==1 else token+image.suffix.lower()
+        target = output/'images'/split/filename
         if copy_images:
             shutil.copy2(image, target)
         else:
@@ -186,7 +214,7 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
                 os.link(image, target)
             except OSError as exc:
                 raise ValueError(f'Hardlink failed for {image}; use --copy-images across filesystems') from exc
-        (output/'labels'/split/(token+'.txt')).write_bytes(record['raw'])
+        (output/'labels'/split/Path(filename).with_suffix('.txt')).write_bytes(record['raw'])
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for _ in tqdm(bounded_map(pool, write, records, workers), total=len(records),
@@ -201,23 +229,28 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
         class_images[split].update(counts.keys())
         boxes[split].update(counts)
     observed_ids = sorted(set().union(*(set(boxes[s]) for s in SPLITS)))
-    report = {'source':str(source['yaml'] if has_names else source['root']), 'output':str(output), 'source_splits_preserved':False,
-              'seed':seed, 'ratios':list(ratios), 'target_images':targets, 'total_images':len(records),
+    report = {'source':str(source['yaml'] if has_names else source['root']), 'output':str(output), 'source_splits_preserved':layout_only,
+              'mode':'layout_only' if layout_only else 'reshuffle',
+              'seed':None if layout_only else seed, 'ratios':None if layout_only else list(ratios), 'target_images':targets, 'total_images':len(records),
               'independent_file_groups':group_count, 'splits':stats, 'names':source['names'],
               'class_names_available':has_names, 'observed_class_ids':observed_ids, 'data_yaml_generated':has_names,
               'class_image_counts':class_images, 'class_box_counts':boxes,
               'image_mode':'copy' if copy_images else 'hardlink', 'ignored_missing_split_paths':ignored,
               'class_ids_preserved':True, 'label_bytes_preserved':True,
-              'grouping':'same physical file/hardlinks stay in one split; all distinct image paths retained',
-              'limitation':'random image/file-group split, not class stratification or camera/sequence grouping; no content hash or decode'}
+              'grouping':'original splits preserved' if layout_only else 'same physical file/hardlinks stay in one split; all distinct image paths retained',
+              'limitation':'layout conversion only; no content duplicate or camera/sequence audit' if layout_only else
+                           'random image/file-group split, not class stratification or camera/sequence grouping; no content hash or decode'}
     config = {'path':output.as_posix(), 'train':'images/train', 'val':'images/val', 'test':'images/test',
               'nc':len(source['names']), 'names':source['names']}
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     class_note = f'{len(source["names"])} 个类别定义' if has_names else f'{len(observed_ids)} 个实际出现的类别 ID（未提供名称）'
-    lines = ['# YOLO 数据集重新划分报告', '', f'来源：`{report["source"]}`', '',
-             f'共 {len(records):,} 张，{class_note}；原划分已全部打散。', '',
-             f'随机种子：{seed}；比例：{list(ratios)}；图片：{report["image_mode"]}。类别 ID 和标签原文保留。', '',
-             '按图片随机分配；同一文件/硬链接整体分配，实际比例可能略有偏差。未按物种、相机或序列分层，不识别独立复制的重复图。', '',
+    operation = '原划分归属保留，仅转换目录布局' if layout_only else '原划分已全部打散'
+    budget = '未使用随机种子或比例参数' if layout_only else f'随机种子：{seed}；比例：{list(ratios)}'
+    grouping = '不改变图片原有 train/val/test 归属；同名图片跨划分可保留原名，同划分内重名才加路径指纹。' if layout_only else '按图片随机分配；同一文件/硬链接整体分配，实际比例可能略有偏差。未按物种、相机或序列分层，不识别独立复制的重复图。'
+    lines = ['# YOLO 数据集目录转换报告' if layout_only else '# YOLO 数据集重新划分报告', '', f'来源：`{report["source"]}`', '',
+             f'共 {len(records):,} 张，{class_note}；{operation}。', '',
+             f'{budget}；图片：{report["image_mode"]}。类别 ID 和标签原文保留。', '',
+             grouping, '',
              '| 划分 | 目标图片数 | 实际图片数 | 负样本 |', '| --- | ---: | ---: | ---: |']
     lines += [f'| {s} | {targets[s]} | {stats[s]["images"]} | {stats[s]["negative_images"]} |' for s in SPLITS]
     lines += ['', '## 各类别统计', '', '| ID | 类别 | train 图片 | val 图片 | test 图片 | 框总数 |',
@@ -240,7 +273,7 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
     return report
 
 
-def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False):
+def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False, layout_only=False):
     if workers < 1:
         raise ValueError('workers must be positive')
     target_counts(10, ratios)
@@ -267,7 +300,7 @@ def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images
 
     def save_batch():
         (output/'report.json').write_text(json.dumps(results,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-        lines = ['# YOLO 批量重新划分报告', '', '所有数据集分别重新打乱，不合并类别，不保留原划分。', '',
+        lines = ['# YOLO 批量处理报告', '', '仅转换目录，保留原划分归属。' if layout_only else '所有数据集分别重新打乱，不合并类别，不保留原划分。', '',
                  '| 来源 | 状态 | 图片数 | train / val / test | 输出 / 错误 |', '| --- | --- | ---: | --- | --- |']
         for result in results:
             if result['status'] == 'ok':
@@ -288,7 +321,7 @@ def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images
                 if path in errors:
                     raise ValueError(errors[path])
                 source = prepared[path]
-                report = split_dataset(source,output/name,ratios,seed,workers,copy_images)
+                report = split_dataset(source,output/name,ratios,seed,workers,copy_images,layout_only=layout_only)
                 results.append({'source':report['source'],'status':'ok','report':report})
             except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
                 results.append({'source':str(path),'status':'failed','error':str(exc)})
@@ -307,6 +340,7 @@ def main():
     destination = parser.add_mutually_exclusive_group(required=True)
     destination.add_argument('--output',type=Path,help='New batch output directory')
     destination.add_argument('--in-place',action='store_true',help='Resplit directly in each original directory with rollback')
+    parser.add_argument('--layout-only',action='store_true',help='Only convert train/images to images/train; preserve each original split')
     parser.add_argument('--ratios',type=float,nargs=3,default=[8,1,1],metavar=('TRAIN','VAL','TEST'))
     parser.add_argument('--seed',type=int,default=42)
     parser.add_argument('--workers',type=int,default=16)
@@ -317,9 +351,9 @@ def main():
     try:
         if args.in_place:
             from split_yolo_inplace import run_in_place_batch
-            results = run_in_place_batch(args.datasets,args.ratios,args.seed,args.workers)
+            results = run_in_place_batch(args.datasets,args.ratios,args.seed,args.workers,layout_only=args.layout_only)
         else:
-            results = run_batch(args.datasets,args.output,args.ratios,args.seed,args.workers,args.copy_images)
+            results = run_batch(args.datasets,args.output,args.ratios,args.seed,args.workers,args.copy_images,layout_only=args.layout_only)
         failed = sum(r['status']!='ok' for r in results)
         report_note = 'SPLIT_REPORT.md in each original dataset' if args.in_place else str(args.output / 'BATCH_REPORT.md')
         print(f'Finished: {len(results)-failed} OK, {failed} failed. Report: {report_note}')

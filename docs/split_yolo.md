@@ -47,6 +47,22 @@ dataset_a/             dataset_b/                dataset_c/
 
 ## 直接在原目录修改
 
+### 只转换目录布局
+
+如果只是将 `train/images`、`val/images`、`test/images` 变为 **`images/train`、`images/val`、`images/test`**，标签同步变为 `labels/train`、`labels/val`、`labels/test`，使用：
+
+```bash
+python split_yolo.py --in-place --layout-only \
+  --datasets /path/to/merged6_obstacle_only \
+  --workers 16
+```
+
+此模式保留每张图片原来的 train/val/test 归属，不使用随机种子与划分比例。唯一文件名保持原样；同一集合内存在重名时才使用路径指纹避免覆盖。`valid`/`validation` 统一为 val；缺失集合保持为空，不会凭空补样本。支持有 YAML 或无 YAML，输出始终是 `images/<split>` 和 `labels/<split>`，不会继续输出 `train/images` 这种布局。
+
+有 YAML 时更新其中的路径；没有 YAML 时只转换文件与生成报告，不捏造类别名称。原地模式同样带事务回滚。平铺且没有原集合归属的输入不能使用 `--layout-only`。如希望同时重新按 8:1:1 分配，去掉 `--layout-only`，使用下面的重分命令。
+
+### 原地重新打乱划分
+
 无需 `--output`，显式指定 `--in-place`：
 
 ```bash
@@ -84,6 +100,7 @@ dataset_a/
 | `--datasets` | 一个或多个数据集根目录或 YAML 路径 |
 | `--output` | 导出模式使用的新目录；与 `--in-place` 二选一 |
 | `--in-place` | 在原目录直接重新划分，带事务回滚，不创建独立输出数据集 |
+| `--layout-only` | 只转换目录布局，保留原 train/val/test 归属，可与原地或导出模式一起使用 |
 | `--ratios 8 1 1` | train/val/test 图片比例，默认 80%/10%/10%；也支持 `9 0.5 0.5` |
 | `--seed 42` | 固定随机种子，输入路径和文件不变时可复现；更换 seed 可重新打乱 |
 | `--workers 16` | 并发检查标签与建立硬链接，任务数量分批限制，避免一次创建大量 Future |

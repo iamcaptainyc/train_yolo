@@ -132,7 +132,7 @@ def publish(root, state):
     write_json(work/'transaction.json',state)
 
 
-def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16):
+def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16, layout_only=False):
     root = Path(yaml_path).resolve().parent
     with FileLock(str(root/'.split_yolo.lock'),timeout=0):
         recover(root)
@@ -149,7 +149,7 @@ def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16):
         write_json(work/'transaction.json',state)
         try:
             prepared = work/'prepared'
-            report = split_dataset(source,prepared,ratios,seed,workers,False,collected=(images,ignored))
+            report = split_dataset(source,prepared,ratios,seed,workers,False,collected=(images,ignored),layout_only=layout_only)
             # Preserve non-dataset files and orphan labels, rather than losing
             # them when an old images/labels directory is replaced. Drop caches.
             extra_trees = set()
@@ -198,7 +198,7 @@ def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16):
         return report
 
 
-def run_in_place_batch(datasets, ratios=(8,1,1), seed=42, workers=16):
+def run_in_place_batch(datasets, ratios=(8,1,1), seed=42, workers=16, layout_only=False):
     if workers < 1:
         raise ValueError('workers must be positive')
     target_counts(10,ratios)
@@ -215,7 +215,7 @@ def run_in_place_batch(datasets, ratios=(8,1,1), seed=42, workers=16):
                 with FileLock(str(root/'.split_yolo.lock'),timeout=0):
                     recover(root)
             path = dataset_file(value)
-            report = split_in_place(path,ratios,seed,workers)
+            report = split_in_place(path,ratios,seed,workers,layout_only=layout_only)
             results.append({'source':report['source'],'status':'ok','report':report})
             print(f'Updated in place: {path.parent}; {report["total_images"]} images; report: {path.parent / "SPLIT_REPORT.md"}',flush=True)
         except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
