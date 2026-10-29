@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -164,6 +166,78 @@ class MergeIDsTests(unittest.TestCase):
             self.assertEqual(report['class_image_counts']['train']['0'],2)
             with self.assertRaisesRegex(ValueError,'new output directory'):
                 self.call_merge([a,b],root/'out')
+
+    def test_single_source_subset_compact_ids_coordinates_and_hardlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{i:f'class{i}' for i in range(27)},
+                      '0 0.50000 0.5 0.2 0.3\n1 0.5 0.5 0.1 0.1\n25 0.4 0.4 0.2 0.2\n26 0.6 0.6 0.1 0.1\n')
+            before=(a/'labels/train/same_name.txt').read_bytes()
+            with self.assertRaisesRegex(ValueError,'compact-ids'):
+                self.call_merge([a],root/'out',include_ids={1:{0,25,26}})
+            report=self.call_merge([a],root/'out',include_ids={1:{0,25,26}},compact_ids=True)
+            self.assertEqual(report['names'],{0:'class0',1:'class25',2:'class26'})
+            self.assertEqual(report['id_mapping'],{0:0,25:1,26:2})
+            self.assertFalse(report['class_ids_preserved'])
+            label=next((root/'out/labels/train').iterdir())
+            self.assertEqual(label.read_text(),'0 0.50000 0.5 0.2 0.3\n1 0.4 0.4 0.2 0.2\n2 0.6 0.6 0.1 0.1\n')
+            self.assertEqual(report['class_box_counts']['train'],{0:1,1:1,2:1})
+            self.assertEqual((a/'labels/train/same_name.txt').read_bytes(),before)
+            self.assertTrue(os.path.samefile(next((root/'out/images/train').iterdir()),a/'images/train/same_name.jpg'))
+            self.assertIn('| 25 | 1 | class25 |',(root/'out/MERGE_REPORT.md').read_text(encoding='utf-8'))
+
+    def test_filter_scope_does_not_drop_other_sources_or_renumber_global_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{i:f'a{i}' for i in range(27)},'25 0.5 0.5 0.2 0.2\n1 0.5 0.5 0.1 0.1\n')
+            b=dataset(root/'b',{i:f'b{i}' for i in range(1,25)},'1 0.5 0.5 0.2 0.2\n')
+            report=self.call_merge([a,b],root/'out',include_ids={1:{0,25,26}})
+            self.assertEqual(report['names'][1],'b1')
+            self.assertEqual(report['names'][25],'a25')
+            self.assertEqual(report['names'][26],'a26')
+            self.assertTrue(report['class_ids_preserved'])
+            self.assertEqual(report['splits']['train']['images'],2)
+            labels={p.read_text() for p in (root/'out/labels/train').iterdir()}
+            self.assertEqual(labels,{'25 0.5 0.5 0.2 0.2\n','1 0.5 0.5 0.2 0.2\n'})
+
+    def test_filter_excludes_nonselected_images_and_negatives_are_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'cat',1:'dog'},'0 0.5 0.5 0.2 0.2\n1 0.5 0.5 0.1 0.1\n')
+            for name,row in [('other','1 0.5 0.5 0.1 0.1\n'),('negative','')]:
+                (a/f'images/train/{name}.jpg').write_bytes(name.encode())
+                (a/f'labels/train/{name}.txt').write_text(row)
+            report=self.call_merge([a],root/'out',include_ids={1:{0}})
+            self.assertEqual(report['filtering']['d1']['train'],{
+                'scanned_images':3,'kept_images':1,'excluded_without_selected_class':1,
+                'excluded_negatives':1,'removed_boxes':2})
+            report=self.call_merge([a],root/'with_negatives',include_ids={1:{0}},keep_negatives=True)
+            self.assertEqual(report['splits']['train'],{'images':2,'negative_images':1})
+            self.assertEqual(report['class_image_counts']['train'][0],1)
+
+    def test_unknown_includes_reserved_overlap_and_empty_split_fail_before_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'cat',1:'dog'},'1 0.5 0.5 0.1 0.1\n')
+            for options,message in [({'include_ids':{1:{99}}},'must exist'),
+                                    ({'include_ids':{2:{0}}},'source index'),
+                                    ({'include_ids':{1:{0}},'reserved_ids':{1:{0}}},'overlap'),
+                                    ({'include_ids':{1:{0}}},'non-empty train and val')]:
+                with self.subTest(options=options),self.assertRaisesRegex(ValueError,message):
+                    self.call_merge([a],root/'out',**options)
+                self.assertFalse((root/'out').exists())
+
+    def test_actual_cli_single_source_with_include_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            a=dataset(root/'a',{0:'cat',25:'dog',26:'bird'},'25 0.5 0.5 0.2 0.2\n')
+            script=Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            result=subprocess.run([sys.executable,'-X','utf8',str(script),'--datasets',str(a),'--include-ids','1:0,25,26',
+                                   '--compact-ids','--output',str(root/'out')],capture_output=True,text=True,encoding='utf-8')
+            self.assertEqual(result.returncode,0,result.stderr)
+            config=yaml.safe_load((root/'out/data.yaml').read_text())
+            self.assertEqual(config['names'],{0:'cat',1:'dog',2:'bird'})
+            self.assertEqual(next((root/'out/labels/train').iterdir()).read_text(),'1 0.5 0.5 0.2 0.2\n')
 
 
 if __name__ == '__main__':

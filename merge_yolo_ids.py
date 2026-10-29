@@ -45,20 +45,20 @@ def load_dataset(value):
             'names': parsed, 'reserved': set()}
 
 
-def parse_reserved_ids(specs, source_count):
+def parse_reserved_ids(specs, source_count, option='--reserved-ids'):
     result = defaultdict(set)
     for spec in specs or []:
         if not re.fullmatch(r'[1-9]\d*:\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*', spec):
-            raise ValueError(f'Invalid --reserved-ids {spec!r}; use source:IDs, e.g. 2:0-26 or 3:0,2-5')
+            raise ValueError(f'Invalid {option} {spec!r}; use source:IDs, e.g. 2:0-26 or 3:0,2-5')
         source, values = spec.split(':')
         source = int(source)
         if source > source_count:
-            raise ValueError(f'Reserved source index {source} exceeds dataset count {source_count}')
+            raise ValueError(f'Source index {source} exceeds dataset count {source_count} for {option}')
         for item in values.split(','):
             start, _, end = item.partition('-')
             start, end = int(start), int(end or start)
             if end < start or end - start > 100000:
-                raise ValueError(f'Invalid/oversized reserved range: {item}')
+                raise ValueError(f'Invalid/oversized ID range for {option}: {item}')
             result[source].update(range(start, end+1))
     return dict(result)
 
@@ -117,7 +117,23 @@ def validate_label(path, dataset):
     return raw, counts
 
 
-def merge(datasets, output, copy_images=False, reserved_ids=None):
+def selected_label(raw, selected, id_mapping):
+    """Filter rows and rewrite IDs while retaining coordinate strings verbatim."""
+    lines, counts = [], Counter()
+    for line in raw.decode('utf-8-sig').splitlines(keepends=True):
+        if not line.strip():
+            continue
+        cid = int(line.split()[0])
+        if selected is not None and cid not in selected:
+            continue
+        new_id = id_mapping[cid]
+        counts[new_id] += 1
+        lines.append(re.sub(r'^(\s*)\d+', lambda m: m[1]+str(new_id), line))
+    return ''.join(lines).encode('utf-8'), counts
+
+
+def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=None,
+          compact_ids=False, keep_negatives=False):
     sources = [load_dataset(value) for value in datasets]
     requested_reserved = {}
     absent_reserved = {}
@@ -129,6 +145,17 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
         requested_reserved[f'd{index}'] = sorted(ids)
         absent_reserved[f'd{index}'] = sorted(ids - source['names'].keys())
         source['reserved'] = ids & source['names'].keys()
+    for source in sources:
+        source['include'] = None
+    for index, ids in (include_ids or {}).items():
+        if not isinstance(index, int) or not 1 <= index <= len(sources):
+            raise ValueError(f'Invalid include source index: {index}')
+        source, ids = sources[index-1], set(ids)
+        if not ids or ids - source['names'].keys():
+            raise ValueError(f'Included IDs must exist in source {index}: {sorted(ids - source["names"].keys())}')
+        if ids & source['reserved']:
+            raise ValueError(f'Included IDs overlap reserved IDs in source {index}: {sorted(ids & source["reserved"])}')
+        source['include'] = ids
     output = Path(output).expanduser().resolve()
     for source in sources:
         for root in (source['yaml'].parent, source['root']):
@@ -141,35 +168,56 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
     for index, source in enumerate(sources, 1):
         ignored[f'd{index}'] = sorted(source['reserved'])
         for cid, name in source['names'].items():
-            if cid in source['reserved']:
+            if cid in source['reserved'] or (source['include'] is not None and cid not in source['include']):
                 continue
             if cid in names and names[cid] != name:
                 raise ValueError(f'Conflicting ID {cid}: {names[cid]!r} versus {name!r}')
             names[cid] = name
-    if not names or set(names) != set(range(max(names)+1)):
-        raise ValueError('Merged real class IDs must be continuous from 0; reserved names cannot fill gaps')
+    if not names or (not compact_ids and set(names) != set(range(max(names)+1))):
+        raise ValueError('Merged real class IDs must be continuous from 0; reserved names cannot fill gaps. '
+                         'Use --compact-ids to explicitly renumber a selected subset.')
+    id_mapping = {cid: new if compact_ids else cid for new, cid in enumerate(sorted(names))}
+    original_names = dict(names)
+    names = {id_mapping[cid]: name for cid, name in names.items()}
     records = []
     inode_splits = {}
     seen_paths = set()
     split_stats = {split: {'images': 0, 'negative_images': 0} for split in SPLITS}
     class_images = {split: Counter() for split in SPLITS}
     boxes = {split: Counter() for split in SPLITS}
+    filtering = {f'd{i}': {split: {'scanned_images':0, 'kept_images':0,
+                                  'excluded_without_selected_class':0, 'excluded_negatives':0,
+                                  'removed_boxes':0} for split in SPLITS} for i in range(1,len(sources)+1)}
     for index, source in enumerate(sources, 1):
         for split in SPLITS:
             for image in tqdm(images_for(source, split), desc=f'Check d{index}/{split}', unit='img'):
                 stat = image.stat()
                 if not image.is_file() or stat.st_size == 0:
                     raise ValueError(f'Missing/empty image: {image}')
-                identity = (stat.st_dev, stat.st_ino)
-                if stat.st_ino and identity in inode_splits and inode_splits[identity] != split:
-                    raise ValueError(f'Same image/hardlink in different splits: {image}')
-                inode_splits[identity] = split
                 key = (index, split, str(image))
                 if key in seen_paths:
                     raise ValueError(f'Duplicate image entry: {image}')
                 seen_paths.add(key)
                 label = label_for(image)
                 raw, counts = validate_label(label, source)
+                stats = filtering[f'd{index}'][split]
+                stats['scanned_images'] += 1
+                selected = source['include']
+                if selected is not None and not (selected & counts.keys()):
+                    if counts or not keep_negatives:
+                        reason = 'excluded_without_selected_class' if counts else 'excluded_negatives'
+                        stats[reason] += 1
+                        stats['removed_boxes'] += sum(counts.values())
+                        continue
+                if selected is not None or compact_ids:
+                    total_before = sum(counts.values())
+                    raw, counts = selected_label(raw, selected, id_mapping)
+                    stats['removed_boxes'] += total_before-sum(counts.values())
+                stats['kept_images'] += 1
+                identity = (stat.st_dev, stat.st_ino)
+                if stat.st_ino and identity in inode_splits and inode_splits[identity] != split:
+                    raise ValueError(f'Same image/hardlink in different splits: {image}')
+                inode_splits[identity] = split
                 token = hashlib.sha256(str(image).encode('utf-8')).hexdigest()
                 filename = f'd{index}_{token}'
                 records.append((split, image, raw, filename))
@@ -201,7 +249,13 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
               'nc': len(names), 'names': names}
     if split_stats['test']['images']:
         config['test'] = 'images/test'
-    report = {'sources': [str(s['yaml']) for s in sources], 'class_ids_preserved': True,
+    report = {'sources': [str(s['yaml']) for s in sources],
+              'class_ids_preserved': all(cid==new for cid,new in id_mapping.items()),
+              'compact_ids': compact_ids, 'id_mapping': id_mapping, 'original_names': original_names,
+              'included_ids': {f'd{i}':sorted(s['include']) if s['include'] is not None else None
+                               for i,s in enumerate(sources,1)},
+              'filtering': filtering, 'keep_original_negatives_when_filtering':keep_negatives,
+              'mixed_image_policy': 'keep image and selected boxes; omit other classes from the detection task',
               'ignored_reserved_ids': ignored, 'names': names, 'splits': split_stats,
               'requested_reserved_ids': requested_reserved, 'absent_reserved_ids': absent_reserved,
               'reserved_policy': 'explicit source/ID declarations only; no class-name matching',
@@ -211,7 +265,8 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
               'image_mode': 'copy' if copy_images else 'hardlink',
               'duplicate_check': 'same inode across splits only; no full content hash or visual/semantic audit'}
     (output/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
-    lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。类别 ID 与坐标保持原值；原 train/val/test 划分保留。',
+    id_note = '类别 ID 已按原 ID 升序重排为连续编号' if compact_ids else '类别 ID 保持原值'
+    lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。{id_note}；保留框的坐标原文与原 train/val/test 划分保留。',
              '', f'图片保存方式：{report["image_mode"]}；图片按来源前缀平铺，标签单独写入。',
              '', '仅检查已知相同文件/硬链接跨划分重复，不校验所有图片内容或判断框的语义正确性。',
              '', '## 显式指定的占位类别', '', '默认不按类别名称忽略任何 ID；以下仅为用户指定且确认未被标签使用的占位项。',
@@ -219,6 +274,21 @@ def merge(datasets, output, copy_images=False, reserved_ids=None):
              '', '请求范围中未在对应 YAML 声明的 ID（无需处理）：' + json.dumps(absent_reserved, ensure_ascii=False),
              '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 |', '| --- | ---: | ---: |']
     lines += [f'| {s} | {split_stats[s]["images"]} | {split_stats[s]["negative_images"]} |' for s in SPLITS]
+    if include_ids or compact_ids:
+        lines += ['', '## 类别筛选与编号映射', '',
+                  '指定来源只保留所选类别的框。混合类别图片保留，但删除未选类别的标签行；它们不属于本次检测任务。',
+                  '不含所选类别的正样本图片不输出；筛选来源的原始负样本仅在 --keep-negatives 时保留。未指定筛选的来源全部保留。',
+                  '', '各来源选择（null 为全部）：'+json.dumps(report['included_ids'],ensure_ascii=False),
+                  '', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
+        lines += [f'| {cid} | {new} | {original_names[cid].replace(chr(124), chr(92)+chr(124))} |'
+                  for cid,new in id_mapping.items()]
+        lines += ['', '| 来源 / 划分 | 扫描图片 | 保留图片 | 排除无所选类图片 | 排除负样本 | 删除框 |',
+                  '| --- | ---: | ---: | ---: | ---: | ---: |']
+        for source, splits in filtering.items():
+            for split, stats in splits.items():
+                values = ' | '.join(str(stats[k]) for k in ('scanned_images','kept_images',
+                    'excluded_without_selected_class','excluded_negatives','removed_boxes'))
+                lines.append(f'| {source}/{split} | {values} |')
     lines += ['', '## 类别统计', '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 框总数 |', '| ---: | --- | ---: | ---: | ---: | ---: |']
     lines += [f'| {cid} | {name.replace(chr(124), chr(92)+chr(124))} | {class_images["train"][cid]} | {class_images["val"][cid]} | {class_images["test"][cid]} | {sum(boxes[s][cid] for s in SPLITS)} |' for cid, name in names.items()]
     (output/'MERGE_REPORT.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
@@ -234,12 +304,16 @@ def main():
     parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
     parser.add_argument('--reserved-ids', action='append', default=[],
                         help='Unused padding ID range per source (1-based), e.g. 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
+    parser.add_argument('--include-ids', action='append', default=[],
+                        help='Keep only these classes in a source, e.g. 1:0,25,26; other sources remain unfiltered. Repeatable.')
+    parser.add_argument('--compact-ids', action='store_true', help='Explicitly renumber selected global IDs to 0..N-1')
+    parser.add_argument('--keep-negatives', action='store_true', help='Keep original empty-label images from class-filtered sources')
     args = parser.parse_args()
-    if len(args.datasets) < 2:
-        parser.error('Provide at least two datasets')
     try:
         reserved = parse_reserved_ids(args.reserved_ids, len(args.datasets))
-        report = merge(args.datasets, args.output, args.copy_images, reserved_ids=reserved)
+        included = parse_reserved_ids(args.include_ids, len(args.datasets), option='--include-ids')
+        report = merge(args.datasets, args.output, args.copy_images, reserved_ids=reserved,
+                       include_ids=included, compact_ids=args.compact_ids, keep_negatives=args.keep_negatives)
         print(f'Done: {len(report["names"])} classes; YAML: {args.output / "data.yaml"}')
     except KeyboardInterrupt:
         parser.exit(130, '\nStopped. Source datasets unchanged. Use a new output directory for retry.\n')
