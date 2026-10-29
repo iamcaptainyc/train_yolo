@@ -160,6 +160,40 @@ split_in_place(root/'data.yaml',workers=2)
             with self.assertRaisesRegex(ValueError,'non-nested'):
                 self.quiet([root,child],workers=2)
 
+    def test_actual_cli_screenshot_layout_without_yaml(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=dataset(Path(tmp)/'merged6_obstacle_only','outside_complete',count=30)
+            (root/'data.yaml').unlink()
+            labels=sorted(p.read_bytes() for p in root.rglob('*.txt'))
+            script=Path(__file__).resolve().parents[1]/'split_yolo.py'
+            result=subprocess.run([sys.executable,'-X','utf8',str(script),'--in-place','--datasets',str(root),
+                                   '--workers','2'],capture_output=True,encoding='utf-8')
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertFalse((root/'data.yaml').exists())
+            self.assertEqual(sorted(p.read_bytes() for p in root.glob('labels/*/*.txt')),labels)
+            self.assertEqual(len(list(root.rglob('*.jpg'))),30)
+            self.assertEqual([len(list((root/'images'/s).glob('*.jpg'))) for s in ('train','val','test')],[24,3,3])
+            report=json.loads((root/'split_report.json').read_text())
+            self.assertEqual(report['observed_class_ids'],[0,1])
+            self.assertFalse(report['data_yaml_generated'])
+            self.assertFalse((root/WORK).exists())
+
+    def test_no_yaml_publish_failure_restores_original_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=dataset(Path(tmp)/'merged6_obstacle_only','outside_complete')
+            (root/'data.yaml').unlink()
+            before=snapshot(root)
+            original=Path.rename
+            def fail_labels(path,target):
+                if path.parent==root/WORK/'prepared' and path.name=='labels':
+                    raise OSError('publication failure without metadata')
+                return original(path,target)
+            with patch.object(Path,'rename',fail_labels):
+                result=self.quiet([root],workers=2)
+            self.assertEqual(result[0]['status'],'failed')
+            self.assertEqual(snapshot(root),before)
+            self.assertFalse((root/WORK).exists())
+
 
 if __name__=='__main__':
     unittest.main()

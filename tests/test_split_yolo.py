@@ -22,8 +22,8 @@ def dataset(root, layout='flat', count=20, stale=False):
             relative = Path('images')/f'{i}.jpg'
         elif layout == 'inside':
             relative = Path('images')/old/f'{i}.jpg'
-        elif layout == 'outside':
-            relative = Path(old)/'images'/f'{i}.jpg'
+        elif layout in ('outside','outside_complete'):
+            relative = Path(('train','val','test')[i%3] if layout=='outside_complete' else old)/'images'/f'{i}.jpg'
         else:
             relative = Path('images')/('train','val','test')[i%3]/f'{i}.jpg'
         image = root/relative
@@ -158,6 +158,41 @@ class SplitTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertIn('1 OK, 0 failed',result.stdout)
             self.assertTrue((root/'out/BATCH_REPORT.md').exists())
+
+    def test_no_yaml_layouts_preserve_numeric_ids_without_fabricating_names(self):
+        for layout in ('flat','inside','outside_complete'):
+            with self.subTest(layout=layout),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                source=dataset(root/'merged6_obstacle_only',layout,count=30)
+                (source/'data.yaml').unlink()
+                for path in source.rglob('*.txt'):
+                    row=path.read_text()
+                    if row:
+                        fields=row.split()
+                        fields[0]='7' if fields[0]=='0' else '27'
+                        path.write_text(' '.join(fields)+'\n')
+                original_labels=sorted(p.read_bytes() for p in source.rglob('*.txt'))
+                result=self.run_quiet([source],root/'out',workers=2)[0]
+                self.assertEqual(result['status'],'ok',result)
+                report=result['report']
+                self.assertEqual(report['observed_class_ids'],[7,27])
+                self.assertEqual(report['names'],{})
+                self.assertFalse(report['class_names_available'])
+                output=Path(report['output'])
+                self.assertFalse((output/'data.yaml').exists())
+                self.assertEqual(sorted(p.read_bytes() for p in output.glob('labels/*/*.txt')),original_labels)
+                self.assertIn('| 27 | —（未提供名称） |',(output/'SPLIT_REPORT.md').read_text(encoding='utf-8'))
+                self.assertEqual([report['splits'][s]['images'] for s in ('train','val','test')],[24,3,3])
+
+    def test_no_yaml_invalid_rows_still_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            source=dataset(root/'no_yaml','outside_complete')
+            (source/'data.yaml').unlink()
+            (source/'train/labels/3.txt').write_text('999 0.5 0.5 -0.2 0.3\n')
+            results=self.run_quiet([source],root/'out',workers=2)
+            self.assertEqual(results[0]['status'],'failed')
+            self.assertIn('Invalid normalized box',results[0]['error'])
 
 
 if __name__=='__main__':

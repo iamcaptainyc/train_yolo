@@ -27,7 +27,24 @@ def dataset_file(value):
     for name in ('data.yaml', 'data.yml', 'dataset.yaml', 'dataset.yml'):
         if (path/name).is_file():
             return path/name
-    raise ValueError(f'Dataset needs a YAML names table: {path}')
+    if path.is_dir() and ((path/'images').is_dir() or any(
+            (path/split/'images').is_dir() for split in ('train','val','valid','validation','test'))):
+        # Internal metadata target only; never written without real class names.
+        return path/'data.yaml'
+    raise ValueError(f'No dataset YAML or recognizable images directory: {path}')
+
+
+def load_split_source(path):
+    """A split-only dataset may have numeric labels without a class-name table."""
+    path = Path(path).resolve()
+    if path.is_file():
+        source = load_dataset(path)
+        source['has_names'] = True
+        return source
+    root = path.parent
+    if dataset_file(root) != path:
+        raise ValueError(f'Dataset metadata not found: {path}')
+    return {'yaml':path, 'config':{}, 'root':root, 'names':{}, 'reserved':set(), 'has_names':False}
 
 
 def collect_images(source):
@@ -136,13 +153,14 @@ def assign_splits(records, ratios, seed):
 
 def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False, collected=None):
     images, ignored = collected if collected is not None else collect_images(source)
+    has_names = source.get('has_names',True)
 
     def inspect(image):
         stamp = image.stat()
         if stamp.st_size == 0:
             raise ValueError(f'Empty image: {image}')
         label = label_for(image)
-        raw, counts = validate_label(label, source)
+        raw, counts = validate_label(label, source, check_class_ids=has_names)
         identity = (stamp.st_dev, stamp.st_ino) if stamp.st_ino else ('path', str(image.resolve()))
         return {'image':image, 'label':label, 'raw':raw, 'counts':counts, 'identity':identity}
 
@@ -152,7 +170,7 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
     targets, group_count = assign_splits(records, ratios, seed)
     output.mkdir(parents=True, exist_ok=False)
     marker = output/'INCOMPLETE.txt'
-    marker.write_text('Split incomplete. Do not train before report and data.yaml are generated.\n', encoding='utf-8')
+    marker.write_text('Split incomplete. Do not use until the split report is generated.\n', encoding='utf-8')
     for split in SPLITS:
         (output/'images'/split).mkdir(parents=True)
         (output/'labels'/split).mkdir(parents=True)
@@ -182,9 +200,11 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
         stats[split]['negative_images'] += not counts
         class_images[split].update(counts.keys())
         boxes[split].update(counts)
-    report = {'source':str(source['yaml']), 'output':str(output), 'source_splits_preserved':False,
+    observed_ids = sorted(set().union(*(set(boxes[s]) for s in SPLITS)))
+    report = {'source':str(source['yaml'] if has_names else source['root']), 'output':str(output), 'source_splits_preserved':False,
               'seed':seed, 'ratios':list(ratios), 'target_images':targets, 'total_images':len(records),
               'independent_file_groups':group_count, 'splits':stats, 'names':source['names'],
+              'class_names_available':has_names, 'observed_class_ids':observed_ids, 'data_yaml_generated':has_names,
               'class_image_counts':class_images, 'class_box_counts':boxes,
               'image_mode':'copy' if copy_images else 'hardlink', 'ignored_missing_split_paths':ignored,
               'class_ids_preserved':True, 'label_bytes_preserved':True,
@@ -193,22 +213,29 @@ def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_imag
     config = {'path':output.as_posix(), 'train':'images/train', 'val':'images/val', 'test':'images/test',
               'nc':len(source['names']), 'names':source['names']}
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    lines = ['# YOLO 数据集重新划分报告', '', f'来源：`{source["yaml"]}`', '',
-             f'共 {len(records):,} 张，{len(source["names"])} 个类别定义；原划分已全部打散。', '',
+    class_note = f'{len(source["names"])} 个类别定义' if has_names else f'{len(observed_ids)} 个实际出现的类别 ID（未提供名称）'
+    lines = ['# YOLO 数据集重新划分报告', '', f'来源：`{report["source"]}`', '',
+             f'共 {len(records):,} 张，{class_note}；原划分已全部打散。', '',
              f'随机种子：{seed}；比例：{list(ratios)}；图片：{report["image_mode"]}。类别 ID 和标签原文保留。', '',
              '按图片随机分配；同一文件/硬链接整体分配，实际比例可能略有偏差。未按物种、相机或序列分层，不识别独立复制的重复图。', '',
              '| 划分 | 目标图片数 | 实际图片数 | 负样本 |', '| --- | ---: | ---: | ---: |']
     lines += [f'| {s} | {targets[s]} | {stats[s]["images"]} | {stats[s]["negative_images"]} |' for s in SPLITS]
     lines += ['', '## 各类别统计', '', '| ID | 类别 | train 图片 | val 图片 | test 图片 | 框总数 |',
               '| ---: | --- | ---: | ---: | ---: | ---: |']
-    for cid,name in sorted(source['names'].items()):
+    for cid in sorted(source['names']) if has_names else observed_ids:
+        name = source['names'].get(cid,'—（未提供名称）')
         name = name.replace('|','\\|').replace('\n',' ')
         lines.append(f'| {cid} | {name} | {class_images["train"][cid]} | {class_images["val"][cid]} | {class_images["test"][cid]} | {sum(boxes[s][cid] for s in SPLITS)} |')
     if ignored:
         lines += ['', '## 忽略的失效划分路径', '', '已从本地 images 目录及有效 YAML 路径收集图片；以下路径不存在：', '']
         lines += [f'- `{path}`' for path in ignored]
+    if not has_names:
+        lines += ['', '## 未提供类别表', '',
+                  '未找到数据集 YAML。已保留标签中的全部原始 ID、框与负样本，并按 ID 统计；不猜测名称、不生成 data.yaml。',
+                  '直接训练或按名称合并前，需要补充真实的 ID→类别名称表。']
     (output/'SPLIT_REPORT.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
-    (output/'data.yaml').write_text(yaml.safe_dump(config,allow_unicode=True,sort_keys=False),encoding='utf-8')
+    if has_names:
+        (output/'data.yaml').write_text(yaml.safe_dump(config,allow_unicode=True,sort_keys=False),encoding='utf-8')
     marker.unlink()
     return report
 
@@ -227,7 +254,7 @@ def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images
     prepared, errors = {}, {}
     for path in paths:
         try:
-            prepared[path] = load_dataset(path)
+            prepared[path] = load_split_source(path)
         except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
             errors[path] = str(exc)
         roots = (path.parent, prepared[path]['root']) if path in prepared else (path.parent,)
@@ -262,7 +289,7 @@ def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images
                     raise ValueError(errors[path])
                 source = prepared[path]
                 report = split_dataset(source,output/name,ratios,seed,workers,copy_images)
-                results.append({'source':str(path),'status':'ok','report':report})
+                results.append({'source':report['source'],'status':'ok','report':report})
             except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
                 results.append({'source':str(path),'status':'failed','error':str(exc)})
                 print(f'Failed: {path}: {exc}',flush=True)

@@ -97,7 +97,7 @@ def label_for(image):
     return Path(*parts).with_suffix('.txt')
 
 
-def validate_label(path, dataset):
+def validate_label(path, dataset, *, check_class_ids=True):
     raw = path.read_bytes()  # Missing labels are errors, not implicit negatives.
     counts = Counter()
     for number, line in enumerate(raw.decode('utf-8-sig').splitlines(), 1):
@@ -107,7 +107,7 @@ def validate_label(path, dataset):
         if len(fields) != 5 or not fields[0].isdecimal():
             raise ValueError(f'Expected detection rows: class x y w h; {path}:{number}')
         cid = int(fields[0])
-        if cid not in dataset['names'] or cid in dataset['reserved']:
+        if (check_class_ids and cid not in dataset['names']) or cid in dataset['reserved']:
             raise ValueError(f'Label uses unknown/reserved ID {cid}: {path}:{number}')
         x, y, w, h = map(float, fields[1:])
         if (not all(math.isfinite(v) for v in (x, y, w, h)) or not (0 < w <= 1 and 0 < h <= 1)

@@ -10,7 +10,27 @@ python split_yolo.py \
   --seed 42 --workers 16
 ```
 
-也可以输入单个数据集，或直接传 YAML 文件。根目录会查找 `data.yaml`、`data.yml`、`dataset.yaml`、`dataset.yml`，必须有真实的 `names` 类别表，不猜测类别名称。
+也可以输入单个数据集，或直接传 YAML 文件。根目录会查找 `data.yaml`、`data.yml`、`dataset.yaml`、`dataset.yml`。没有 YAML 时也能按图片和数值标签重新划分，保持原 ID、坐标及负样本；报告按实际出现的 ID 统计，名称显示“未提供名称”，不生成 data.yaml 或虚构名称。已有 YAML 则继续检查真实 `names` 类别表；已存在但内容不合法的 YAML 不会被静默忽略。
+
+例如只有下面这几层目录，完全没有 YAML，也可以直接运行：
+
+```text
+merged6_obstacle_only/
+  train/images/
+  train/labels/
+  val/images/
+  val/labels/
+  test/images/
+  test/labels/
+```
+
+```bash
+python split_yolo.py --in-place \
+  --datasets /path/to/merged6_obstacle_only \
+  --ratios 8 1 1 --workers 16
+```
+
+有 YAML 与没有 YAML 的数据集可以放在同一条 `--datasets` 命令中批量处理。没有 YAML 的来源，直接训练或按类别名称合并前，仍需提供真实 ID→名称表。
 
 支持这些布局，子文件夹也会递归收集：
 
@@ -23,7 +43,7 @@ dataset_a/             dataset_b/                dataset_c/
                          labels/val/*.txt          valid/labels/*.txt
 ```
 
-同时读取 YAML 中有效的 train/val/test 目录、目录列表及图片清单 TXT。清单中的相对图片路径相对该 TXT 文件。原 YAML 中失效或不存在的划分路径会写入报告，仍从本地 images 目录收集文件；清单中明确列出的图片缺失则报错。缺少标签、未知类别、框坐标不合法会使该数据集失败，空 TXT 是合法负样本，不会把缺失标签当负样本。
+有 YAML 时同时读取其中有效的 train/val/test 目录、目录列表及图片清单 TXT。清单中的相对图片路径相对该 TXT 文件。原 YAML 中失效或不存在的划分路径会写入报告，仍从本地 images 目录收集文件；清单中明确列出的图片缺失则报错。缺少标签、框坐标不合法会使该数据集失败，有类别表时也检查未知 ID；无类别表时允许全部非负整数 ID。空 TXT 是合法负样本，不会把缺失标签当负样本。
 
 ## 直接在原目录修改
 
@@ -55,7 +75,7 @@ dataset_a/
 
 许可证等附属文件及孤立标签会保留，旧 `.cache` 清除；其他原有报告保留为历史记录，最新统计以 `SPLIT_REPORT.md` 和 `split_report.json` 为准。没有逐图片校验缓存，也不是逐图片断点续跑；中断后会重新扫描和规划。若原 YAML 名为 data.yml/dataset.yaml，原文件与 data.yaml 都会更新。
 
-原地模式要求图片、标签位于对应 YAML 所在数据集目录内，不处理外部路径或符号链接；多个输入不能相互嵌套。`--in-place` 与 `--output`、`--copy-images` 不能同时使用。一个来源失败后继续其他来源，最后控制台汇总成功/失败数量；各来源的报告直接写在各自原目录。
+原地模式要求图片、标签位于对应数据集目录内，不处理外部路径或符号链接；多个输入不能相互嵌套。没有 YAML 时保持无 YAML 状态，只更新图片/标签布局和统计报告。有 YAML 时更新原 YAML 和 data.yaml。`--in-place` 与 `--output`、`--copy-images` 不能同时使用。一个来源失败后继续其他来源，最后控制台汇总成功/失败数量；各来源的报告直接写在各自原目录。
 
 ## 参数
 

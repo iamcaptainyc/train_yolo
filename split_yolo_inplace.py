@@ -7,9 +7,9 @@ import shutil
 from filelock import FileLock
 import yaml
 
-from merge_yolo_ids import label_for, load_dataset
+from merge_yolo_ids import label_for
 from search_worker import write_json
-from split_yolo import collect_images, dataset_file, split_dataset, target_counts
+from split_yolo import collect_images, dataset_file, load_split_source, split_dataset, target_counts
 
 WORK = '.split_yolo_inplace'
 
@@ -136,7 +136,7 @@ def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16):
     root = Path(yaml_path).resolve().parent
     with FileLock(str(root/'.split_yolo.lock'),timeout=0):
         recover(root)
-        source = load_dataset(yaml_path)
+        source = load_split_source(yaml_path)
         images, ignored = collect_images(source)
         trees, extras = inventory(root,images)
         for name in {'data.yaml',source['yaml'].name,'SPLIT_REPORT.md','split_report.json'}:
@@ -163,13 +163,14 @@ def split_in_place(yaml_path, ratios=(8,1,1), seed=42, workers=16):
                 for tree in trees:
                     if extra.is_relative_to(tree) and tree not in (root/'images',root/'labels'):
                         extra_trees.add(tree.relative_to(root).as_posix())
-            config = yaml.safe_load((prepared/'data.yaml').read_text(encoding='utf-8'))
-            config['path'] = root.as_posix()
-            config_text = yaml.safe_dump(config,allow_unicode=True,sort_keys=False)
-            (prepared/'data.yaml').write_text(config_text,encoding='utf-8')
-            yaml_names = sorted({'data.yaml',source['yaml'].name})
-            for name in yaml_names:
-                (prepared/name).write_text(config_text,encoding='utf-8')
+            yaml_names = []
+            if source['has_names']:
+                config = yaml.safe_load((prepared/'data.yaml').read_text(encoding='utf-8'))
+                config['path'] = root.as_posix()
+                config_text = yaml.safe_dump(config,allow_unicode=True,sort_keys=False)
+                yaml_names = sorted({'data.yaml',source['yaml'].name})
+                for name in yaml_names:
+                    (prepared/name).write_text(config_text,encoding='utf-8')
             report.update(output=str(root),in_place=True,preserved_auxiliary_files=len(extras))
             with (prepared/'SPLIT_REPORT.md').open('a',encoding='utf-8') as stream:
                 stream.write(f'\n## 原地更新\n\n已直接更新 `{root}`；无独立输出数据集目录。'
@@ -215,7 +216,7 @@ def run_in_place_batch(datasets, ratios=(8,1,1), seed=42, workers=16):
                     recover(root)
             path = dataset_file(value)
             report = split_in_place(path,ratios,seed,workers)
-            results.append({'source':str(path),'status':'ok','report':report})
+            results.append({'source':report['source'],'status':'ok','report':report})
             print(f'Updated in place: {path.parent}; {report["total_images"]} images; report: {path.parent / "SPLIT_REPORT.md"}',flush=True)
         except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
             results.append({'source':str(value),'status':'failed','error':str(exc)})
