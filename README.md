@@ -14,6 +14,7 @@ train_yolo/
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
+  split_yolo.py             # 批量打乱重分 YOLO train/val/test，默认 8:1:1、硬链接
   prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
   training_guard.py        # Linux 独立进程组守护与残留 DataLoader 回收
@@ -33,6 +34,7 @@ train_yolo/
   docs/lila_yolo.md         # LILA 类别转换及防泄漏划分
   docs/snake_data.md        # SnakeAid 下载与 Open Images 有框蛇筛选
   docs/model_search.md      # 四模型自动搜索、每轮测试及恢复说明
+  docs/split_yolo.md        # 平铺/缺少划分数据集的批量重新划分用法
   datasets/                # 本地原始和转换后数据，Git 忽略
   runs/                    # 本地训练结果，Git 忽略
 ```
