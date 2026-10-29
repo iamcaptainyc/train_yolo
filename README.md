@@ -14,7 +14,7 @@ train_yolo/
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
-  split_yolo.py             # 批量打乱重分 YOLO train/val/test，默认 8:1:1、硬链接
+  split_yolo.py             # 批量重分 YOLO，默认 8:1:1，--in-place 直接更新原目录
   prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
   training_guard.py        # Linux 独立进程组守护与残留 DataLoader 回收

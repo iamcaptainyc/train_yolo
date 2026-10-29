@@ -134,8 +134,8 @@ def assign_splits(records, ratios, seed):
     return targets, len(groups)
 
 
-def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False):
-    images, ignored = collect_images(source)
+def split_dataset(source, output, ratios=(8,1,1), seed=42, workers=16, copy_images=False, collected=None):
+    images, ignored = collected if collected is not None else collect_images(source)
 
     def inspect(image):
         stamp = image.stat()
@@ -277,20 +277,32 @@ def run_batch(datasets, output, ratios=(8,1,1), seed=42, workers=16, copy_images
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--datasets',type=Path,nargs='+',required=True,help='Dataset roots or YAML files')
-    parser.add_argument('--output',type=Path,required=True,help='New batch output directory')
+    destination = parser.add_mutually_exclusive_group(required=True)
+    destination.add_argument('--output',type=Path,help='New batch output directory')
+    destination.add_argument('--in-place',action='store_true',help='Resplit directly in each original directory with rollback')
     parser.add_argument('--ratios',type=float,nargs=3,default=[8,1,1],metavar=('TRAIN','VAL','TEST'))
     parser.add_argument('--seed',type=int,default=42)
     parser.add_argument('--workers',type=int,default=16)
     parser.add_argument('--copy-images',action='store_true',help='Copy instead of hardlinking across filesystems')
     args = parser.parse_args()
+    if args.in_place and args.copy_images:
+        parser.error('--in-place uses temporary hardlinks; do not combine with --copy-images')
     try:
-        results = run_batch(args.datasets,args.output,args.ratios,args.seed,args.workers,args.copy_images)
+        if args.in_place:
+            from split_yolo_inplace import run_in_place_batch
+            results = run_in_place_batch(args.datasets,args.ratios,args.seed,args.workers)
+        else:
+            results = run_batch(args.datasets,args.output,args.ratios,args.seed,args.workers,args.copy_images)
         failed = sum(r['status']!='ok' for r in results)
-        print(f'Finished: {len(results)-failed} OK, {failed} failed. Report: {args.output / "BATCH_REPORT.md"}')
+        report_note = 'SPLIT_REPORT.md in each original dataset' if args.in_place else str(args.output / 'BATCH_REPORT.md')
+        print(f'Finished: {len(results)-failed} OK, {failed} failed. Report: {report_note}')
         if failed:
             parser.exit(1)
     except KeyboardInterrupt:
-        parser.exit(130,'\nStopped. Source data unchanged; use a new output directory to rerun.\n')
+        message = 'Rerun the same command; interrupted in-place transactions recover first.' if args.in_place else 'Source data unchanged; use a new output directory to rerun.'
+        parser.exit(130,f'\nStopped. {message}\n')
+    except ImportError as exc:
+        parser.exit(1,f'Missing dependency: {exc}; install requirements.txt\n')
     except (ValueError,OSError,UnicodeError,yaml.YAMLError) as exc:
         parser.exit(1,f'Error: {exc}\n')
 
