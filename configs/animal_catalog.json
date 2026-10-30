@@ -1,0 +1,1761 @@
+{
+  "schema": 1,
+  "notes": [
+    "Reviewed source names and common-name hierarchy. Business groupings live in policies. Raw labels remain in SQLite; edits here do not rebuild the inventory.",
+    "Body-size/application tags are reviewed grouping aids, not inferred from box size. Descendants inherit membership through their tagged ancestor. Unknown mammal labels remain unresolved; individual policies can exclude any tagged member."
+  ],
+  "nodes": {
+    "aardvark": {
+      "parent": null,
+      "chinese": "土豚"
+    },
+    "antelope": {
+      "parent": null,
+      "chinese": "羚羊类",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "baboon": {
+      "parent": "monkey",
+      "chinese": "狒狒"
+    },
+    "badger": {
+      "parent": null,
+      "chinese": "獾类（含鼬獾、蜜獾）",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "bamboo_rat": {
+      "parent": "rodent",
+      "chinese": "竹鼠",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "bat": {
+      "parent": null,
+      "chinese": "蝙蝠"
+    },
+    "bear": {
+      "parent": null,
+      "chinese": "熊（不细分）",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "bird": {
+      "parent": null,
+      "chinese": "鸟类（不细分）"
+    },
+    "black_bear": {
+      "parent": "bear",
+      "chinese": "黑熊"
+    },
+    "buffalo": {
+      "parent": null,
+      "chinese": "非洲水牛",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "cat": {
+      "parent": null,
+      "chinese": "家猫"
+    },
+    "cattle": {
+      "parent": null,
+      "chinese": "家牛",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "chevrotain": {
+      "parent": null,
+      "chinese": "鼷鹿类"
+    },
+    "chicken": {
+      "parent": "bird",
+      "chinese": "家鸡"
+    },
+    "chipmunk": {
+      "parent": "rodent",
+      "chinese": "花鼠"
+    },
+    "civet": {
+      "parent": null,
+      "chinese": "灵猫类（通俗分组）",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "cougar": {
+      "parent": null,
+      "chinese": "美洲狮"
+    },
+    "coyote": {
+      "parent": null,
+      "chinese": "郊狼"
+    },
+    "crow": {
+      "parent": "bird",
+      "chinese": "乌鸦"
+    },
+    "deer": {
+      "parent": null,
+      "chinese": "鹿类",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "dog": {
+      "parent": null,
+      "chinese": "家犬"
+    },
+    "eagle": {
+      "parent": "bird",
+      "chinese": "鹰类"
+    },
+    "elephant": {
+      "parent": null,
+      "chinese": "象",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "elk": {
+      "parent": "deer",
+      "chinese": "北美马鹿"
+    },
+    "flying_squirrel": {
+      "parent": "rodent",
+      "chinese": "鼯鼠"
+    },
+    "fox": {
+      "parent": null,
+      "chinese": "狐（不细分）",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "galago": {
+      "parent": null,
+      "chinese": "婴猴类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "gibbon": {
+      "parent": null,
+      "chinese": "长臂猿"
+    },
+    "goat": {
+      "parent": null,
+      "chinese": "家山羊"
+    },
+    "horse": {
+      "parent": null,
+      "chinese": "马",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "hyena": {
+      "parent": null,
+      "chinese": "鬣狗"
+    },
+    "insect": {
+      "parent": null,
+      "chinese": "昆虫"
+    },
+    "jackal": {
+      "parent": null,
+      "chinese": "胡狼"
+    },
+    "leopard": {
+      "parent": null,
+      "chinese": "豹"
+    },
+    "leopard_cat": {
+      "parent": null,
+      "chinese": "豹猫"
+    },
+    "lizard": {
+      "parent": null,
+      "chinese": "蜥蜴"
+    },
+    "lynx": {
+      "parent": null,
+      "chinese": "猞猁类（含短尾猫）"
+    },
+    "magpie": {
+      "parent": "bird",
+      "chinese": "鹊类"
+    },
+    "marmot": {
+      "parent": "rodent",
+      "chinese": "旱獭",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "mink": {
+      "parent": "mustelid",
+      "chinese": "水貂",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "mongoose": {
+      "parent": null,
+      "chinese": "獴类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "monitor_lizard": {
+      "parent": "lizard",
+      "chinese": "巨蜥"
+    },
+    "monkey": {
+      "parent": null,
+      "chinese": "猴类"
+    },
+    "mouse": {
+      "parent": "rodent",
+      "chinese": "鼠类（含林鼠）",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "mustelid": {
+      "parent": null,
+      "chinese": "其他鼬科动物（含貂）"
+    },
+    "opossum": {
+      "parent": null,
+      "chinese": "负鼠",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "otter": {
+      "parent": "mustelid",
+      "chinese": "水獭",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "owl": {
+      "parent": "bird",
+      "chinese": "鸮类"
+    },
+    "pangolin": {
+      "parent": null,
+      "chinese": "穿山甲"
+    },
+    "person": {
+      "parent": null,
+      "chinese": "人"
+    },
+    "pheasant": {
+      "parent": "bird",
+      "chinese": "雉鸡类（通俗分组）"
+    },
+    "pig": {
+      "parent": null,
+      "chinese": "猪（未明确家野）"
+    },
+    "pigeon": {
+      "parent": "bird",
+      "chinese": "鸠鸽类"
+    },
+    "porcupine": {
+      "parent": "rodent",
+      "chinese": "豪猪",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "rabbit": {
+      "parent": null,
+      "chinese": "兔类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "raccoon": {
+      "parent": null,
+      "chinese": "浣熊",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "red_fox": {
+      "parent": "fox",
+      "chinese": "赤狐"
+    },
+    "rodent": {
+      "parent": null,
+      "chinese": "其他啮齿动物"
+    },
+    "serow": {
+      "parent": null,
+      "chinese": "鬣羚"
+    },
+    "skunk": {
+      "parent": null,
+      "chinese": "臭鼬",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "snake": {
+      "parent": null,
+      "chinese": "蛇"
+    },
+    "squirrel": {
+      "parent": "rodent",
+      "chinese": "松鼠类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "tree_shrew": {
+      "parent": null,
+      "chinese": "树鼩",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "turkey": {
+      "parent": "bird",
+      "chinese": "火鸡"
+    },
+    "turtle": {
+      "parent": null,
+      "chinese": "龟鳖类"
+    },
+    "vehicle": {
+      "parent": null,
+      "chinese": "车辆"
+    },
+    "warthog": {
+      "parent": "pig",
+      "chinese": "疣猪"
+    },
+    "weasel": {
+      "parent": "mustelid",
+      "chinese": "鼬类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "wild_boar": {
+      "parent": "pig",
+      "chinese": "野猪（含非洲丛林猪）"
+    },
+    "wild_cat": {
+      "parent": null,
+      "chinese": "其他野生小型猫科"
+    },
+    "woodpecker": {
+      "parent": "bird",
+      "chinese": "啄木鸟"
+    },
+    "zebra": {
+      "parent": null,
+      "chinese": "斑马",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "wolf": {
+      "parent": null,
+      "chinese": "狼类（含胡狼、郊狼）"
+    },
+    "brown_bear": {
+      "parent": "bear",
+      "chinese": "棕熊"
+    },
+    "butterfly": {
+      "parent": "insect",
+      "chinese": "蝴蝶"
+    },
+    "camel": {
+      "parent": null,
+      "chinese": "骆驼",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "canary": {
+      "parent": "bird",
+      "chinese": "金丝雀"
+    },
+    "caterpillar": {
+      "parent": "insect",
+      "chinese": "毛毛虫"
+    },
+    "centipede": {
+      "parent": null,
+      "chinese": "蜈蚣"
+    },
+    "cheetah": {
+      "parent": null,
+      "chinese": "猎豹"
+    },
+    "crab": {
+      "parent": null,
+      "chinese": "蟹"
+    },
+    "crocodile": {
+      "parent": null,
+      "chinese": "鳄鱼"
+    },
+    "duck": {
+      "parent": "bird",
+      "chinese": "鸭"
+    },
+    "fish": {
+      "parent": null,
+      "chinese": "鱼"
+    },
+    "frog": {
+      "parent": null,
+      "chinese": "蛙"
+    },
+    "giraffe": {
+      "parent": null,
+      "chinese": "长颈鹿",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "goldfish": {
+      "parent": "fish",
+      "chinese": "金鱼"
+    },
+    "goose": {
+      "parent": "bird",
+      "chinese": "鹅"
+    },
+    "hamster": {
+      "parent": "mouse",
+      "chinese": "仓鼠"
+    },
+    "harbor_seal": {
+      "parent": null,
+      "chinese": "港海豹"
+    },
+    "hedgehog": {
+      "parent": null,
+      "chinese": "刺猬",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "hippopotamus": {
+      "parent": null,
+      "chinese": "河马",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "jaguar": {
+      "parent": null,
+      "chinese": "美洲豹"
+    },
+    "jellyfish": {
+      "parent": null,
+      "chinese": "水母"
+    },
+    "kangaroo": {
+      "parent": null,
+      "chinese": "袋鼠"
+    },
+    "koala": {
+      "parent": null,
+      "chinese": "考拉"
+    },
+    "ladybug": {
+      "parent": "insect",
+      "chinese": "瓢虫"
+    },
+    "lion": {
+      "parent": null,
+      "chinese": "狮"
+    },
+    "mule": {
+      "parent": null,
+      "chinese": "骡"
+    },
+    "ostrich": {
+      "parent": "bird",
+      "chinese": "鸵鸟"
+    },
+    "panda": {
+      "parent": "bear",
+      "chinese": "大熊猫"
+    },
+    "parrot": {
+      "parent": "bird",
+      "chinese": "鹦鹉"
+    },
+    "penguin": {
+      "parent": "bird",
+      "chinese": "企鹅"
+    },
+    "polar_bear": {
+      "parent": "bear",
+      "chinese": "北极熊"
+    },
+    "raven": {
+      "parent": "bird",
+      "chinese": "渡鸦"
+    },
+    "red_panda": {
+      "parent": null,
+      "chinese": "小熊猫",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "rhinoceros": {
+      "parent": null,
+      "chinese": "犀牛",
+      "tags": [
+        "large_mammal"
+      ]
+    },
+    "scorpion": {
+      "parent": null,
+      "chinese": "蝎子"
+    },
+    "sea_lion": {
+      "parent": null,
+      "chinese": "海狮"
+    },
+    "sea_turtle": {
+      "parent": "turtle",
+      "chinese": "海龟"
+    },
+    "seahorse": {
+      "parent": "fish",
+      "chinese": "海马"
+    },
+    "shark": {
+      "parent": "fish",
+      "chinese": "鲨"
+    },
+    "sheep": {
+      "parent": null,
+      "chinese": "绵羊"
+    },
+    "shrimp": {
+      "parent": null,
+      "chinese": "虾"
+    },
+    "snail": {
+      "parent": null,
+      "chinese": "蜗牛"
+    },
+    "sparrow": {
+      "parent": "bird",
+      "chinese": "麻雀"
+    },
+    "spider": {
+      "parent": null,
+      "chinese": "蜘蛛"
+    },
+    "squid": {
+      "parent": null,
+      "chinese": "鱿鱼"
+    },
+    "starfish": {
+      "parent": null,
+      "chinese": "海星"
+    },
+    "swan": {
+      "parent": "bird",
+      "chinese": "天鹅"
+    },
+    "tick": {
+      "parent": null,
+      "chinese": "蜱"
+    },
+    "tiger": {
+      "parent": null,
+      "chinese": "虎"
+    },
+    "tortoise": {
+      "parent": "turtle",
+      "chinese": "陆龟"
+    },
+    "whale": {
+      "parent": null,
+      "chinese": "鲸"
+    },
+    "worm": {
+      "parent": null,
+      "chinese": "蠕虫"
+    },
+    "crab_eating_mongoose": {
+      "parent": "mongoose",
+      "chinese": "食蟹獴"
+    },
+    "ferret_badger": {
+      "parent": "badger",
+      "chinese": "鼬獾类"
+    },
+    "large_antlered_muntjac": {
+      "parent": "muntjac",
+      "chinese": "大角麂"
+    },
+    "stump_tailed_macaque": {
+      "parent": "macaque",
+      "chinese": "熊猴（短尾猴）"
+    },
+    "macaque": {
+      "parent": "monkey",
+      "chinese": "非熊猴的猕猴类"
+    },
+    "muntjac": {
+      "parent": "deer",
+      "chinese": "麂类"
+    },
+    "unidentified_squirrel": {
+      "parent": "squirrel",
+      "chinese": "未识别松鼠"
+    },
+    "eurasian_wild_pig": {
+      "parent": "wild_boar",
+      "chinese": "欧亚野猪"
+    },
+    "common_palm_civet": {
+      "parent": "palm_civet",
+      "chinese": "椰子狸"
+    },
+    "silver_pheasant": {
+      "parent": "pheasant",
+      "chinese": "白鹇"
+    },
+    "palm_civet": {
+      "parent": "civet",
+      "chinese": "棕榈狸类"
+    },
+    "masked_palm_civet": {
+      "parent": "palm_civet",
+      "chinese": "果子狸（花面狸）"
+    },
+    "pig_tailed_macaque": {
+      "parent": "macaque",
+      "chinese": "豚尾猴"
+    },
+    "red_cheeked_squirrel": {
+      "parent": "squirrel",
+      "chinese": "红颊长吻松鼠"
+    },
+    "roosevelt_muntjac": {
+      "parent": "muntjac",
+      "chinese": "罗斯福麂类群"
+    },
+    "sambar": {
+      "parent": "deer",
+      "chinese": "水鹿"
+    },
+    "spotted_linsang": {
+      "parent": "civet",
+      "chinese": "斑林狸"
+    },
+    "unidentified_bird": {
+      "parent": "bird",
+      "chinese": "未识别鸟类"
+    },
+    "partridge": {
+      "parent": "bird",
+      "chinese": "鹧鸪类"
+    },
+    "unidentified_murid": {
+      "parent": "mouse",
+      "chinese": "未识别鼠科动物"
+    },
+    "red_junglefowl": {
+      "parent": "bird",
+      "chinese": "红原鸡"
+    },
+    "blue_pitta": {
+      "parent": "pitta",
+      "chinese": "蓝八色鸫"
+    },
+    "pallass_squirrel": {
+      "parent": "squirrel",
+      "chinese": "赤腹松鼠"
+    },
+    "yellow_throated_marten": {
+      "parent": "marten",
+      "chinese": "黄喉貂"
+    },
+    "gray_peacock_pheasant": {
+      "parent": "pheasant",
+      "chinese": "灰孔雀雉"
+    },
+    "white_crowned_forktail": {
+      "parent": "forktail",
+      "chinese": "白冠燕尾"
+    },
+    "emerald_dove": {
+      "parent": "pigeon",
+      "chinese": "绿翅金鸠"
+    },
+    "human": {
+      "parent": "person",
+      "chinese": "人"
+    },
+    "pitta": {
+      "parent": "bird",
+      "chinese": "八色鸫"
+    },
+    "laughingthrush": {
+      "parent": "bird",
+      "chinese": "噪鹛类"
+    },
+    "asiatic_brush_tailed_porcupine": {
+      "parent": "porcupine",
+      "chinese": "亚洲帚尾豪猪"
+    },
+    "large_indian_civet": {
+      "parent": "civet",
+      "chinese": "大灵猫"
+    },
+    "unidentified_otter": {
+      "parent": "otter",
+      "chinese": "未识别水獭"
+    },
+    "unidentified_owl": {
+      "parent": "owl",
+      "chinese": "未识别鸮类（猫头鹰）"
+    },
+    "white_winged_magpie": {
+      "parent": "magpie",
+      "chinese": "白翅蓝鹊"
+    },
+    "japanese_thrush": {
+      "parent": "bird",
+      "chinese": "乌灰鸫"
+    },
+    "orange_headed_thrush": {
+      "parent": "bird",
+      "chinese": "橙头地鸫"
+    },
+    "scaly_thrush": {
+      "parent": "bird",
+      "chinese": "虎斑地鸫"
+    },
+    "gray_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "褐胸噪鹛"
+    },
+    "eurasian_woodcock": {
+      "parent": "bird",
+      "chinese": "丘鹬"
+    },
+    "red_collared_woodpecker": {
+      "parent": "woodpecker",
+      "chinese": "红领绿啄木鸟"
+    },
+    "blue_whistling_thrush": {
+      "parent": "bird",
+      "chinese": "紫啸鸫"
+    },
+    "large_scimitar_babbler": {
+      "parent": "bird",
+      "chinese": "长嘴钩嘴鹛"
+    },
+    "rufous_cheeked_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "栗颊噪鹛"
+    },
+    "chinese_serow": {
+      "parent": "serow",
+      "chinese": "中华鬣羚（按原英文名）"
+    },
+    "red_shanked_douc": {
+      "parent": "monkey",
+      "chinese": "白臀叶猴（红腿白臀叶猴）"
+    },
+    "annamite_striped_rabbit": {
+      "parent": "rabbit",
+      "chinese": "安南条纹兔"
+    },
+    "blue_fronted_robin": {
+      "parent": "bird",
+      "chinese": "蓝额长脚地鸲"
+    },
+    "orange_breasted_trogon": {
+      "parent": "bird",
+      "chinese": "橙胸咬鹃"
+    },
+    "unidentified_pheasant": {
+      "parent": "pheasant",
+      "chinese": "未识别雉类"
+    },
+    "bar_bellied_pitta": {
+      "parent": "pitta",
+      "chinese": "斑腹八色鸫"
+    },
+    "domestic_dog": {
+      "parent": "dog",
+      "chinese": "家犬"
+    },
+    "malayan_porcupine": {
+      "parent": "porcupine",
+      "chinese": "马来豪猪"
+    },
+    "unidentified_bat": {
+      "parent": "bat",
+      "chinese": "未识别蝙蝠"
+    },
+    "indochinese_green_magpie": {
+      "parent": "magpie",
+      "chinese": "印支绿鹊"
+    },
+    "common_green_magpie": {
+      "parent": "magpie",
+      "chinese": "蓝绿鹊"
+    },
+    "francois_langur": {
+      "parent": "monkey",
+      "chinese": "黑叶猴"
+    },
+    "binturong": {
+      "parent": "civet",
+      "chinese": "熊狸"
+    },
+    "hog_badger": {
+      "parent": "badger",
+      "chinese": "猪獾"
+    },
+    "crested_argus": {
+      "parent": "pheasant",
+      "chinese": "冠眼斑雉"
+    },
+    "asiatic_black_bear": {
+      "parent": "black_bear",
+      "chinese": "亚洲黑熊"
+    },
+    "mountain_hawk_eagle": {
+      "parent": "eagle",
+      "chinese": "鹰雕"
+    },
+    "unidentified_bear": {
+      "parent": "bear",
+      "chinese": "未识别熊类"
+    },
+    "unidentified_weasel": {
+      "parent": "weasel",
+      "chinese": "未识别鼬类"
+    },
+    "northern_treeshrew": {
+      "parent": "tree_shrew",
+      "chinese": "北树鼩"
+    },
+    "bengal_monitor": {
+      "parent": "monitor_lizard",
+      "chinese": "孟加拉巨蜥"
+    },
+    "black_giant_squirrel": {
+      "parent": "squirrel",
+      "chinese": "巨松鼠（黑巨松鼠）"
+    },
+    "sun_bear": {
+      "parent": "bear",
+      "chinese": "马来熊"
+    },
+    "marbled_cat": {
+      "parent": "wild_cat",
+      "chinese": "云猫"
+    },
+    "striped_squirrel": {
+      "parent": "squirrel",
+      "chinese": "条纹松鼠"
+    },
+    "hatinh_langur": {
+      "parent": "monkey",
+      "chinese": "河静叶猴"
+    },
+    "unidentified_turtles": {
+      "parent": "turtle",
+      "chinese": "未识别龟鳖类"
+    },
+    "red_muntjac": {
+      "parent": "muntjac",
+      "chinese": "赤麂（红麂）"
+    },
+    "phayres_langur": {
+      "parent": "monkey",
+      "chinese": "菲氏叶猴"
+    },
+    "giant_flying_squirrel": {
+      "parent": "flying_squirrel",
+      "chinese": "大鼯鼠类"
+    },
+    "rufous_necked_hornbill": {
+      "parent": "bird",
+      "chinese": "棕颈犀鸟"
+    },
+    "golden_cat": {
+      "parent": "wild_cat",
+      "chinese": "亚洲金猫"
+    },
+    "owstons_civet": {
+      "parent": "civet",
+      "chinese": "缟灵猫"
+    },
+    "unidentified_lizard": {
+      "parent": "lizard",
+      "chinese": "未识别蜥蜴"
+    },
+    "yellow_bellied_weasel": {
+      "parent": "weasel",
+      "chinese": "黄腹鼬"
+    },
+    "brown_wood_owl": {
+      "parent": "owl",
+      "chinese": "褐林鸮"
+    },
+    "necklaced_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "领纹噪鹛类"
+    },
+    "mountain_imperial_pigeon": {
+      "parent": "pigeon",
+      "chinese": "山皇鸠"
+    },
+    "rufous_eared_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "棕耳噪鹛（原英文暂译）"
+    },
+    "lesser_yellownape": {
+      "parent": "woodpecker",
+      "chinese": "黄冠啄木鸟"
+    },
+    "red_tailed_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "赤尾噪鹛"
+    },
+    "siberian_thrush": {
+      "parent": "bird",
+      "chinese": "白眉地鸫"
+    },
+    "asian_fairy_bluebird": {
+      "parent": "bird",
+      "chinese": "和平鸟"
+    },
+    "forktail": {
+      "parent": "bird",
+      "chinese": "燕尾类鸟"
+    },
+    "striated_heron": {
+      "parent": "bird",
+      "chinese": "绿鹭"
+    },
+    "crested_serpent_eagle": {
+      "parent": "eagle",
+      "chinese": "蛇雕"
+    },
+    "black_throated_laughingthrush": {
+      "parent": "laughingthrush",
+      "chinese": "黑喉噪鹛"
+    },
+    "golden_babbler": {
+      "parent": "bird",
+      "chinese": "金头穗鹛"
+    },
+    "back_striped_weasel": {
+      "parent": "weasel",
+      "chinese": "背纹鼬"
+    },
+    "barred_cuckoo_dove": {
+      "parent": "pigeon",
+      "chinese": "斑尾鹃鸠"
+    },
+    "unidentified_snake": {
+      "parent": "snake",
+      "chinese": "未识别蛇类"
+    },
+    "white_tailed_robin": {
+      "parent": "bird",
+      "chinese": "白尾蓝地鸲"
+    },
+    "eyebrowed_thrush": {
+      "parent": "bird",
+      "chinese": "白眉鸫"
+    },
+    "silver_eared_mesia": {
+      "parent": "bird",
+      "chinese": "银耳相思鸟"
+    },
+    "gray_headed_canary_flycatcher": {
+      "parent": "bird",
+      "chinese": "方尾鹟"
+    },
+    "bobcat": {
+      "parent": "lynx",
+      "chinese": "短尾猫（山猫）"
+    },
+    "cow": {
+      "parent": "cattle",
+      "chinese": "家牛"
+    },
+    "car": {
+      "parent": "vehicle",
+      "chinese": "汽车"
+    },
+    "mountain_lion": {
+      "parent": "cougar",
+      "chinese": "美洲狮"
+    },
+    "eastern_gray_squirrel": {
+      "parent": "squirrel",
+      "chinese": "东部灰松鼠"
+    },
+    "eastern_chipmunk": {
+      "parent": "chipmunk",
+      "chinese": "东部花栗鼠"
+    },
+    "woodchuck": {
+      "parent": "marmot",
+      "chinese": "美洲旱獭"
+    },
+    "wild_turkey": {
+      "parent": "turkey",
+      "chinese": "野火鸡"
+    },
+    "white_tailed_deer": {
+      "parent": "deer",
+      "chinese": "白尾鹿"
+    },
+    "virginia_opossum": {
+      "parent": "opossum",
+      "chinese": "弗吉尼亚负鼠"
+    },
+    "eastern_cottontail": {
+      "parent": "rabbit",
+      "chinese": "东部棉尾兔（佛罗里达棉尾兔）"
+    },
+    "striped_skunk": {
+      "parent": "skunk",
+      "chinese": "条纹臭鼬"
+    },
+    "eastern_fox_squirrel": {
+      "parent": "squirrel",
+      "chinese": "东部狐松鼠"
+    },
+    "northern_raccoon": {
+      "parent": "raccoon",
+      "chinese": "北美浣熊"
+    },
+    "gray_fox": {
+      "parent": "fox",
+      "chinese": "灰狐"
+    },
+    "american_crow": {
+      "parent": "crow",
+      "chinese": "短嘴鸦（美洲乌鸦）"
+    },
+    "domestic_cat": {
+      "parent": "cat",
+      "chinese": "家猫"
+    },
+    "american_black_bear": {
+      "parent": "black_bear",
+      "chinese": "美洲黑熊"
+    },
+    "bat_species": {
+      "parent": "bat",
+      "chinese": "蝙蝠类（未定种）"
+    },
+    "strigidae_family": {
+      "parent": "owl",
+      "chinese": "鸱鸮科鸟类"
+    },
+    "ruffed_grouse": {
+      "parent": "bird",
+      "chinese": "披肩榛鸡"
+    },
+    "canada_jay": {
+      "parent": "bird",
+      "chinese": "加拿大噪鸦"
+    },
+    "pileated_woodpecker": {
+      "parent": "woodpecker",
+      "chinese": "北美黑啄木鸟"
+    },
+    "marten": {
+      "parent": "mustelid",
+      "chinese": "貂类",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "california_ground_squirrel": {
+      "parent": "squirrel",
+      "chinese": "加利福尼亚地松鼠"
+    },
+    "western_spotted_skunk": {
+      "parent": "skunk",
+      "chinese": "西部斑臭鼬"
+    },
+    "mountain_beaver": {
+      "parent": "rodent",
+      "chinese": "山河狸",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "black_tailed_deer": {
+      "parent": "deer",
+      "chinese": "黑尾鹿"
+    },
+    "roosevelt_elk": {
+      "parent": "elk",
+      "chinese": "罗斯福马鹿"
+    },
+    "stellers_jay": {
+      "parent": "bird",
+      "chinese": "冠蓝鸦（斯特勒松鸦）"
+    },
+    "thrush": {
+      "parent": "bird",
+      "chinese": "鸫类（原夜鸫属标注）"
+    },
+    "varied_thrush": {
+      "parent": "bird",
+      "chinese": "杂色鸫"
+    },
+    "dark_eyed_junco": {
+      "parent": "bird",
+      "chinese": "暗眼灯草鹀"
+    },
+    "american_robin": {
+      "parent": "bird",
+      "chinese": "旅鸫（美洲知更鸟）"
+    },
+    "leporidae_family": {
+      "parent": "rabbit",
+      "chinese": "兔科动物"
+    },
+    "douglas_squirrel": {
+      "parent": "squirrel",
+      "chinese": "道格拉斯松鼠"
+    },
+    "humboldt_flying_squirrel": {
+      "parent": "flying_squirrel",
+      "chinese": "洪堡鼯鼠"
+    },
+    "townsend_chipmunk": {
+      "parent": "chipmunk",
+      "chinese": "汤氏花鼠"
+    },
+    "weasel_family": {
+      "parent": "mustelid",
+      "chinese": "鼬科动物",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "new_world_warbler": {
+      "parent": "bird",
+      "chinese": "森莺科鸟类"
+    },
+    "picidae_family": {
+      "parent": "woodpecker",
+      "chinese": "啄木鸟科鸟类"
+    },
+    "woodrat": {
+      "parent": "mouse",
+      "chinese": "林鼠属动物"
+    },
+    "chickadee": {
+      "parent": "bird",
+      "chinese": "山雀类（Poecile 属，未定种）"
+    },
+    "wren": {
+      "parent": "bird",
+      "chinese": "鹪鹩科鸟类"
+    },
+    "mountain_quail": {
+      "parent": "bird",
+      "chinese": "山鹑（北美山鹑）"
+    },
+    "western_gray_squirrel": {
+      "parent": "squirrel",
+      "chinese": "西部灰松鼠"
+    },
+    "northern_flicker": {
+      "parent": "woodpecker",
+      "chinese": "金翼啄木鸟"
+    },
+    "other_bird": {
+      "parent": "bird",
+      "chinese": "其他鸟类"
+    },
+    "african_savanna_elephant": {
+      "parent": "elephant",
+      "chinese": "非洲草原象"
+    },
+    "sable_antelope": {
+      "parent": "antelope",
+      "chinese": "黑马羚"
+    },
+    "yellow_baboon": {
+      "parent": "baboon",
+      "chinese": "黄狒狒"
+    },
+    "bushpig": {
+      "parent": "wild_boar",
+      "chinese": "非洲丛林猪"
+    },
+    "greater_kudu": {
+      "parent": "antelope",
+      "chinese": "大捻角羚"
+    },
+    "southern_reedbuck": {
+      "parent": "antelope",
+      "chinese": "南苇羚"
+    },
+    "small_antelope": {
+      "parent": "antelope",
+      "chinese": "小型羚羊（未定种）"
+    },
+    "cape_bushbuck": {
+      "parent": "antelope",
+      "chinese": "开普薮羚"
+    },
+    "cape_porcupine": {
+      "parent": "porcupine",
+      "chinese": "南非豪猪（开普豪猪）"
+    },
+    "common_duiker": {
+      "parent": "antelope",
+      "chinese": "灰小羚羊"
+    },
+    "common_warthog": {
+      "parent": "warthog",
+      "chinese": "普通疣猪"
+    },
+    "common_waterbuck": {
+      "parent": "antelope",
+      "chinese": "普通水羚"
+    },
+    "southern_ground_hornbill": {
+      "parent": "bird",
+      "chinese": "南方地犀鸟"
+    },
+    "cape_buffalo": {
+      "parent": "buffalo",
+      "chinese": "开普水牛"
+    },
+    "african_civet": {
+      "parent": "civet",
+      "chinese": "非洲灵猫"
+    },
+    "honey_badger": {
+      "parent": "badger",
+      "chinese": "蜜獾"
+    },
+    "genet": {
+      "parent": "civet",
+      "chinese": "獛类"
+    },
+    "red_duiker": {
+      "parent": "antelope",
+      "chinese": "红小羚羊"
+    },
+    "common_eland": {
+      "parent": "antelope",
+      "chinese": "大羚羊（伊兰羚羊）"
+    },
+    "plains_zebra": {
+      "parent": "zebra",
+      "chinese": "平原斑马"
+    },
+    "impala": {
+      "parent": "antelope",
+      "chinese": "黑斑羚"
+    },
+    "roan_antelope": {
+      "parent": "antelope",
+      "chinese": "马羚"
+    },
+    "klipspringer": {
+      "parent": "antelope",
+      "chinese": "岩羚"
+    },
+    "spotted_hyena": {
+      "parent": "hyena",
+      "chinese": "斑鬣狗"
+    },
+    "serval": {
+      "parent": "wild_cat",
+      "chinese": "薮猫"
+    },
+    "vervet_monkey": {
+      "parent": "monkey",
+      "chinese": "黑长尾猴（绿猴）"
+    },
+    "sharpes_grysbok": {
+      "parent": "antelope",
+      "chinese": "夏氏小羚羊"
+    },
+    "helmeted_guineafowl": {
+      "parent": "bird",
+      "chinese": "盔珠鸡"
+    },
+    "scrub_hare": {
+      "parent": "rabbit",
+      "chinese": "灌丛野兔"
+    },
+    "side_striped_jackal": {
+      "parent": "jackal",
+      "chinese": "侧纹胡狼"
+    },
+    "blue_monkey": {
+      "parent": "monkey",
+      "chinese": "青长尾猴"
+    },
+    "domestic_cattle": {
+      "parent": "cattle",
+      "chinese": "家牛"
+    },
+    "domestic_goat": {
+      "parent": "goat",
+      "chinese": "家山羊"
+    },
+    "argali_sheep": {
+      "parent": "sheep",
+      "chinese": ""
+    },
+    "bison": {
+      "parent": null,
+      "chinese": ""
+    },
+    "arctic_fox": {
+      "parent": "fox",
+      "chinese": ""
+    },
+    "beaver": {
+      "parent": null,
+      "chinese": "",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "alouatta": {
+      "parent": "monkey",
+      "chinese": ""
+    },
+    "noisy_night_monkey": {
+      "parent": "monkey",
+      "chinese": ""
+    },
+    "spider_monkey": {
+      "parent": "monkey",
+      "chinese": ""
+    },
+    "uakari": {
+      "parent": "monkey",
+      "chinese": ""
+    },
+    "moose": {
+      "parent": "deer",
+      "chinese": ""
+    },
+    "king_cheetah": {
+      "parent": "cheetah",
+      "chinese": ""
+    },
+    "panther": {
+      "parent": null,
+      "chinese": ""
+    },
+    "snow_leopard": {
+      "parent": "leopard",
+      "chinese": ""
+    },
+    "hippo": {
+      "parent": "hippopotamus",
+      "chinese": ""
+    },
+    "chimpanzee": {
+      "parent": null,
+      "chinese": ""
+    },
+    "gorilla": {
+      "parent": null,
+      "chinese": ""
+    },
+    "orangutan": {
+      "parent": null,
+      "chinese": ""
+    },
+    "rat": {
+      "parent": "mouse",
+      "chinese": ""
+    },
+    "rhino": {
+      "parent": "rhinoceros",
+      "chinese": ""
+    },
+    "mole": {
+      "parent": null,
+      "chinese": "",
+      "tags": [
+        "small_mammal"
+      ]
+    },
+    "bull": {
+      "parent": "cattle",
+      "chinese": ""
+    },
+    "moths_and_butterflies": {
+      "parent": null,
+      "chinese": ""
+    },
+    "wild_pig": {
+      "parent": null,
+      "chinese": ""
+    },
+    "puma": {
+      "parent": null,
+      "chinese": ""
+    }
+  },
+  "source_names": {
+    "swg-camera-traps": {
+      "empty": null,
+      "ignore": null,
+      "blurred": null,
+      "crab_eating_mongoose": "crab_eating_mongoose",
+      "ferret_badger": "ferret_badger",
+      "large_antlered_muntjac": "large_antlered_muntjac",
+      "stump_tailed_macaque": "stump_tailed_macaque",
+      "unidentified_macaque": "macaque",
+      "unidentified_muntjac": "muntjac",
+      "unidentified_small_mammal": null,
+      "unidentified_squirrel": "unidentified_squirrel",
+      "eurasian_wild_pig": "eurasian_wild_pig",
+      "problem": null,
+      "common_palm_civet": "common_palm_civet",
+      "silver_pheasant": "silver_pheasant",
+      "unidentified_palm_civet": "palm_civet",
+      "insect": "insect",
+      "masked_palm_civet": "masked_palm_civet",
+      "pig_tailed_macaque": "pig_tailed_macaque",
+      "red_cheeked_squirrel": "red_cheeked_squirrel",
+      "roosevelts_muntjac_group": "roosevelt_muntjac",
+      "sambar": "sambar",
+      "spotted_linsang": "spotted_linsang",
+      "unidentified_animal": null,
+      "unidentified_bird": "unidentified_bird",
+      "unidentified_partridge": "partridge",
+      "unidentified_ungulates": null,
+      "unidentified_murid": "unidentified_murid",
+      "red_junglefowl": "red_junglefowl",
+      "blue_pitta": "blue_pitta",
+      "pallass_squirrel": "pallass_squirrel",
+      "yellow_throated_marten": "yellow_throated_marten",
+      "grey_peacock_pheasant": "gray_peacock_pheasant",
+      "white_crowned_forktail": "white_crowned_forktail",
+      "emerald_dove": "emerald_dove",
+      "human": "human",
+      "unidentified_pitta": "pitta",
+      "laughingthrush": "laughingthrush",
+      "asiatic_brush_tailed_porcupine": "asiatic_brush_tailed_porcupine",
+      "large_indian_civet": "large_indian_civet",
+      "unidentified_otter": "unidentified_otter",
+      "unidentified_owl": "unidentified_owl",
+      "white_winged_magpie": "white_winged_magpie",
+      "japanese_thrush": "japanese_thrush",
+      "orange_headed_thrush": "orange_headed_thrush",
+      "scaly_thrush": "scaly_thrush",
+      "unidentified_mammal": null,
+      "gray_laughingthrush": "gray_laughingthrush",
+      "eurasian_woodcock": "eurasian_woodcock",
+      "red_collared_woodpecker": "red_collared_woodpecker",
+      "blue_whistling_thrush": "blue_whistling_thrush",
+      "large_scimitar_babbler": "large_scimitar_babbler",
+      "rufous_cheeked_laughingthrush": "rufous_cheeked_laughingthrush",
+      "chinese_serow": "chinese_serow",
+      "gibbon": "gibbon",
+      "red_shanked_douc": "red_shanked_douc",
+      "annamite_striped_rabbit": "annamite_striped_rabbit",
+      "blue_fronted_robin": "blue_fronted_robin",
+      "orange_breasted_trogon": "orange_breasted_trogon",
+      "chevrotain": "chevrotain",
+      "unidentified_pheasant": "unidentified_pheasant",
+      "bar_bellied_pitta": "bar_bellied_pitta",
+      "domestic_dog": "domestic_dog",
+      "malayan_porcupine": "malayan_porcupine",
+      "assam_or_rhesus_macaque": "macaque",
+      "unidentified_bat": "unidentified_bat",
+      "indochinese_green_magpie": "indochinese_green_magpie",
+      "common_green_magpie": "common_green_magpie",
+      "francois_langur": "francois_langur",
+      "leopard_cat": "leopard_cat",
+      "binturong": "binturong",
+      "hog_badger": "hog_badger",
+      "crested_argus": "crested_argus",
+      "pangolin": "pangolin",
+      "bamboo_rat": "bamboo_rat",
+      "asiatic_black_bear": "asiatic_black_bear",
+      "mountain_hawk_eagle": "mountain_hawk_eagle",
+      "unidentified_bear": "unidentified_bear",
+      "unidentified_weasel": "unidentified_weasel",
+      "northern_treeshrew": "northern_treeshrew",
+      "bengal_monitor": "bengal_monitor",
+      "black_giant_squirrel": "black_giant_squirrel",
+      "sun_bear": "sun_bear",
+      "marbled_cat": "marbled_cat",
+      "unidentified_striped_squirrel": "striped_squirrel",
+      "hatinh_langur": "hatinh_langur",
+      "unidentified_turtles": "unidentified_turtles",
+      "red_muntjac": "red_muntjac",
+      "phayres_langur": "phayres_langur",
+      "giant_flying_squirrel": "giant_flying_squirrel",
+      "rufous_necked_hornbill": "rufous_necked_hornbill",
+      "golden_cat": "golden_cat",
+      "owstons_civet": "owstons_civet",
+      "invertebrate": null,
+      "unidentified_lizard": "unidentified_lizard",
+      "macaque_not_stump_tailed": "macaque",
+      "unidentified_small_animal": null,
+      "yellow_bellied_weasel": "yellow_bellied_weasel",
+      "brown_wood_owl": "brown_wood_owl",
+      "necklaced_laughingthrush_sp": "necklaced_laughingthrush",
+      "mountain_imperial_pigeon": "mountain_imperial_pigeon",
+      "rufous_eared_laughingthrush": "rufous_eared_laughingthrush",
+      "lesser_yellownape": "lesser_yellownape",
+      "red_tailed_laughingthrush": "red_tailed_laughingthrush",
+      "flying_squirrel": "flying_squirrel",
+      "siberian_thrush": "siberian_thrush",
+      "asian_fairy_bluebird": "asian_fairy_bluebird",
+      "forktail_sp": "forktail",
+      "striated_heron": "striated_heron",
+      "crested_serpent_eagle": "crested_serpent_eagle",
+      "black_throated_laughingthrush": "black_throated_laughingthrush",
+      "golden_babbler": "golden_babbler",
+      "back_striped_weasel": "back_striped_weasel",
+      "barred_cuckoo_dove": "barred_cuckoo_dove",
+      "unidentified_snake": "unidentified_snake",
+      "white_tailed_robin": "white_tailed_robin",
+      "eyebrowed_thrush": "eyebrowed_thrush",
+      "silver_eared_mesia": "silver_eared_mesia",
+      "grey_headed_canary_flycatcher": "gray_headed_canary_flycatcher",
+      "vehicle": "vehicle"
+    },
+    "caltech-camera-traps": {
+      "bobcat": "bobcat",
+      "opossum": "opossum",
+      "empty": null,
+      "coyote": "coyote",
+      "raccoon": "raccoon",
+      "bird": "bird",
+      "dog": "dog",
+      "cat": "cat",
+      "squirrel": "squirrel",
+      "rabbit": "rabbit",
+      "skunk": "skunk",
+      "lizard": "lizard",
+      "rodent": "rodent",
+      "badger": "badger",
+      "deer": "deer",
+      "cow": "cattle",
+      "car": "car",
+      "fox": "fox",
+      "pig": "pig",
+      "mountain_lion": "mountain_lion",
+      "bat": "bat",
+      "insect": "insect"
+    },
+    "ena24": {
+      "bird": "bird",
+      "eastern_gray_squirrel": "eastern_gray_squirrel",
+      "eastern_chipmunk": "eastern_chipmunk",
+      "woodchuck": "woodchuck",
+      "wild_turkey": "wild_turkey",
+      "white_tailed_deer": "white_tailed_deer",
+      "virginia_opossum": "virginia_opossum",
+      "eastern_cottontail": "eastern_cottontail",
+      "human": "human",
+      "vehicle": "vehicle",
+      "striped_skunk": "striped_skunk",
+      "red_fox": "red_fox",
+      "eastern_fox_squirrel": "eastern_fox_squirrel",
+      "northern_raccoon": "northern_raccoon",
+      "grey_fox": "gray_fox",
+      "horse": "horse",
+      "dog": "dog",
+      "american_crow": "american_crow",
+      "chicken": "chicken",
+      "domestic_cat": "domestic_cat",
+      "coyote": "coyote",
+      "bobcat": "bobcat",
+      "american_black_bear": "american_black_bear"
+    },
+    "oregon-critters": {
+      "empty": null,
+      "coyote": "coyote",
+      "bat_species": "bat_species",
+      "strigidae_family": "strigidae_family",
+      "ruffed_grouse": "ruffed_grouse",
+      "red_fox": "red_fox",
+      "canada_jay": "canada_jay",
+      "pileated_woodpecker": "pileated_woodpecker",
+      "reptile_or_amphibian": null,
+      "bobcat": "bobcat",
+      "marten": "marten",
+      "california_ground_squirrel": "california_ground_squirrel",
+      "mink": "mink",
+      "western_spotted_skunk": "western_spotted_skunk",
+      "mountain_beaver": "mountain_beaver",
+      "black_bear": "black_bear",
+      "black_tailed_deer": "black_tailed_deer",
+      "cougar": "cougar",
+      "roosevelt_elk": "roosevelt_elk",
+      "stellers_jay": "stellers_jay",
+      "catharus_species": "thrush",
+      "varied_thrush": "varied_thrush",
+      "dark_eyed_junco": "dark_eyed_junco",
+      "american_robin": "american_robin",
+      "leporidae_family": "leporidae_family",
+      "douglas_squirrel": "douglas_squirrel",
+      "humboldt's_flying_squirrel": "humboldt_flying_squirrel",
+      "townsend's_chipmunk": "townsend_chipmunk",
+      "weasel_family": "weasel_family",
+      "parulidae_family": "new_world_warbler",
+      "invertebrate": null,
+      "picidae_family": "picidae_family",
+      "neotoma_species": "woodrat",
+      "poecile_species": "chickadee",
+      "virginia_opossum": "virginia_opossum",
+      "troglodytidae_family": "wren",
+      "mountain_quail": "mountain_quail",
+      "northern_raccoon": "northern_raccoon",
+      "striped_skunk": "striped_skunk",
+      "western_gray_squirrel": "western_gray_squirrel",
+      "northern_flicker": "northern_flicker",
+      "domestic_dog": "domestic_dog",
+      "human": "human",
+      "small_mammal": null,
+      "gray_fox": "gray_fox",
+      "other_bird": "other_bird"
+    },
+    "nkhotakota-camera-traps": {
+      "empty": null,
+      "human": "human",
+      "other_animal": null,
+      "african_savanna_elephant": "african_savanna_elephant",
+      "sable": "sable_antelope",
+      "yellow_baboon": "yellow_baboon",
+      "bushpig": "bushpig",
+      "greater_kudu": "greater_kudu",
+      "southern_reedbuck": "southern_reedbuck",
+      "bird": "bird",
+      "small_antelope": "small_antelope",
+      "cape_bushbuck": "cape_bushbuck",
+      "cape_porcupine": "cape_porcupine",
+      "common_duiker": "common_duiker",
+      "common_warthog": "common_warthog",
+      "aardvark": "aardvark",
+      "common_waterbuck": "common_waterbuck",
+      "southern_ground_hornbill": "southern_ground_hornbill",
+      "cape_buffalo": "cape_buffalo",
+      "african_civet": "african_civet",
+      "leopard": "leopard",
+      "galago": "galago",
+      "honey_badger": "honey_badger",
+      "mongoose": "mongoose",
+      "genet": "genet",
+      "red_duiker": "red_duiker",
+      "common_eland": "common_eland",
+      "plains_zebra": "plains_zebra",
+      "impala": "impala",
+      "roan": "roan_antelope",
+      "klipspringer": "klipspringer",
+      "spotted_hyena": "spotted_hyena",
+      "serval": "serval",
+      "vervet_monkey": "vervet_monkey",
+      "domestic_dog": "domestic_dog",
+      "sharpes_grysbok": "sharpes_grysbok",
+      "helmeted_guineafowl": "helmeted_guineafowl",
+      "scrub_hare": "scrub_hare",
+      "small_mammal": null,
+      "side_striped_jackal": "side_striped_jackal",
+      "palm_civet": "palm_civet",
+      "squirrel": "squirrel",
+      "bat": "bat",
+      "blue_monkey": "blue_monkey",
+      "domestic_cattle": "domestic_cattle",
+      "domestic_goat": "domestic_goat"
+    },
+    "ap10k": {
+      "antelope": "antelope",
+      "argali_sheep": "argali_sheep",
+      "bison": "bison",
+      "buffalo": "buffalo",
+      "cow": "cattle",
+      "sheep": "sheep",
+      "arctic_fox": "arctic_fox",
+      "dog": "dog",
+      "fox": "fox",
+      "wolf": "wolf",
+      "beaver": "beaver",
+      "alouatta": "alouatta",
+      "monkey": "monkey",
+      "noisy_night_monkey": "noisy_night_monkey",
+      "spider_monkey": "spider_monkey",
+      "uakari": "uakari",
+      "deer": "deer",
+      "moose": "moose",
+      "hamster": "hamster",
+      "elephant": "elephant",
+      "horse": "horse",
+      "zebra": "zebra",
+      "bobcat": "bobcat",
+      "cat": "cat",
+      "cheetah": "cheetah",
+      "jaguar": "jaguar",
+      "king_cheetah": "king_cheetah",
+      "leopard": "leopard",
+      "lion": "lion",
+      "panther": "panther",
+      "snow_leopard": "snow_leopard",
+      "tiger": "tiger",
+      "giraffe": "giraffe",
+      "hippo": "hippo",
+      "chimpanzee": "chimpanzee",
+      "gorilla": "gorilla",
+      "orangutan": "orangutan",
+      "rabbit": "rabbit",
+      "skunk": "skunk",
+      "mouse": "mouse",
+      "rat": "rat",
+      "otter": "otter",
+      "weasel": "weasel",
+      "raccoon": "raccoon",
+      "rhino": "rhino",
+      "marmot": "marmot",
+      "squirrel": "squirrel",
+      "pig": "pig",
+      "mole": "mole",
+      "black_bear": "black_bear",
+      "brown_bear": "brown_bear",
+      "panda": "panda",
+      "polar_bear": "polar_bear",
+      "bat": "bat"
+    }
+  }
+}

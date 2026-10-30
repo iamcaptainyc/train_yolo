@@ -1,0 +1,86 @@
+schema: 1
+name: camping19
+groups:
+  bear:
+    members:
+    - bear
+    exclude:
+    - panda
+  wild_boar:
+    members:
+    - wild_boar
+    - wild_pig
+  snake:
+    members:
+    - snake
+  wolf:
+    members:
+    - wolf
+    - jackal
+    - coyote
+  tiger:
+    members:
+    - tiger
+  leopard:
+    members:
+    - leopard
+    - cheetah
+    - jaguar
+  lion:
+    members:
+    - lion
+    - cougar
+    - puma
+  elephant:
+    members:
+    - elephant
+  eagle:
+    members:
+    - eagle
+  crocodile:
+    members:
+    - crocodile
+  dog:
+    members:
+    - dog
+  cat:
+    members:
+    - cat
+  cattle:
+    members:
+    - cattle
+    - buffalo
+  sheep:
+    members:
+    - sheep
+    - goat
+    - antelope
+  horse:
+    members:
+    - horse
+  monkey:
+    members:
+    - monkey
+  deer:
+    members:
+    - deer
+  bird:
+    members:
+    - bird
+    exclude:
+    - eagle
+  small_mammal:
+    member_tag: small_mammal
+    exclude:
+    - squirrel
+    - bat
+    - pangolin
+source_priority:
+- ap10k
+- animals
+- lila
+negative_fraction: 0.05
+lila_min_area: 0.0625
+seed: 42
+val_fraction: 0.1
+test_fraction: 0.1
