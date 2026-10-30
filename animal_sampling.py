@@ -286,6 +286,8 @@ def export(index,catalog,policy,maximum,output,start_id=0):
                 'index_image_id':r['index_id'],'component':r['component'],
                 'original_classes':sorted(r['origins']),'output_boxes':[(ids[n],b) for n,b in r['rows']]},ensure_ascii=False)+'\n')
     report.update(names=ids,split=splitting,audited_boxes=audit_rows,
+        split_image_counts=dict(Counter(r['split'] for r in chosen)),
+        negative_images=sum(not r['rows'] for r in chosen),
         original_box_evidence_audited=True,
         index=str(Path(index).resolve()),source_snapshots=[json.loads(s['spec'])|{'fingerprint':s['fingerprint']} for s in sources.values()],
         catalog=catalog,policy=policy)
@@ -300,6 +302,63 @@ def export(index,catalog,policy,maximum,output,start_id=0):
 
 
 def write_preview(report,path):
+    path = Path(path)
+    final = 'names' in report
+    names = report.get('names',{})
+    selected = {r['path'][0]:r['selected_images'] for r in report['hierarchy_sampling']
+                if len(r['path'])==1 and not r['source_bucket'] and r['selected_images']}
+    lines = ['# 动物数据集统计' if final else '# 动物数据集抽样预览', '',
+             f'类别数：**{len(names) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
+    if final:
+        totals = report.get('split_image_counts',{})
+        lines += ['| 集合 | 图片数 |', '| --- | ---: |']
+        for split in ('train','val','test'):
+            value = totals.get(split,0) if totals else '未记录，请刷新报告'
+            lines.append(f'| {split} | {value} |')
+        lines += [f'| **总计** | **{report["selected_images"]}** |', '',
+                  f'负样本：{report.get("negative_images", "未记录")} 张（已计入总数）。', '',
+                  '## 类别统计', '',
+                  '| ID | 类别 | train | val | test | 合计 |',
+                  '| ---: | --- | ---: | ---: | ---: | ---: |']
+        for name,cid in sorted(names.items(),key=lambda item:item[1]):
+            counts = report['split']['class_image_counts'].get(name,{})
+            values = [counts.get(s,0) for s in ('train','val','test')]
+            chinese = report.get('catalog',{}).get('nodes',{}).get(name,{}).get('chinese','')
+            if name=='small_mammal': chinese='小型兽类'
+            label = f'{chinese}（{name}）' if chinese else name
+            lines.append(f'| {cid} | {label} | '+ ' | '.join(map(str,values+[sum(values)]))+' |')
+    else:
+        lines += ['尚未划分 train/val/test；实际分集数量在生成数据集后统计。','',
+                  '| 类别 | 图片数 |','| --- | ---: |']
+        lines += [f'| {name} | {count} |' for name,count in sorted(selected.items())]
+    lines += ['', '按图片数统计，同一图片包含多个类别时分别计入各类，因此各类别合计可能超过图片总数。', '',
+              '[附录：原始类别、采样与校验明细](REPORT_APPENDIX.md)']
+    path.write_text('\n'.join(lines)+'\n',encoding='utf-8')
+    write_appendix(report,path.with_name('REPORT_APPENDIX.md'))
+
+
+def refresh_report(directory):
+    """Regenerate presentation from saved metadata, without touching images."""
+    directory = Path(directory)
+    report = json.loads((directory/'report.json').read_text(encoding='utf-8'))
+    if 'names' in report and 'split_image_counts' not in report:
+        counts,negatives = Counter(),0
+        with (directory/'selection.jsonl').open(encoding='utf-8') as stream:
+            for line in stream:
+                row = json.loads(line)
+                split = Path(row['image']).parts[1]
+                if split not in ('train','val','test'):
+                    raise ValueError(f'Unknown split in selection.jsonl: {split}')
+                counts[split] += 1
+                negatives += not row['output_boxes']
+        if sum(counts.values())!=report['selected_images']:
+            raise ValueError('selection.jsonl count does not match report.json')
+        report.update(split_image_counts=dict(counts),negative_images=negatives)
+        (directory/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    write_preview(report,directory/'REPORT.md')
+
+
+def write_appendix(report,path):
     lines = ['# 通用动物数据集采样报告','',f'实际选择 {report["selected_images"]} 张，上限 {report["maximum_images"]} 张。','',
         f'请求类别数：{len(report["requested_groups"])}；没有抽到样本的类别：{report["unselected_groups"]}。','',
         f'LILA 框面积占比必须严格大于 {report["lila_min_area"]:.6f}；任意一个框达标就保留整图及全部框，负样本不受此门槛限制。这不是 LILA 来源占比。','',

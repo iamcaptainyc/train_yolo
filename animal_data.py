@@ -8,7 +8,7 @@ from filelock import FileLock
 import yaml
 
 from animal_index import build
-from animal_sampling import export, plan, write_preview
+from animal_sampling import export, plan, write_preview, refresh_report
 
 ROOT = Path(__file__).parent
 
@@ -67,6 +67,8 @@ def specs_from_args(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command',required=True)
+    report = sub.add_parser('report',help='Refresh reports only; no image scan or sampling')
+    report.add_argument('--dataset',type=Path,required=True)
     index = sub.add_parser('index',help='Build/update raw-source SQLite inventory')
     index.add_argument('--index',type=Path,required=True)
     index.add_argument('--sources',type=Path,help='Generic source manifest YAML')
@@ -89,6 +91,10 @@ def main():
             parser.add_argument('--class-id-start',type=int,default=0)
     args = p.parse_args()
     try:
+        if args.command=='report':
+            refresh_report(args.dataset)
+            print(args.dataset/'REPORT.md')
+            return
         if args.command=='index':
             args.index.parent.mkdir(parents=True,exist_ok=True)
             with FileLock(str(args.index)+'.lock',timeout=0):

@@ -134,6 +134,19 @@ class AnimalDataTests(unittest.TestCase):
             for label in (root/'out/labels').rglob('*.txt'):
                 self.assertEqual(label.read_text(),'27 0.300000000000 0.450000000000 0.400000000000 0.500000000000\n')
             self.assertTrue(report['provenance'])
+            self.assertEqual(sum(report['split_image_counts'].values()),20)
+            markdown=(root/'out/REPORT.md').read_text(encoding='utf-8')
+            self.assertIn('类别数：**1**',markdown)
+            self.assertIn('| **总计** | **20** |',markdown)
+            self.assertNotIn('原始细类与来源',markdown)
+            self.assertIn('原始细类与来源',(root/'out/REPORT_APPENDIX.md').read_text(encoding='utf-8'))
+            # Refresh old exports using selection metadata, without reading image bytes.
+            del report['split_image_counts'];del report['negative_images']
+            (root/'out/report.json').write_text(json.dumps(report),encoding='utf-8')
+            result=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'animal_data.py'),
+                'report','--dataset',str(root/'out')],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(markdown,(root/'out/REPORT.md').read_text(encoding='utf-8'))
 
     def test_catalog_cycles_overlaps_and_unknown_members_rejected(self):
         for cat,policy in [({'nodes':{'a':{'parent':'a'}}},{'groups':{'x':{'members':['a']}}}),

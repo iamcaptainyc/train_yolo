@@ -4,6 +4,16 @@
 
 ## 1. 建立索引
 
+报告正文 `REPORT.md` 仅展示实际类别数、图片总数、train/val/test 图片数和逐类分集/合计统计（按图片计数，多类别同图可重复计入各类）。原始类别、层级采样、来源及校验细节单独保存为 `REPORT_APPENDIX.md`，机器明细保留在 `report.json`。预览尚未划分集合，只显示抽样类别和数量。
+
+已经生成的数据集可直接刷新报告，无需重建索引、重新抽样或扫描图片：
+
+```bash
+python animal_data.py report --dataset yolo_datasets/animals_30k_19
+```
+
+旧报告缺少全局分集计数时，从同目录 `selection.jsonl` 汇总；此命令仅更新报告文件，不改变图片、标签或划分。
+
 在服务器仓库目录运行，AP-10K 路径按实际下载位置替换：
 
 ```bash
