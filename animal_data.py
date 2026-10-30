@@ -1,6 +1,7 @@
 """Generic animal inventory, configurable preview and hierarchical YOLO sampling."""
 import argparse
 import json
+from fractions import Fraction
 from pathlib import Path
 
 from filelock import FileLock
@@ -10,6 +11,16 @@ from animal_index import build
 from animal_sampling import export, plan, write_preview
 
 ROOT = Path(__file__).parent
+
+
+def area_ratio(value):
+    try:
+        ratio = float(Fraction(value))
+    except (ValueError, ZeroDivisionError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError('Use a decimal or fraction, e.g. 0.0625 or 1/16') from exc
+    if not 0 <= ratio < 1:
+        raise argparse.ArgumentTypeError('LILA bbox area ratio must be >= 0 and < 1')
+    return ratio
 
 
 def read(path):
@@ -70,6 +81,9 @@ def main():
         parser.add_argument('--catalog',type=Path,default=ROOT/'configs/animal_catalog.json')
         parser.add_argument('--policy',type=Path,default=ROOT/'configs/camping19.yaml')
         parser.add_argument('--max-images',type=int,default=30000)
+        parser.add_argument('--lila-min-area', '--lila-ratio', '--lila_ratio',
+                            dest='lila_min_area', type=area_ratio, default=None,
+                            help='LILA bbox/image area threshold, e.g. 1/16; overrides policy, not a source quota')
         parser.add_argument('--output',type=Path,required=True,help='New output directory (preview: reports only)')
         if command=='sample':
             parser.add_argument('--class-id-start',type=int,default=0)
@@ -85,6 +99,8 @@ def main():
         if args.output.exists() or args.max_images<1:
             raise ValueError('Use a new output directory and positive max-images')
         catalog,policy = read(args.catalog),read(args.policy)
+        if args.lila_min_area is not None:
+            policy['lila_min_area'] = args.lila_min_area
         v,t = policy.get('val_fraction',.1),policy.get('test_fraction',.1)
         if not (0<=v<1 and 0<=t<1 and v+t<1):
             raise ValueError('Invalid val/test fractions')

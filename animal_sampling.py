@@ -64,6 +64,8 @@ def compile_policy(catalog, policy):
 
 
 def pool(index, catalog, policy):
+    if not 0 <= policy.get('lila_min_area', 1/16) < 1:
+        raise ValueError('LILA bbox area ratio must be >= 0 and < 1')
     mapping = compile_policy(catalog,policy)
     db = connect(index)
     try:
@@ -223,6 +225,7 @@ def plan(index,catalog,policy,maximum):
         'raw_category_inventory':inventory,
         'provenance':[dict(group=k[0],concept=k[1],source=k[2],original_name=k[3],**v) for k,v in sorted(provenance.items())],
         'excluded':excluded,'index_errors':errors,'source_priority':policy.get('source_priority',[]),
+        'lila_min_area':policy.get('lila_min_area',1/16),
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
 
@@ -299,6 +302,7 @@ def export(index,catalog,policy,maximum,output,start_id=0):
 def write_preview(report,path):
     lines = ['# 通用动物数据集采样报告','',f'实际选择 {report["selected_images"]} 张，上限 {report["maximum_images"]} 张。','',
         f'请求类别数：{len(report["requested_groups"])}；没有抽到样本的类别：{report["unselected_groups"]}。','',
+        f'LILA 框面积占比必须严格大于 {report["lila_min_area"]:.6f}；任意一个框达标就保留整图及全部框，负样本不受此门槛限制。这不是 LILA 来源占比。','',
         '按最终类别→成员→更细类别递归均衡；多类别同图只保存一次，图片计数可重叠。','',
         '| 层级路径 | 原始标签采样桶 | 可用图片 | 选择图片 |','| --- | --- | ---: | ---: |']
     for r in report['hierarchy_sampling']:

@@ -46,6 +46,16 @@ python animal_data.py sample \
 
 同一细类中再按 AP-10K→Animals→LILA 的来源优先级抽取，并轮转已知相机/序列组。来源优先不是清晰度评分。LILA 任一框面积比例严格大于1/16即可，全部框保留；负样本不受此限制。
 
+`preview` 和 `sample` 都支持 `--lila-min-area 1/16`，兼容别名 `--lila-ratio`、`--lila_ratio`。参数覆盖 policy 中的 `lila_min_area`；不传则使用 policy 值（缺省1/16）。支持小数或分数，范围为 `[0,1)`。这是**动物框面积/整图面积门槛，不是 LILA 来源图片的占比上限**；设为0即不排除任何合法正面积框。预览和正式抽样应使用相同参数，两份报告都会列出实际阈值。调整该门槛不需要重建索引。
+
+```bash
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite \
+  --policy configs/camping19.yaml \
+  --lila-ratio 1/16 \
+  --max-images 30000 --output yolo_datasets/animals_30k_19
+```
+
 沿用含不支持类别则整图排除的策略，不偷偷删除正框。已知同文件/硬链接重复只占一个采样槽；同文件标签冲突则全部排除并报告。先冻结全池相机/序列/文件连通组，再采样，最后按80%/10%/10%启发式分组划分。缺少LILA分组的记录保守留在训练集；比例和每类覆盖可能无法精确满足。独立复制的图片、未知相邻帧未做内容去重。
 
 写出前验证源标注指纹和选中图片文件元数据，从保存的原像素框或原YOLO行重新计算核对索引坐标；写出后逐项核对标签ID/坐标原文和硬链接身份。证明的是转换与路径对应，不证明源标注语义或视觉质量绝对正确。未完成输出带 INCOMPLETE.txt，不用于训练。最终 REPORT.md 列出ID、各集合图片数、原类别/来源采样情况和审计数量，report.json 保存配置快照与机器明细。

@@ -34,6 +34,47 @@ def catalog():
 
 
 class AnimalDataTests(unittest.TestCase):
+    def test_lila_area_override_any_box_strict_boundary_and_negatives(self):
+        from animal_data import area_ratio
+        import argparse
+        self.assertEqual(area_ratio('1/16'), .0625)
+        for value in ('nan', '1/0', '-0.1', '1', '2'):
+            with self.assertRaises(argparse.ArgumentTypeError): area_ratio(value)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            spec=fixture(root/'source',['rabbit'],[4],name='lila')
+            spec['empty_images_are_negative']=True
+            annotation=Path(spec['annotations'][0])
+            data=json.loads(annotation.read_text())
+            data['annotations'][0]['bbox']=[0,0,25,25]  # exactly 1/16: exclude
+            data['annotations'][1]['bbox']=[0,0,10,10]  # small box retained with large one
+            data['annotations'].append({'id':10,'image_id':1,'category_id':0,'bbox':[0,0,50,50]})
+            data['annotations']=[a for a in data['annotations'] if a['image_id']!=3]
+            annotation.write_text(json.dumps(data))
+            index=root/'index.sqlite';build(index,[spec])
+            policy={'groups':{'rabbit':{'members':['rabbit']}},'negative_fraction':.2,'lila_min_area':.0625}
+            chosen,report,_=plan(index,catalog(),policy,10)
+            self.assertEqual({r['relative'] for r in chosen},{'1','2','3'})
+            self.assertEqual(len(next(r for r in chosen if r['relative']=='1')['rows']),2)
+            self.assertEqual(report['lila_min_area'],.0625)
+            (root/'catalog.yaml').write_text(yaml.safe_dump(catalog()))
+            (root/'policy.yaml').write_text(yaml.safe_dump(policy))
+            for n,flag in enumerate(('--lila-min-area','--lila-ratio','--lila_ratio')):
+                output=root/f'preview{n}'
+                result=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'animal_data.py'),
+                    'preview','--index',str(index),'--catalog',str(root/'catalog.yaml'),
+                    '--policy',str(root/'policy.yaml'),'--output',str(output),flag,'0'],
+                    capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                cli_report=json.loads((output/'report.json').read_text(encoding='utf-8'))
+                self.assertEqual(cli_report['lila_min_area'],0)
+                self.assertEqual(cli_report['selected_images'],4)
+            policy['lila_min_area']=0
+            chosen,_,_=plan(index,catalog(),policy,10)
+            self.assertEqual(len(chosen),4)
+            policy['lila_min_area']=1
+            with self.assertRaises(ValueError): plan(index,catalog(),policy,10)
+
     def test_raw_index_keeps_unmapped_classes_update_and_atomic_rollback(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); spec=fixture(root/'source',['red fox','rabbit','unknown'],[8,8,3])
