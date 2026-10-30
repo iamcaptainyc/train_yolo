@@ -71,6 +71,46 @@ class EpochGPU:
 
 
 class ModeTests(unittest.TestCase):
+    def test_every_complete_trial_tests_before_next_training_in_both_stages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args,gpu=self.args(Path(tmp),'progressive'),EpochGPU()
+            args.test_policy='every-trial'
+            self.run_fake(args,gpu)
+            jobs=[j for j in gpu.calls if j['phase']!='prepare']
+            for i,job in enumerate(jobs):
+                if job['phase']=='val':
+                    self.assertEqual(jobs[i+1]['phase'],'test')
+                    self.assertEqual(jobs[i+1]['trial_dir'],job['trial_dir'])
+            for directory in (args.output,args.output/'screen'):
+                records=json.loads((directory/'summary.json').read_text())['iterations']
+                for record in records:
+                    if record['state']=='COMPLETE':
+                        self.assertTrue(search_yolo.valid_evaluation(record['test'],'test'))
+                    else:
+                        self.assertEqual(record['test'],{})
+            count=len(gpu.calls)
+            self.run_fake(args,gpu)
+            self.assertEqual(len(gpu.calls),count)
+
+    def test_upgrade_final_policy_backfills_without_retraining_and_finds_old_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args,gpu=self.args(Path(tmp),'prune'),EpochGPU()
+            self.run_fake(args,gpu)
+            count=len(gpu.calls)
+            args.test_policy='every-trial'
+            self.run_fake(args,gpu)
+            self.assertEqual([j['phase'] for j in gpu.calls[count:]],['test','test'])
+            self.assertEqual([j['trial'] for j in gpu.calls[count:]],[0,2])
+            self.assertEqual(json.loads((args.output/'run.json').read_text())['test_policy'],'every-trial')
+            old_root=args.output
+            args.output=None
+            old_identity={**search_yolo.experiment_identity(args),'test_policy':'final'}
+            write_json(old_root/'run.json',old_identity)
+            with patch('search_yolo.automatic_output',side_effect=[Path(tmp)/'new',old_root]):
+                self.assertEqual(search_yolo.resolve_output(args),old_root)
+            changed={**old_identity,'epochs':999}
+            self.assertFalse(search_yolo.compatible_identity(changed,search_yolo.experiment_identity(args)))
+
     def args(self, root, mode):
         data = root/'data.yaml'
         data.write_text(yaml.safe_dump({'train':'images/train', 'val':'images/val', 'test':'images/test',
@@ -381,6 +421,7 @@ class CLITests(unittest.TestCase):
                     search_yolo.main()
                 result = json.loads(printed.getvalue())
                 self.assertEqual(result['mode'],mode)
+                self.assertEqual(result['test_policy'],'every-trial')
                 self.assertEqual(result['max_epochs_per_trial'],100 if mode=='standard' else 250)
                 self.assertEqual(result['batch_choices'],[64,128,256] if mode=='standard' else [64])
                 self.assertFalse(output.exists())

@@ -60,6 +60,26 @@ def automatic_output(args):
     return Path('runs/tune')/f'{label}-{token}'
 
 
+def compatible_identity(existing, identity):
+    # Evaluation scheduling does not change training, pruning or model selection.
+    return existing == identity or (existing is not None and
+        existing.get('test_policy') == 'final' and identity.get('test_policy') == 'every-trial' and
+        {**existing, 'test_policy': 'every-trial'} == identity)
+
+
+def resolve_output(args):
+    if args.output is not None:
+        return args.output
+    target = automatic_output(args)
+    if not target.exists() and args.test_policy == 'every-trial':
+        legacy = copy(args)
+        legacy.test_policy = 'final'
+        previous = automatic_output(legacy)
+        if compatible_identity(read_json(previous/'run.json'), experiment_identity(args)):
+            return previous
+    return target
+
+
 class JobError(RuntimeError):
     def __init__(self, phase, code, result):
         self.phase, self.code, self.result = phase, code, result
@@ -280,9 +300,9 @@ def run(args):
     identity = experiment_identity(args)
     manifest = root/'run.json'
     existing = read_json(manifest)
-    if existing is not None and existing != identity:
+    if existing is not None and not compatible_identity(existing, identity):
         raise ValueError('Search configuration/data changed; use a new --output directory. '
-                         'Only trial target and resource options (device/workers/eval-batch) may change on resume.')
+                         'Only trial target, resource options and upgrading final to every-trial testing may change on resume.')
     if existing is None and any(p.name != '.search.lock' for p in root.iterdir()):
         raise ValueError('Output is not an existing compatible search or an empty directory')
     write_json(manifest, identity)
@@ -445,7 +465,8 @@ def progressive_search(args, root, initial, storage):
     screen_root.mkdir(exist_ok=True)
     screen = copy(args)
     screen.epochs, screen.imgsz = args.search_epochs, args.search_imgsz
-    screen.eval_imgsz, screen.stage, screen.test_policy = args.imgsz, 'screen', 'none'
+    screen.eval_imgsz, screen.stage = args.imgsz, 'screen'
+    screen.test_policy = 'every-trial' if args.test_policy == 'every-trial' else 'none'
     screen.patience = 0
     write_json(screen_root/'run.json', {**experiment_identity(args), 'stage': 'screen',
                                        'train_imgsz': screen.imgsz, 'eval_imgsz': args.imgsz})
@@ -571,11 +592,11 @@ def main():
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument('--test-policy', choices=['every-trial', 'final'], default=None)
+    p.add_argument('--test-policy', choices=['every-trial', 'final'], default='every-trial',
+                   help='Default: test each COMPLETE trial immediately; final explicitly tests only final winners')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
     args.epochs = args.epochs if args.epochs is not None else (100 if args.mode == 'standard' else 250)
-    args.test_policy = args.test_policy or ('every-trial' if args.mode == 'standard' else 'final')
     if args.mode != 'standard' and args.batch is None:
         args.batch = 64
     if args.data is None and not args.test_only:
@@ -604,7 +625,7 @@ def main():
                 test_only(args)
             return
         dataset_identity(args.data)
-        args.output = (args.output or automatic_output(args)).expanduser().resolve()
+        args.output = resolve_output(args).expanduser().resolve()
         if args.dry_run:
             print(json.dumps({'models_in_order': selected_models(args), 'rounds': args.trials,
                               'mode': args.mode,
