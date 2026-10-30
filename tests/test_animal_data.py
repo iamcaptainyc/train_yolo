@@ -179,6 +179,9 @@ class AnimalDataTests(unittest.TestCase):
     def test_actual_cli_manifest_index_preview_and_sample(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);spec=fixture(root/'s',['rabbit'],[12])
+            from PIL import Image
+            for image in (root/'s').glob('*.jpg'):
+                Image.new('RGB',(100,100),(30,70,90)).save(image)
             (root/'sources.yaml').write_text(yaml.safe_dump({'sources':[spec]}))
             (root/'catalog.json').write_text(json.dumps(catalog()))
             (root/'policy.yaml').write_text(yaml.safe_dump({'groups':{'small':{'members':['rabbit']}},'negative_fraction':0}))
@@ -192,6 +195,50 @@ class AnimalDataTests(unittest.TestCase):
                      '--max-images','10','--output',root/command])
             self.assertFalse((root/'preview/images').exists())
             self.assertTrue((root/'sample/data.yaml').exists())
+            report=json.loads((root/'sample/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['image_repair']['counts'],{'healthy':10})
+
+    def test_inline_repair_hardlinks_deletion_and_final_counts(self):
+        from PIL import Image
+        from unittest.mock import patch
+        from repair_images import inspect_image
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);spec=fixture(root/'s',['rabbit'],[5])
+            for image in (root/'s').glob('*.jpg'):
+                Image.new('RGB',(100,100),(30,70,90)).save(image)
+            damaged=root/'s/0.jpg'
+            damaged.write_bytes(damaged.read_bytes()[:-2])
+            alias=root/'alias.jpg';os.link(damaged,alias)
+            (root/'s/1.jpg').write_bytes(b'not an image')
+            index=root/'index.sqlite';build(index,[spec])
+            policy={'groups':{'rabbit':{'members':['rabbit']}},'negative_fraction':0}
+            with patch('repair_images.inspect_image',wraps=inspect_image) as check:
+                report=export(index,catalog(),policy,5,root/'out',repair_images=True)
+                self.assertEqual(check.call_count,5)
+            self.assertEqual(report['selected_images'],4)
+            self.assertEqual(report['image_repair']['counts'],{'healthy':3,'repaired':1,'deleted':1})
+            self.assertEqual(sum(report['split_image_counts'].values()),4)
+            self.assertEqual(sum(report['split']['class_image_counts']['rabbit'].values()),4)
+            self.assertEqual(report['provenance'][0]['selected_images'],4)
+            self.assertEqual(len(list((root/'out/labels').rglob('*.txt'))),4)
+            self.assertEqual(len((root/'out/selection.jsonl').read_text().splitlines()),4)
+            self.assertTrue(os.path.samefile(alias,damaged))
+            self.assertTrue(alias.read_bytes().endswith(b'\xff\xd9'))
+            self.assertTrue((root/'s/1.jpg').exists())
+            # A second extraction must accept the stamps changed by our own repair.
+            export(index,catalog(),policy,5,root/'again',repair_images=True)
+            # Standalone repair also refreshes the new compact animal report.
+            from repair_dataset_report import refresh_dataset_reports
+            victim=next((root/'out/images').rglob('*.jpg'))
+            victim.write_bytes(b'broken')
+            operations=root/'standalone/operations'
+            self.assertEqual(inspect_image(victim,operations=operations)['status'],'deleted')
+            refresh_dataset_reports([root/'out'],operations)
+            refreshed=json.loads((root/'out/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(refreshed['selected_images'],3)
+            self.assertEqual(sum(refreshed['split_image_counts'].values()),3)
+            self.assertEqual(refreshed['provenance'][0]['selected_images'],3)
+            self.assertEqual(len((root/'out/selection.jsonl').read_text().splitlines()),3)
 
     def test_shipped_19_policy_compiles_and_preserves_required_exclusions(self):
         root=Path(__file__).resolve().parents[1]

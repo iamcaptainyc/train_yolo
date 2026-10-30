@@ -109,6 +109,50 @@ def recount(root, ops):
         'deleted_labels_this_operation_log': sum(op['result'].get('label_deleted', False) for op in deleted),
         'method': 'Recount current images and YOLO labels; class IDs and splits unchanged; original conversion audit is historical',
         'original_report': baseline.name if baseline.exists() else None}
+    if 'hierarchy_sampling' in report and 'names' in report and (root/'selection.jsonl').exists():
+        from animal_sampling import compile_policy, write_preview
+        mapping = compile_policy(report['catalog'],report['policy'])
+        manifest = root/'selection.jsonl'
+        backup = root/'selection.before_image_repair.jsonl'
+        if not backup.exists():
+            backup.write_bytes(manifest.read_bytes())
+        retained,hierarchy,provenance = [],Counter(),Counter()
+        components, class_components = set(),defaultdict(set)
+        for line in backup.read_text(encoding='utf-8').splitlines():
+            record = json.loads(line)
+            if not (root/record['image']).is_file():
+                continue
+            retained.append(line)
+            components.add(record['component'])
+            paths = set()
+            for source,raw,concept,group in record['original_classes']:
+                paths.add(mapping[concept][1])
+                provenance[group,concept,source,raw] += 1
+                class_components[group].add(record['component'])
+            hierarchy.update({p[:n] for p in paths for n in range(1,len(p)+1)})
+        if len(retained)!=total:
+            raise ValueError('Current images do not match animal selection manifest')
+        report.update(selected_images=total,split_image_counts={s:r['images'] for s,r in stats.items()},
+                      negative_images=sum(r['negative_images'] for r in stats.values()))
+        counts = {n:{s:r['class_images'].get(n,0) for s,r in stats.items()} for n in report['names']}
+        report['split']['class_image_counts'] = counts
+        report['split']['groups'] = len(components)
+        report['split']['class_independent_groups'] = {n:len(class_components[n]) for n in report['names']}
+        report['audited_boxes'] = sum(sum(r['boxes'].values()) for r in stats.values())
+        report['split']['class_image_fractions'] = {n:{s:c/totals[n] if totals[n] else 0 for s,c in v.items()} for n,v in counts.items()}
+        report['split']['missing_classes'] = {s:[n for n,v in counts.items() if not v[s]] for s in stats}
+        report['unselected_groups'] = [g for g in report['requested_groups'] if not totals[g]]
+        for row in report['hierarchy_sampling']:
+            p = tuple(row['path']) + (('@self',) if row['source_bucket'] else ())
+            row['selected_images'] = hierarchy[p]
+        for row in report['provenance']:
+            row['selected_images'] = provenance[row['group'],row['concept'],row['source'],row['original_name']]
+        temporary = manifest.with_suffix('.tmp')
+        temporary.write_text(''.join(line+'\n' for line in retained),encoding='utf-8')
+        temporary.replace(manifest)
+        atomic_json(path,report)
+        write_preview(report,root/'REPORT.md')
+        return
     sampling = report.setdefault('sampling', {})
     sampling.update(total_selected=total, negative_images=sum(r['negative_images'] for r in stats.values()),
                     source_images={source: sum(r['images'] for r in rows.values()) for source,rows in sources.items()},

@@ -229,7 +229,11 @@ def plan(index,catalog,policy,maximum):
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
 
-def export(index,catalog,policy,maximum,output,start_id=0):
+def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False):
+    if repair_images:
+        import cv2
+        from PIL import Image
+        from repair_images import inspect_image
     output = Path(output).resolve()
     if start_id<0 or output.exists():
         raise ValueError('Use a new output directory and nonnegative class-id-start')
@@ -270,15 +274,67 @@ def export(index,catalog,policy,maximum,output,start_id=0):
                     raise ValueError('Original bbox evidence does not match indexed coordinates')
     finally:
         evidence_db.close()
-    for r in tqdm(chosen,desc='Write and audit hardlinks/labels',unit='img'):
+    kept,repair_counts = [],Counter()
+    for r in tqdm(chosen,desc='Write / repair / audit' if repair_images else 'Write and audit hardlinks/labels',unit='img'):
         image,label = output/r['image_rel'],output/r['label_rel']
         image.parent.mkdir(parents=True,exist_ok=True); label.parent.mkdir(parents=True,exist_ok=True)
         os.link(r['image'],image)
+        if repair_images:
+            result = inspect_image(image,operations=output/'image_repair/operations')
+            repair_counts[result['status']] += 1
+            if result['status']!='healthy':
+                issues = output/'image_repair/issues.jsonl'
+                issues.parent.mkdir(parents=True,exist_ok=True)
+                with issues.open('a',encoding='utf-8') as stream:
+                    stream.write(json.dumps(result,ensure_ascii=False)+'\n')
+            if result['status']=='deleted':
+                # The output hardlink is gone; never create its YOLO label.
+                continue
+            if result['status']!='healthy' and result['status']!='repaired':
+                raise ValueError(f'Image repair failed: {image}: {result.get("reason")}')
+            if result['status']=='repaired':
+                # In-place repair also changes the source inode and all aliases.
+                # Update indexed stamps so subsequent sampling accepts our own repair.
+                db = connect(index)
+                try:
+                    db.execute("UPDATE images SET stamp=? WHERE json_extract(stamp,'$[0]')=? AND json_extract(stamp,'$[1]')=?",
+                               (json.dumps(stamp(r['image'])),r['stamp'][0],r['stamp'][1]))
+                    db.commit()
+                finally:
+                    db.close()
         label.write_text(''.join(f'{ids[n]} '+ ' '.join(b)+'\n' for n,b in r['rows']),encoding='utf-8')
         actual = [(int(line.split()[0]),tuple(line.split()[1:])) for line in label.read_text().splitlines()]
         if actual!=[(ids[n],b) for n,b in r['rows']] or not os.path.samefile(image,r['image']):
             raise ValueError('Independent written label/link audit failed')
         audit_rows += len(actual)
+        kept.append(r)
+    chosen = kept
+    if not any(r['rows'] for r in chosen):
+        raise ValueError('No positive images remain after repair; output is incomplete')
+    # Recount from retained records, not another directory/image scan.
+    class_counts = {name:{s:0 for s in ('train','val','test')} for name in ids}
+    hierarchy,provenance = Counter(),Counter()
+    for r in chosen:
+        for name in {name for name,_ in r['rows']}:
+            class_counts[name][r['split']] += 1
+        hierarchy.update({p[:n] for p in r['paths'] for n in range(1,len(p)+1)})
+        provenance.update((group,concept,source,raw) for source,raw,concept,group in r['origins'])
+    splitting['class_image_counts'] = class_counts
+    splitting['class_image_fractions'] = {n:{s:c/sum(v.values()) if sum(v.values()) else 0 for s,c in v.items()} for n,v in class_counts.items()}
+    splitting['missing_classes'] = {s:[n for n,v in class_counts.items() if not v[s]] for s in ('train','val','test')}
+    splitting['groups'] = len({r['component'] for r in chosen})
+    splitting['class_independent_groups'] = {n:len({r['component'] for r in chosen if any(k==n for k,_ in r['rows'])}) for n in ids}
+    for row in report['hierarchy_sampling']:
+        p = tuple(row['path']) + (('@self',) if row['source_bucket'] else ())
+        row['selected_images'] = hierarchy[p]
+    for row in report['provenance']:
+        row['selected_images'] = provenance[row['group'],row['concept'],row['source'],row['original_name']]
+    report.update(selected_images=len(chosen),image_repair={'enabled':repair_images,'counts':dict(repair_counts)},
+                  unselected_groups=[g for g in policy['groups'] if not hierarchy[(g,)]])
+    if repair_images:
+        report['scope'] = 'Counts are image memberships; sums may exceed unique images. Selected images decoded/repaired inline; no full image-content hash.'
+    if repair_counts['deleted']:
+        report['excluded']['undecodable_selected_images'] = repair_counts['deleted']
     with (output/'selection.jsonl').open('w',encoding='utf-8') as stream:
         for r in chosen:
             stream.write(json.dumps({'image':r['image_rel'].as_posix(),'label':r['label_rel'].as_posix(),
@@ -308,7 +364,7 @@ def write_preview(report,path):
     selected = {r['path'][0]:r['selected_images'] for r in report['hierarchy_sampling']
                 if len(r['path'])==1 and not r['source_bucket'] and r['selected_images']}
     lines = ['# 动物数据集统计' if final else '# 动物数据集抽样预览', '',
-             f'类别数：**{len(names) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
+             f'类别数：**{sum(any(v.values()) for v in report["split"]["class_image_counts"].values()) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
     if final:
         totals = report.get('split_image_counts',{})
         lines += ['| 集合 | 图片数 |', '| --- | ---: |']
@@ -366,6 +422,9 @@ def write_appendix(report,path):
         '| 层级路径 | 原始标签采样桶 | 可用图片 | 选择图片 |','| --- | --- | ---: | ---: |']
     for r in report['hierarchy_sampling']:
         lines.append(f'| {" / ".join(r["path"])} | {r["source_bucket"]} | {r["available_images"]} | {r["selected_images"]} |')
+    if 'image_repair' in report:
+        lines += ['','## 图片修复','',json.dumps(report['image_repair'],ensure_ascii=False),'',
+                  '原位修复同步影响所有硬链接；解码通过不代表缺失画面能够恢复。问题明细见 image_repair/issues.jsonl（集成修复）或独立修复命令指定的日志目录。']
     if 'names' in report:
         lines += ['','## 最终训练类别与划分','', '| ID | 标签 | train 图片 | val 图片 | test 图片 |','| ---: | --- | ---: | ---: | ---: |']
         for name,cid in report['names'].items():
