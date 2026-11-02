@@ -88,11 +88,41 @@ def class_color(cid):
     return tuple(round(c * 255) for c in colorsys.hsv_to_rgb((cid * 0.61803398875) % 1, 0.8, 0.75))
 
 
-def draw_tag(draw, position, text, color, font):
-    x, y = position
-    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-    draw.rectangle((x, y, x + right - left + 8, y + bottom - top + 6), fill=color)
-    draw.text((x + 4 - left, y + 3 - top), text, font=font, fill='white')
+def draw_legend(image, entries, font):
+    """Add a separate, wrapping legend above the image without covering pixels."""
+    width = max(image.width, 160)
+    measure = ImageDraw.Draw(image)
+    padding, swatch, gap = 12, 14, 6
+    line_height = max(swatch, measure.textbbox((0, 0), 'Ag国', font=font)[3]) + 6
+    text_limit = width - 2*padding - swatch - gap
+    x, y, row_height = padding, padding, 0
+    layout = []
+    for color, text in entries:
+        lines, current = [], ''
+        for char in text:
+            if current and measure.textlength(current + char, font=font) > text_limit:
+                lines.append(current)
+                current = ''
+            current += char
+        lines.append(current)
+        item_width = swatch + gap + max(measure.textlength(line, font=font) for line in lines)
+        item_height = line_height * len(lines)
+        if x > padding and x + item_width > width - padding:
+            x, y, row_height = padding, y + row_height + gap, 0
+        layout.append((x, y, color, lines))
+        x += item_width + 20
+        row_height = max(row_height, item_height)
+    header_height = y + row_height + padding
+    canvas = Image.new('RGB', (width, image.height + header_height), '#f5f5f5')
+    draw = ImageDraw.Draw(canvas)
+    for x, y, color, lines in layout:
+        draw.rectangle((x, y + 3, x + swatch - 1, y + swatch + 2), fill=color)
+        for index, line in enumerate(lines):
+            left, top, _, _ = draw.textbbox((0, 0), line, font=font)
+            draw.text((x + swatch + gap - left, y + index*line_height - top),
+                      line, font=font, fill='#202020')
+    canvas.paste(image, (0, header_height))
+    return canvas
 
 
 def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='ok'):
@@ -101,21 +131,18 @@ def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='
         image = original.convert('RGB')
     image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     width, height = image.size
-    draw = ImageDraw.Draw(image)
+    draw = ImageDraw.Draw(image, 'RGBA')
     for cid, x, y, w, h in boxes:
         x1, y1 = max(0, round((x-w/2)*width)), max(0, round((y-h/2)*height))
         x2, y2 = min(width-1, round((x+w/2)*width)), min(height-1, round((y+h/2)*height))
         x1, y1 = min(x1, x2), min(y1, y2)
         color = class_color(cid)
-        draw.rectangle((x1, y1, x2, y2), outline=color, width=line_width)
-        text = f'{cid}: {names[cid]}' if cid in names else str(cid)
-        bounds = draw.textbbox((0, 0), text, font=font)
-        text_width, text_height = bounds[2]-bounds[0]+8, bounds[3]-bounds[1]+6
-        draw_tag(draw, (max(0, min(x1, width-text_width)), max(0, y1-text_height)), text, color, font)
-    if not boxes:
-        draw_tag(draw, (0, 0), 'MISSING LABEL' if status == 'missing_label' else 'EMPTY LABEL',
-                 '#b02020' if status == 'missing_label' else '#505050', font)
-    return image
+        draw.rectangle((x1, y1, x2, y2), fill=(*color, 64), outline=(*color, 255), width=line_width)
+    entries = [(class_color(cid), f'{cid}: {names[cid]}' if cid in names else str(cid))
+               for cid in sorted({box[0] for box in boxes})]
+    if not entries:
+        entries = [('#b02020', 'MISSING LABEL')] if status == 'missing_label' else [('#505050', 'EMPTY LABEL')]
+    return draw_legend(image, entries, font)
 
 
 def visualize(source, output, *, split='all', data=None, labels=None, limit=100,

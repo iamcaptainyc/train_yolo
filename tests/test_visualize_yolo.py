@@ -6,8 +6,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 import yaml
 
 from visualize_yolo import class_color, collect_source, load_font, read_boxes, render_image, visualize
@@ -89,14 +90,54 @@ class VisualizeTests(unittest.TestCase):
             label = root/'labels/a.txt'
             boxes = read_boxes(label, {0: 'cat'})
             preview = render_image(image, boxes, {0: 'cat'}, load_font(), max_size=200)
-            self.assertEqual(preview.size, (200, 100))
-            self.assertEqual(preview.getpixel((100, 70)), class_color(0))
-            self.assertEqual(preview.getpixel((100, 80)), (255, 255, 255))
+            header = preview.height - 100
+            self.assertEqual(preview.width, 200)
+            self.assertGreater(header, 0)
+            self.assertEqual(preview.getpixel((100, header + 70)), class_color(0))
+            self.assertEqual(preview.getpixel((100, header + 80)), (255, 255, 255))
+            # Interior retains the underlying scene through a 25% color tint.
+            expected = tuple(round(c * 64/255 + 255 * 191/255) for c in class_color(0))
+            self.assertEqual(preview.getpixel((100, header + 50)), expected)
             for row in ('0 0.5 0.5 0 0.4', '0 1 0.5 0.4 0.4', '1 0.5 0.5 0.4 0.4',
                         '0 0.5 0.5 0.4 0.4 0.6 0.7', '-1 0.5 0.5 0.4 0.4'):
                 label.write_text(row)
                 with self.subTest(row=row), self.assertRaises(ValueError):
                     read_boxes(label, {0: 'cat'})
+
+    def test_legend_deduplicates_present_classes_and_wraps_above_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = self.make_image(root, 'images/a.png')
+            boxes = [(1, 0.2, 0.2, 0.2, 0.2), (1, 0.8, 0.8, 0.2, 0.2),
+                     (2, 0.5, 0.5, 0.2, 0.2)]
+            names = {0: 'absent', 1: 'cat', 2: 'long category name ' * 4}
+            with patch.object(ImageDraw.ImageDraw, 'text', autospec=True,
+                              side_effect=ImageDraw.ImageDraw.text) as text:
+                preview = render_image(image, boxes, names, load_font(), max_size=200)
+            captions = [call.args[2] for call in text.call_args_list]
+            self.assertEqual(captions.count('1: cat'), 1)
+            self.assertNotIn('absent', ''.join(captions))
+            self.assertIn('2: long category name', ''.join(captions))
+            self.assertGreater(len(captions), 2)  # Long names wrap.
+            header = preview.height - 100
+            for call in text.call_args_list:
+                draw, position, caption = call.args[:3]
+                bounds = draw.textbbox(position, caption, font=call.kwargs['font'])
+                self.assertGreaterEqual(bounds[0], 0)
+                self.assertLessEqual(bounds[2], preview.width)
+                self.assertLess(bounds[3], header)
+            # The old box label area is now untouched image content.
+            self.assertEqual(preview.getpixel((20, header + 1)), (255, 255, 255))
+
+    def test_empty_and_missing_label_text_does_not_cover_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = self.make_image(root, 'images/a.png', '')
+            for status in ('empty_label', 'missing_label'):
+                with self.subTest(status=status):
+                    preview = render_image(image, [], {}, load_font(), status=status)
+                    body = preview.crop((0, preview.height - 200, 400, preview.height))
+                    self.assertIsNone(ImageChops.difference(body, Image.new('RGB', (400, 200), 'white')).getbbox())
 
     def test_sampling_output_protection_and_filename_collisions(self):
         with tempfile.TemporaryDirectory() as tmp:
