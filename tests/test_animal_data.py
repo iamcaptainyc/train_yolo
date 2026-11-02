@@ -63,12 +63,13 @@ class AnimalDataTests(unittest.TestCase):
                 output=root/f'preview{n}'
                 result=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'animal_data.py'),
                     'preview','--index',str(index),'--catalog',str(root/'catalog.yaml'),
-                    '--policy',str(root/'policy.yaml'),'--output',str(output),flag,'0'],
+                    '--policy',str(root/'policy.yaml'),'--output',str(output),flag,'0','--no-source-first'],
                     capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 cli_report=json.loads((output/'report.json').read_text(encoding='utf-8'))
                 self.assertEqual(cli_report['lila_min_area'],0)
                 self.assertEqual(cli_report['selected_images'],4)
+                self.assertEqual(cli_report['sampling_priority'],'hierarchy_first')
             policy['lila_min_area']=0
             chosen,_,_=plan(index,catalog(),policy,10)
             self.assertEqual(len(chosen),4)
@@ -103,13 +104,18 @@ class AnimalDataTests(unittest.TestCase):
             self.assertEqual(Counter(n for r in selected for n,_ in r['rows']),{'foxes':5,'rabbits':5})
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),before)
 
-    def test_source_priority_inside_each_fine_class_and_rare_classes_not_lost(self):
+    def test_source_priority_before_fine_class_coverage_and_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             a=fixture(root/'a',['red fox'],[20],name='ap10k')
             b=fixture(root/'b',['rabbit','red fox'],[2,20],name='lila')
             path=root/'index.sqlite';build(path,[a,b])
             policy={'groups':{'small':{'members':['fox','rabbit']}},'negative_fraction':0}
+            chosen,_,_=plan(path,catalog(),policy,10)
+            self.assertEqual(Counter(r['dataset'] for r in chosen),{'ap10k':10})
+            chosen,_,_=plan(path,catalog(),policy,25)
+            self.assertEqual(Counter(r['dataset'] for r in chosen),{'ap10k':20,'lila':5})
+            policy['sampling_priority']='hierarchy_first'
             chosen,_,_=plan(path,catalog(),policy,10)
             self.assertEqual(Counter(r['dataset'] for r in chosen),{'ap10k':8,'lila':2})
 
@@ -147,6 +153,21 @@ class AnimalDataTests(unittest.TestCase):
                 'report','--dataset',str(root/'out')],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(markdown,(root/'out/REPORT.md').read_text(encoding='utf-8'))
+
+    def test_source_first_preserves_output_class_balance_and_animals_before_lila(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            specs=[fixture(root/'a',['red fox'],[20],name='ap10k'),
+                   fixture(root/'b',['rabbit'],[20],name='animals'),
+                   fixture(root/'c',['rabbit','bear'],[20,20],name='lila')]
+            index=root/'index.sqlite';build(index,specs)
+            policy={'groups':{'small':{'members':['fox','rabbit']},'bear':{'members':['bear']}},'negative_fraction':0}
+            chosen,report,_=plan(index,catalog(),policy,20)
+            self.assertEqual(Counter(n for r in chosen for n,_ in r['rows']),{'small':10,'bear':10})
+            self.assertEqual(Counter(r['dataset'] for r in chosen),{'ap10k':10,'lila':10})
+            chosen,report,_=plan(index,catalog(),policy,50)
+            self.assertEqual(Counter(r['dataset'] for r in chosen),{'ap10k':20,'animals':10,'lila':20})
+            self.assertEqual(sum(r['selected_images'] for r in report['provenance']),50)
 
     def test_catalog_cycles_overlaps_and_unknown_members_rejected(self):
         for cat,policy in [({'nodes':{'a':{'parent':'a'}}},{'groups':{'x':{'members':['a']}}}),
@@ -192,7 +213,8 @@ class AnimalDataTests(unittest.TestCase):
             run(['index','--index',root/'index.sqlite','--sources',root/'sources.yaml'])
             for command in ('preview','sample'):
                 run([command,'--index',root/'index.sqlite','--catalog',root/'catalog.json','--policy',root/'policy.yaml',
-                     '--max-images','10','--output',root/command])
+                     '--max-images','10','--output',root/command,'--source-first'])
+                self.assertEqual(json.loads((root/command/'report.json').read_text(encoding='utf-8'))['sampling_priority'],'source_first')
             self.assertFalse((root/'preview/images').exists())
             self.assertTrue((root/'sample/data.yaml').exists())
             report=json.loads((root/'sample/report.json').read_text(encoding='utf-8'))

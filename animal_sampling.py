@@ -132,17 +132,19 @@ def pool(index, catalog, policy):
         db.close()
 
 
-def choose(records, maximum, negative_fraction, seed):
+def choose(records, maximum, negative_fraction, seed, source_first=True):
     if maximum<1 or not 0<=negative_fraction<1:
         raise ValueError('Invalid image budget/negative fraction')
     rng = random.Random(seed)
     children,leaves,available = defaultdict(set),defaultdict(list),Counter()
     for i,r in enumerate(records):
         prefixes = set()
-        for path in r['paths']:
+        for original_path in r['paths']:
+            prefixes.update(original_path[:n] for n in range(1,len(original_path)+1))
+            path = ((original_path[0],f'@source_{r["priority"]:08d}',*original_path[1:])
+                    if source_first else original_path)
             leaves[path].append(i)
             for n in range(1,len(path)+1):
-                prefixes.add(path[:n])
                 children[path[:n-1]].add(path[:n])
         available.update(prefixes)
     queues = {}
@@ -172,8 +174,11 @@ def choose(records, maximum, negative_fraction, seed):
             return None
         while active.get(path):
             candidates = sorted(active[path])
-            low = min(counts[p] for p in candidates)
-            branch = rng.choice([p for p in candidates if counts[p]==low])
+            if source_first and len(path)==1:
+                branch = candidates[0]  # Exhaust higher-priority sources within this output class.
+            else:
+                low = min(counts[p] for p in candidates)
+                branch = rng.choice([p for p in candidates if counts[p]==low])
             value = pop(branch)
             if value is not None: return value
             active[path].remove(branch)
@@ -181,21 +186,31 @@ def choose(records, maximum, negative_fraction, seed):
 
     negatives = [i for i,r in enumerate(records) if not r['rows']]
     rng.shuffle(negatives)
+    if source_first:
+        negatives.sort(key=lambda i:records[i]['priority'])
     negative_budget = min(len(negatives),int(maximum*negative_fraction))
     while len(selected)<maximum-negative_budget:
         i = pop(())
         if i is None: break
         selected.add(i)
-        prefixes = {p[:n] for p in records[i]['paths'] for n in range(1,len(p)+1)}
+        paths = [((p[0],f'@source_{records[i]["priority"]:08d}',*p[1:]) if source_first else p)
+                 for p in records[i]['paths']]
+        prefixes = {p[:n] for p in paths for n in range(1,len(p)+1)}
         counts.update(prefixes)
     selected.update(negatives[:negative_budget])
     picked = [r for i,r in enumerate(records) if i in selected]
-    return picked,available,counts
+    original_counts = Counter()
+    for r in picked:
+        original_counts.update({p[:n] for p in r['paths'] for n in range(1,len(p)+1)})
+    return picked,available,original_counts
 
 
 def plan(index,catalog,policy,maximum):
+    strategy = policy.get('sampling_priority','source_first')
+    if strategy not in ('source_first','hierarchy_first'):
+        raise ValueError('sampling_priority must be source_first or hierarchy_first')
     records,excluded,errors,sources = pool(index,catalog,policy)
-    chosen,available,counts = choose(records,maximum,policy.get('negative_fraction',.05),policy.get('seed',42))
+    chosen,available,counts = choose(records,maximum,policy.get('negative_fraction',.05),policy.get('seed',42),strategy=='source_first')
     details = [{'path':list(p[:-1] if p[-1]=='@self' else p),
                 'source_bucket':p[-1]=='@self','available_images':n,'selected_images':counts[p]}
                for p,n in sorted(available.items())]
@@ -221,6 +236,7 @@ def plan(index,catalog,policy,maximum):
         db.close()
     return chosen,{'maximum_images':maximum,'selected_images':len(chosen),'hierarchy_sampling':details,
         'requested_groups':list(policy['groups']),
+        'sampling_priority':strategy,
         'unselected_groups':[g for g in policy['groups'] if not counts[(g,)]],
         'raw_category_inventory':inventory,
         'provenance':[dict(group=k[0],concept=k[1],source=k[2],original_name=k[3],**v) for k,v in sorted(provenance.items())],
@@ -418,7 +434,9 @@ def write_appendix(report,path):
     lines = ['# 通用动物数据集采样报告','',f'实际选择 {report["selected_images"]} 张，上限 {report["maximum_images"]} 张。','',
         f'请求类别数：{len(report["requested_groups"])}；没有抽到样本的类别：{report["unselected_groups"]}。','',
         f'LILA 框面积占比必须严格大于 {report["lila_min_area"]:.6f}；任意一个框达标就保留整图及全部框，负样本不受此门槛限制。这不是 LILA 来源占比。','',
-        '按最终类别→成员→更细类别递归均衡；多类别同图只保存一次，图片计数可重叠。','',
+        ('按最终类别均衡→来源优先→来源内细类均衡；允许缺少仅低优先来源拥有的细类。'
+         if report.get('sampling_priority')=='source_first' else '按最终类别→成员→更细类别递归均衡。')+
+        '多类别同图只保存一次，图片计数可重叠。','',
         '| 层级路径 | 原始标签采样桶 | 可用图片 | 选择图片 |','| --- | --- | ---: | ---: |']
     for r in report['hierarchy_sampling']:
         lines.append(f'| {" / ".join(r["path"])} | {r["source_bucket"]} | {r["available_images"]} | {r["selected_images"]} |')

@@ -83,6 +83,8 @@ def main():
         parser.add_argument('--catalog',type=Path,default=ROOT/'configs/animal_catalog.json')
         parser.add_argument('--policy',type=Path,default=ROOT/'configs/camping19.yaml')
         parser.add_argument('--max-images',type=int,default=30000)
+        parser.add_argument('--source-first',action=argparse.BooleanOptionalAction,default=None,
+                            help='Prioritize sources within each output class; --no-source-first prioritizes fine-class balance; default: policy')
         parser.add_argument('--lila-min-area', '--lila-ratio', '--lila_ratio',
                             dest='lila_min_area', type=area_ratio, default=None,
                             help='LILA bbox/image area threshold, e.g. 1/16; overrides policy, not a source quota')
@@ -107,6 +109,8 @@ def main():
         if args.output.exists() or args.max_images<1:
             raise ValueError('Use a new output directory and positive max-images')
         catalog,policy = read(args.catalog),read(args.policy)
+        if args.source_first is not None:
+            policy['sampling_priority'] = 'source_first' if args.source_first else 'hierarchy_first'
         if args.lila_min_area is not None:
             policy['lila_min_area'] = args.lila_min_area
         v,t = policy.get('val_fraction',.1),policy.get('test_fraction',.1)

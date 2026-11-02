@@ -75,6 +75,7 @@ groups:
     - squirrel
     - bat
     - pangolin
+sampling_priority: source_first
 source_priority:
 - ap10k
 - animals
