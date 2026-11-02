@@ -302,8 +302,8 @@ def main():
     parser.add_argument('--datasets', type=Path, nargs='+', required=True, help='Dataset directories with data.yaml, or YAML paths')
     parser.add_argument('--output', type=Path, required=True, help='New directory, outside source datasets')
     parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
-    parser.add_argument('--reserved-ids', action='append', default=[],
-                        help='Unused padding ID range per source (1-based), e.g. 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
+    parser.add_argument('--reserved-ids', action='extend', nargs='+', default=[],
+                        help='One or more unused padding ID ranges per source (1-based), e.g. 1:27-82 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
     parser.add_argument('--include-ids', action='append', default=[],
                         help='Keep only these classes in a source, e.g. 1:0,25,26; other sources remain unfiltered. Repeatable.')
     parser.add_argument('--compact-ids', action='store_true', help='Explicitly renumber selected global IDs to 0..N-1')

@@ -239,6 +239,30 @@ class MergeIDsTests(unittest.TestCase):
             self.assertEqual(config['names'],{0:'cat',1:'dog',2:'bird'})
             self.assertEqual(next((root/'out/labels/train').iterdir()).read_text(),'1 0.5 0.5 0.2 0.2\n')
 
+    def test_cli_reserved_ids_accepts_multiple_repeated_and_mixed_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = dataset(root/'a', {0:'cat', 1:'padding'}, '0 0.5 0.5 0.2 0.2\n')
+            b = dataset(root/'b', {0:'padding', 1:'dog'}, '1 0.5 0.5 0.2 0.2\n')
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            forms = [
+                ['--reserved-ids', '1:1,9-10', '2:0,99'],
+                ['--reserved-ids', '1:1,9-10', '--reserved-ids', '2:0,99'],
+                ['--reserved-ids', '1:1,9-10', '2:0', '--reserved-ids', '2:99'],
+            ]
+            for index, flags in enumerate(forms):
+                with self.subTest(flags=flags):
+                    output = root/f'out{index}'
+                    result = subprocess.run(
+                        [sys.executable, '-X', 'utf8', str(script), '--datasets', str(a), str(b),
+                         *flags, '--output', str(output), '--copy-images'],
+                        capture_output=True, text=True, encoding='utf-8')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+                    self.assertEqual(report['names'], {'0':'cat', '1':'dog'})
+                    self.assertEqual(report['ignored_reserved_ids'], {'d1':[1], 'd2':[0]})
+                    self.assertEqual(report['absent_reserved_ids'], {'d1':[9,10], 'd2':[99]})
+
 
 if __name__ == '__main__':
     unittest.main()
