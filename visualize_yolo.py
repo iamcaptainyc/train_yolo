@@ -129,11 +129,6 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=100,
         raise ValueError(f'Labels directory does not exist: {labels}')
     if output.exists():
         raise ValueError(f'Use a new output directory: {output}')
-    protected = [root, *[p.parent for p in images]]
-    if labels is not None:
-        protected.append(labels)
-    if any(output == p or output.is_relative_to(p) or p.is_relative_to(output) for p in protected):
-        raise ValueError('Output must be separate from source image/label directories')
     loaded_font = load_font(font)
     total = len(images)
     if limit and total > limit:

@@ -19,7 +19,7 @@ python visualize_yolo.py --source datasets/animals_yolo/images/train/example.jpg
 python visualize_yolo.py --source /data/photos --labels /data/annotations --output runs/custom_preview
 ```
 
-运行后打开输出目录中的 `.jpg` 即可查看。`--output` 默认是 `runs/labels_preview`，必须为新目录，且与输入图片/标签目录分离；再次运行时使用新的输出路径。脚本不会修改原图片和标签。输出文件带序号和原文件名，避免不同子目录同名图片互相覆盖；报告保留原图片、标签路径及对应输出名。
+运行后打开输出目录中的 `.jpg` 即可查看。`--output` 默认是 `runs/labels_preview`，必须为新目录，可以放在数据集或图片/标签目录内部；再次运行时使用新的输出路径。输入图片在创建输出目录之前收集，因此本次生成的预览不会加入本次输入；以后递归扫描包含旧预览的图片目录时，旧预览也会被收集。脚本不会修改原图片和标签。输出文件带序号和原文件名，避免不同子目录同名图片互相覆盖；报告保留原图片、标签路径及对应输出名。
 
 支持 `images/{train,val,test}`、`{train,val,test}/images`、平铺 `images/` 和任意图片目录，递归收集 JPG/JPEG/PNG/BMP/WebP/TIF/TIFF。数据集根目录自动寻找 `data.yaml`、`data.yml`、`dataset.yaml`、`dataset.yml`；YAML 中 `names` 可以是列表或 ID→名称字典。直接传图片目录或图片时，可用 `--data` 指定名称表，否则显示数字 ID。
 

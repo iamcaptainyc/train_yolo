@@ -111,8 +111,10 @@ class VisualizeTests(unittest.TestCase):
             self.assertEqual(len({r['output'] for r in all_images['images']}), 5)
             with self.assertRaisesRegex(ValueError, 'new output'):
                 self.run_quiet(root/'dataset', root/'one')
-            with self.assertRaisesRegex(ValueError, 'separate'):
-                self.run_quiet(root/'dataset', root/'dataset/preview')
+            for output in (root/'dataset/preview', root/'dataset/images/preview'):
+                nested = self.run_quiet(root/'dataset', output, limit=0)
+                self.assertEqual(nested['counts'], {'ok': 5})
+                self.assertEqual(len(list(output.glob('*.jpg'))), 5)
 
     def test_cli_single_image_class_names_and_failure_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:
