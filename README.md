@@ -16,6 +16,7 @@ train_yolo/
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
   animal_data.py            # 通用原始标注索引、分组预览与逐层均衡采样
   split_yolo.py             # 批量重分 YOLO，默认 8:1:1，--in-place 直接更新原目录
+  visualize_yolo.py         # YOLO 检测标注抽样可视化，导出带框图片和检查报告
   prepare_lila.py          # 五个 LILA 数据集合并类别 → YOLO，相机/序列分组
   train.py                 # 训练 / 恢复 / 评估 / 预测
   training_guard.py        # Linux 独立进程组守护与残留 DataLoader 回收
@@ -186,6 +187,14 @@ datasets/animals_yolo/
 ```
 
 **开始训练前打开 `preview/` 检查框与类别，查看 `report.json` 的类别分布。** 小样本类别可能缺席验证集/测试集，见 `missing_classes`；多类别图的划分只是近似分层。
+
+已有 YOLO 数据集也可单独生成标注预览，无需运行转换或加载模型：
+
+```bash
+python visualize_yolo.py --source datasets/animals_yolo --output runs/labels_preview
+```
+
+默认随机抽取 100 张，支持 YAML、图片目录或单张图片，`--split val` 限定验证集，`--limit 0` 导出全部；详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
 
 ### AutoDL 首轮训练
 
