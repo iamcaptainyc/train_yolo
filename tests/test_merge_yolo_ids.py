@@ -239,6 +239,34 @@ class MergeIDsTests(unittest.TestCase):
             self.assertEqual(config['names'],{0:'cat',1:'dog',2:'bird'})
             self.assertEqual(next((root/'out/labels/train').iterdir()).read_text(),'1 0.5 0.5 0.2 0.2\n')
 
+    def test_cli_include_ids_accepts_multiple_repeated_and_mixed_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = dataset(root/'a', {0:'cat', 1:'dog', 2:'bird'},
+                        '0 0.5 0.5 0.2 0.2\n2 0.5 0.5 0.1 0.1\n')
+            b = dataset(root/'b', {3:'car', 4:'bus', 5:'bike'},
+                        '3 0.5 0.5 0.2 0.2\n4 0.5 0.5 0.1 0.1\n5 0.5 0.5 0.3 0.3\n')
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            forms = [
+                ['--include-ids', '1:0', '2:3-4'],
+                ['--include-ids', '1:0', '--include-ids', '2:3-4'],
+                ['--include-ids', '1:0', '2:3', '--include-ids', '2:4'],
+            ]
+            for index, flags in enumerate(forms):
+                with self.subTest(flags=flags):
+                    output = root/f'out{index}'
+                    result = subprocess.run(
+                        [sys.executable, '-X', 'utf8', str(script), '--datasets', str(a), str(b),
+                         *flags, '--compact-ids', '--output', str(output), '--copy-images'],
+                        capture_output=True, text=True, encoding='utf-8')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+                    self.assertEqual(report['names'], {'0':'cat', '1':'car', '2':'bus'})
+                    for split in ('train', 'val', 'test'):
+                        labels = {p.read_text() for p in (output/'labels'/split).iterdir()}
+                        self.assertEqual(labels, {'0 0.5 0.5 0.2 0.2\n',
+                                                  '1 0.5 0.5 0.2 0.2\n2 0.5 0.5 0.1 0.1\n'})
+
     def test_cli_reserved_ids_accepts_multiple_repeated_and_mixed_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

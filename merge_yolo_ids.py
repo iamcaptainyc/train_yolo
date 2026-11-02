@@ -304,8 +304,8 @@ def main():
     parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
     parser.add_argument('--reserved-ids', action='extend', nargs='+', default=[],
                         help='One or more unused padding ID ranges per source (1-based), e.g. 1:27-82 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
-    parser.add_argument('--include-ids', action='append', default=[],
-                        help='Keep only these classes in a source, e.g. 1:0,25,26; other sources remain unfiltered. Repeatable.')
+    parser.add_argument('--include-ids', action='extend', nargs='+', default=[],
+                        help='One or more source class selections, e.g. 1:0,25,26 2:27-35; other sources remain unfiltered. Repeatable.')
     parser.add_argument('--compact-ids', action='store_true', help='Explicitly renumber selected global IDs to 0..N-1')
     parser.add_argument('--keep-negatives', action='store_true', help='Keep original empty-label images from class-filtered sources')
     args = parser.parse_args()
