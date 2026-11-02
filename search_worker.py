@@ -125,14 +125,14 @@ def execute_stage(job, reporter=None):
                 model.add_callback('on_fit_epoch_end', reporter)
             from training_diagnostics import install_phase_logging
             install_phase_logging(model)
-            model.train(data=job['data'], epochs=job['epochs'], imgsz=job['imgsz'],
+            model.train(data=job['data'], epochs=job['epochs'],
                         workers=job['workers'], device=job['device'], seed=job['seed'], deterministic=True,
                         patience=job['patience'], amp=job['amp'], cache=False, save=True, val=True,
                         project=str(directory.parent), name=directory.name, exist_ok=True,
                         close_mosaic=min(10, max(0, job['epochs']//5)), plots=True,
                         fliplr=job.get('fliplr', 0.5),
                         **train_options,
-                        **{'batch': job['batch'], **job['params']})
+                        **{'batch': job['batch'], 'imgsz': job['imgsz'], **job['params']})
         if not best.is_file():
             raise ValueError(f'Training did not produce {best}')
         rows = []

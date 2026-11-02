@@ -330,6 +330,49 @@ class SearchIntegrationTests(unittest.TestCase):
             self.assertEqual(len(gpu.calls), count)
 
 
+    def test_imgsz_is_sampled_in_one_study_and_preserved_on_resume(self):
+        import optuna
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), trials=5), FakeGPU()
+            args.models, args.batch = ['yolo11n.pt'], 64
+            single_output = search_yolo.automatic_output(args)
+            args.imgsz_choices = [640]
+            self.assertEqual(search_yolo.automatic_output(args), single_output)
+            args.imgsz_choices = [640, 1280]
+            self.assertNotEqual(search_yolo.automatic_output(args), single_output)
+            self.run_fake(args, gpu)
+            jobs = [j for j in gpu.calls if j['phase'] == 'train']
+            self.assertEqual(len(jobs), 5)
+            self.assertEqual([j['imgsz'] for j in jobs[:3]], [640, 640, 1280])
+            for job in jobs:
+                self.assertIn(job['imgsz'], args.imgsz_choices)
+                self.assertEqual(job['imgsz'], job['params']['imgsz'])
+            for job in gpu.calls:
+                if job['phase'] in ('val', 'test'):
+                    self.assertEqual(job['imgsz'], job['params']['imgsz'])
+            storage = optuna.storages.RDBStorage(url='sqlite:///'+(args.output/'optuna.sqlite3').as_posix())
+            try:
+                study = optuna.load_study(study_name='yolo11n', storage=storage)
+                self.assertEqual(len(study.trials), 5)
+                for trial in study.trials[1:]:
+                    self.assertEqual(trial.distributions['imgsz'].choices, (640, 1280))
+            finally:
+                storage.remove_session()
+                storage.engine.dispose()
+            with (args.output/'iterations.csv').open(encoding='utf-8-sig', newline='') as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([int(row['train_imgsz']) for row in rows], [j['imgsz'] for j in jobs])
+            count = len(gpu.calls)
+            self.run_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)
+            args.trials = 6
+            self.run_fake(args, gpu)
+            self.assertEqual(len([j for j in gpu.calls[count:] if j['phase'] == 'train']), 1)
+            args.imgsz_choices = [640, 960]
+            with self.assertRaisesRegex(ValueError, 'configuration/data changed'):
+                self.run_fake(args, gpu)
+
+
 class HumanReportTests(unittest.TestCase):
     def test_missing_and_zero_metrics_are_distinct(self):
         from search_report import metric, delta
@@ -339,6 +382,26 @@ class HumanReportTests(unittest.TestCase):
 
 
 class BatchSpaceTests(unittest.TestCase):
+    def test_cli_imgsz_choices_deduplicate_and_validate_before_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)/'data.yaml'
+            data.write_text('train: images/train\nval: images/val\ntest: images/test\nnames: [cat]\n')
+            base = ['tune.py', '--data', str(data), '--dry-run']
+            for mode in ('standard', 'prune'):
+                with patch('sys.argv', base + ['--mode', mode, '--imgsz', '640', '1280', '640']), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    search_yolo.main()
+                plan = json.loads(output.getvalue())
+                self.assertEqual(plan['imgsz_choices'], [640, 1280])
+                self.assertTrue(plan['imgsz_search'])
+                self.assertEqual(plan['baseline']['imgsz'], 640)
+                self.assertEqual(plan['max_total_trials'], len(search_yolo.MODELS)*plan['rounds'])
+            for extra in (['--imgsz', '640', '0'], ['--mode', 'progressive', '--imgsz', '640', '1280'],
+                          ['--test-only', '--imgsz', '640', '1280']):
+                with self.subTest(extra=extra), patch('sys.argv', base + extra), \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    search_yolo.main()
+
     def test_tune_cli_flip_probability_and_experiment_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp)/'data.yaml'
@@ -425,13 +488,16 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(model.train.call_args.kwargs['optimizer'], 'AdamW')
             self.assertEqual(model.train.call_args.kwargs['lr0'], .002)
             self.assertEqual(model.train.call_args.kwargs['batch'], 256)
+            self.assertEqual(model.train.call_args.kwargs['imgsz'], 640)
             self.assertFalse(model.train.call_args.kwargs['cache'])
             self.assertEqual(model.train.call_args.kwargs['fliplr'], 0.5)
             self.assertEqual(result['checkpoint_sha256'], digest(directory/'weights/best.pt'))
             directory = Path(tmp)/'no_flip'
             with patch.dict('sys.modules', {'ultralytics':sdk, 'torch':SimpleNamespace(__version__='fake')}):
-                execute({**job, 'train_dir':str(directory), 'fliplr':0})
+                execute({**job, 'train_dir':str(directory), 'fliplr':0, 'imgsz':1280,
+                         'params':{**job['params'], 'imgsz':1280}})
             self.assertEqual(model.train.call_args.kwargs['fliplr'], 0)
+            self.assertEqual(model.train.call_args.kwargs['imgsz'], 1280)
 
     def test_recovery_of_finished_checkpoint_skips_training(self):
         with tempfile.TemporaryDirectory() as tmp:

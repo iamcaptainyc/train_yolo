@@ -74,8 +74,8 @@ def write_report(root, records, winners, models, complete=False):
     lines += ['', '## 按模型查看每次尝试', '']
     for model in models:
         lines += [f'### {model}', '',
-                  '| 候选 | 状态 | 验证 mAP50-95 | 较基线 | 测试 mAP50-95 | batch | 优化器配置 | lr0 | weight_decay | mosaic |',
-                  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+                  '| 候选 | 状态 | 验证 mAP50-95 | 较基线 | 测试 mAP50-95 | imgsz | batch | 优化器配置 | lr0 | weight_decay | mosaic |',
+                  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |']
         for r in sorted((r for r in records if r['model'] == model), key=lambda r: r['trial']):
             status = {'COMPLETE': '训练与验证完成', 'RUNNING': '未完成', 'FAIL': '失败',
                       'PRUNED': f"提前淘汰（第 {r['train'].get('pruned_epoch', '?')} 轮）"}.get(r['state'], r['state'])
@@ -94,7 +94,8 @@ def write_report(root, records, winners, models, complete=False):
                 tag += ' ★'
             params = r['params']
             values = ' | '.join(cell(params.get(k, '默认/自动')) for k in ('batch', 'optimizer', 'lr0', 'weight_decay', 'mosaic'))
-            lines.append(f"| {tag} | {status} | {metric(r, 'val', 'map50_95')} | {delta(r, baselines.get(model))} | {metric(r, 'test', 'map50_95')} | {values} |")
+            imgsz = r.get('config', {}).get('imgsz', '—')
+            lines.append(f"| {tag} | {status} | {metric(r, 'val', 'map50_95')} | {delta(r, baselines.get(model))} | {metric(r, 'test', 'map50_95')} | {imgsz} | {values} |")
         lines.append('')
     lines += ['## 获胜候选与日志', '']
     for size, r in winners.items():

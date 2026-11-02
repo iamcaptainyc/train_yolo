@@ -71,6 +71,18 @@ class EpochGPU:
 
 
 class ModeTests(unittest.TestCase):
+    def test_prune_uses_sampled_size_for_training_and_evaluation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), 'prune'), EpochGPU()
+            args.imgsz_choices = [640, 1280]
+            self.run_fake(args, gpu)
+            training = [j for j in gpu.calls if j['phase'] == 'train']
+            self.assertEqual({j['imgsz'] for j in training}, {640, 1280})
+            for job in gpu.calls:
+                if job['phase'] != 'prepare':
+                    self.assertEqual(job['imgsz'], job['params']['imgsz'])
+                    self.assertEqual(job['eval_imgsz'], job['imgsz'])
+
     def test_every_complete_trial_tests_before_next_training_in_both_stages(self):
         with tempfile.TemporaryDirectory() as tmp:
             args,gpu=self.args(Path(tmp),'progressive'),EpochGPU()

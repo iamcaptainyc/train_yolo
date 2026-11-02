@@ -260,6 +260,8 @@ python tune.py --data yolo_datasets/sentrymode_data_v2/data.yaml --mode prune --
 
 `train.py --resume` 沿用检查点的翻转概率；可重复传入相同的 `--fliplr`，传入不同值会报错。要改变概率，使用 `--model .../last.pt --fliplr 0 --name 新实验名` 开始新训练。`tune.py` 中改变概率会生成新的自动实验目录；显式指定 `--output` 时需选择新目录。
 
+`tune.py` 的 `standard` 和 `prune` 模式支持 `--imgsz 640 1280`，在同一 Optuna study 内搜索输入尺寸。每个 trial 的训练、验证及测试使用其选中的尺寸；`--trials` 为每模型总次数，不按尺寸翻倍。单个 `--imgsz 640` 保持固定尺寸用法，详情见 [调参说明](docs/model_search.md)。
+
 在相同划分、图像尺寸、epoch、batch 和硬件条件下比较两个模型。相同 seed 不保证不同硬件/库版本的结果完全一致，早停也可能使实际 epoch 不同。
 
 断点恢复（仅用于中断、尚未完成的训练）：

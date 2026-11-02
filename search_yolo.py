@@ -21,7 +21,7 @@ from search_report import write_report
 MODELS = ('yolov8n.pt', 'yolov8s.pt', 'yolo11n.pt', 'yolo11s.pt')
 BASELINE = {'batch': 64, 'optimizer': 'auto'}
 SEARCH_ANCHOR = {'lr0': 0.001, 'weight_decay': 0.0005, 'mosaic': 1.0}
-PARAM_FIELDS = ['batch', 'optimizer', 'lr0', 'weight_decay', 'mosaic']
+PARAM_FIELDS = ['batch', 'optimizer', 'lr0', 'weight_decay', 'mosaic', 'imgsz']
 SPACE_VERSION = 3
 BATCH_CHOICES = [64, 128, 256]
 
@@ -30,6 +30,10 @@ def selected_models(args):
     requested = getattr(args, 'models', None) or MODELS
     # Canonical order makes equivalent selections share a resumable experiment.
     return tuple(model for model in MODELS if model in requested)
+
+
+def image_sizes(args):
+    return getattr(args, 'imgsz_choices', None) or [args.imgsz]
 
 
 def trial_directory(root, model, number):
@@ -48,6 +52,8 @@ def experiment_identity(args):
     # Keep legacy default experiment paths resumable; non-default augmentation is isolated.
     if getattr(args, 'fliplr', 0.5) != 0.5:
         identity['fliplr'] = args.fliplr
+    if len(image_sizes(args)) > 1:
+        identity['imgsz_choices'] = image_sizes(args)
     if getattr(args, 'mode', 'standard') != 'standard':
         identity.update(mode=args.mode, pruning_version=1, prune_epochs=args.prune_epochs)
         if args.mode == 'progressive':
@@ -107,13 +113,16 @@ def read_json(path, default=None):
     return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else default
 
 
-def sample_params(trial, fixed_batch=None):
+def sample_params(trial, fixed_batch=None, imgsz_choices=None):
     # Compact space: optimizer/schedule/color augmentation retain stable choices.
-    return {'batch': trial.suggest_categorical('batch', [fixed_batch] if fixed_batch is not None else BATCH_CHOICES),
-            'optimizer': 'AdamW',
-            'lr0': trial.suggest_float('lr0', 1e-4, 3e-3, log=True),
-            'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
-            'mosaic': trial.suggest_float('mosaic', 0.0, 1.0)}
+    params = {'batch': trial.suggest_categorical('batch', [fixed_batch] if fixed_batch is not None else BATCH_CHOICES),
+              'optimizer': 'AdamW',
+              'lr0': trial.suggest_float('lr0', 1e-4, 3e-3, log=True),
+              'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
+              'mosaic': trial.suggest_float('mosaic', 0.0, 1.0)}
+    if imgsz_choices and len(imgsz_choices) > 1:
+        params['imgsz'] = trial.suggest_categorical('imgsz', imgsz_choices)
+    return params
 
 
 def valid_evaluation(result, phase=None):
@@ -335,6 +344,7 @@ def search_studies(args, root, initial, storage, plans=None):
     studies = {}
     pruning = getattr(args, 'mode', 'standard') != 'standard'
     milestones = [e for e in getattr(args, 'prune_epochs', []) if e < args.epochs]
+    sizes = image_sizes(args)
     if pruning:
         from search_pruning import MilestonePruner
     for model in selected_models(args):
@@ -350,7 +360,9 @@ def search_studies(args, root, initial, storage, plans=None):
             else:
                 study.enqueue_trial({})  # Official auto-optimizer baseline; no lr override.
                 for batch in ([args.batch] if args.batch is not None else BATCH_CHOICES):
-                    study.enqueue_trial({**SEARCH_ANCHOR, 'batch': batch})
+                    for size in sizes:
+                        study.enqueue_trial({**SEARCH_ANCHOR, 'batch': batch,
+                                             **({'imgsz': size} if len(sizes) > 1 else {})})
         studies[model] = study
     refresh_reports(root, studies)
 
@@ -393,19 +405,21 @@ def search_studies(args, root, initial, storage, plans=None):
                 if plans is not None:
                     params = plans[model][number]['params']
                 elif number == 0:
-                    params = {**BASELINE, 'batch': args.batch or BASELINE['batch']}
+                    params = {**BASELINE, 'batch': args.batch or BASELINE['batch'],
+                              **({'imgsz': sizes[0]} if len(sizes) > 1 else {})}
                 else:
-                    params = sample_params(candidate, args.batch)
+                    params = sample_params(candidate, args.batch, sizes)
                 config = {**{k: getattr(args, k) for k in ('epochs', 'imgsz', 'batch', 'patience', 'seed', 'amp')},
                           'data': str(args.data), 'model': model, 'trial': number, 'trial_dir': str(directory),
                           'initial_checkpoint': initial[model], 'params': params,
                           'fliplr': getattr(args, 'fliplr', 0.5)}
                 config['batch'] = config['params']['batch']
+                config['imgsz'] = config['params'].get('imgsz', args.imgsz)
                 if plans is not None:
                     config['parent'] = plans[model][number]['parent']
                 if pruning:
                     config.update(stage=getattr(args, 'stage', 'full'),
-                                  eval_imgsz=getattr(args, 'eval_imgsz', args.imgsz),
+                                  eval_imgsz=getattr(args, 'eval_imgsz', config['imgsz']),
                                   pruning={'storage': str(storage.url), 'study': Path(model).stem,
                                            'milestones': milestones, 'baseline': number == 0})
                 write_json(directory/'config.json', config)
@@ -588,7 +602,8 @@ def main():
     p.add_argument('--trials', type=int, default=8, help='Target total trial attempts per model, including previous attempts')
     p.add_argument('--epochs', type=int, default=None, help='Epoch horizon: standard=100, progressive/prune=250')
     p.add_argument('--patience', type=int, default=20)
-    p.add_argument('--imgsz', type=int, default=640)
+    p.add_argument('--imgsz', type=int, nargs='+', default=[640],
+                   help='Training size, or Optuna categorical choices, e.g. 640 1280 (standard/prune)')
     p.add_argument('--batch', type=int, default=None,
                    help='Fix training batch instead of searching the default choices 64/128/256')
     p.add_argument('--eval-batch', type=int, default=32)
@@ -602,6 +617,12 @@ def main():
                    help='Default: test each COMPLETE trial immediately; final explicitly tests only final winners')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
+    args.imgsz_choices = list(dict.fromkeys(args.imgsz))
+    args.imgsz = args.imgsz_choices[0]
+    if any(size < 1 for size in args.imgsz_choices):
+        p.error('--imgsz values must be positive')
+    if len(args.imgsz_choices) > 1 and (args.mode == 'progressive' or args.test_only):
+        p.error('Multiple --imgsz choices require standard/prune training; progressive and test-only use a single size')
     if not 0 <= args.fliplr <= 1:
         p.error('--fliplr must be between 0 and 1')
     args.epochs = args.epochs if args.epochs is not None else (100 if args.mode == 'standard' else 250)
@@ -644,10 +665,13 @@ def main():
                               'max_total_trials': len(selected_models(args))*(args.trials + min(args.trials, args.promote+1))
                                   if args.mode == 'progressive' else len(selected_models(args))*args.trials,
                               'max_epochs_per_trial': args.epochs,
+                              'imgsz_choices': args.imgsz_choices,
+                              'imgsz_search': len(args.imgsz_choices) > 1,
                               'batch_choices': [args.batch] if args.batch is not None else BATCH_CHOICES,
                               'eval_batch': args.eval_batch, 'workers': args.workers, 'fliplr': args.fliplr,
                               'selection_metric': 'validation mAP50-95', 'test_policy': args.test_policy,
-                              'output': str(args.output), 'baseline': {**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch']}}, indent=2))
+                              'output': str(args.output), 'baseline': {**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch'],
+                                                                      'imgsz': args.imgsz}}, indent=2))
             return
         from filelock import FileLock, Timeout
         args.output.mkdir(parents=True, exist_ok=True)

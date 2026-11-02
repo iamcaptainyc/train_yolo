@@ -49,6 +49,20 @@ python tune.py \
 
 两种模式均无需手动命名，支持 `--dry-run` 预览；只训练一个模型就只传一个模型名。两个新模式未指定 `--batch` 时固定为 64；`--batch 128` 固定为 128。本次保留现有 lr0/weight_decay/mosaic 搜索空间，没有引入额外参数或修改网络结构。
 
+### 将输入尺寸作为 Optuna 搜索参数
+
+`standard` 和 `prune` 支持 `--imgsz 640 1280`：在同一个模型的同一个 Optuna study 中，通过 `suggest_categorical` 选择输入尺寸，并与学习率、权重衰减、mosaic 等参数联合搜索，不按尺寸拆成多个实验。每个 trial 从开始到结束使用同一个尺寸，训练、验证和测试尺寸一致。
+
+```bash
+python tune.py --mode prune --data yolo_datasets/sentrymode_data_v2/data.yaml --models yolov8n.pt yolo11n.pt --trials 20 --imgsz 640 1280 --epochs 250 --prune-epochs 30 80 --batch 128 --eval-batch 128 --workers 16 --device 0 --fliplr 0
+```
+
+`--trials 20` 仍表示每模型累计 20 次尝试，两个模型共 40 次，并非每个尺寸各 20 次。auto 基线使用第一个尺寸；之后的 AdamW 固定参考点按 batch 和尺寸组合排队，再由 TPE 搜索。预算较少时不保证跑完所有参考点。重复的尺寸会去重；只传一个尺寸时保持旧行为，默认仍是 640。
+
+尺寸候选列表参与实验指纹：相同命令可以恢复，增加 trials 可以续搜；修改候选尺寸需新实验，显式指定旧 `--output` 会报错。报告逐候选显示 `imgsz`，`iterations.csv` 记录实际 `train_imgsz` 和 `eval_imgsz`。不同尺寸也按验证集 mAP50-95 选优，尺寸增大后的速度、显存消耗应另行比较。
+
+`progressive` 保留 `--search-imgsz` 小尺寸筛选、单个 `--imgsz` 正式尺寸的原有语义，不能同时传多个正式尺寸；`--test-only` 使用保存的候选尺寸补测，也不接受多尺寸搜索列表。
+
 ### 水平翻转概率
 
 三种模式均支持 `--fliplr 0` 关闭水平翻转；默认 `0.5`，可设置为 0～1 的任意概率，`1` 表示必定翻转。它是所有候选共用的固定训练设置，不参与 Optuna 搜索；基线、小尺寸筛选及晋级正式训练都使用该值。`--dry-run` 会显示概率，各候选 `config.json` 也会记录。
