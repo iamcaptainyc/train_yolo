@@ -137,7 +137,7 @@ def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='
         x2, y2 = min(width-1, round((x+w/2)*width)), min(height-1, round((y+h/2)*height))
         x1, y1 = min(x1, x2), min(y1, y2)
         color = class_color(cid)
-        draw.rectangle((x1, y1, x2, y2), fill=(*color, 64), outline=(*color, 255), width=line_width)
+        draw.rectangle((x1, y1, x2, y2), outline=(*color, 128), width=line_width)
     entries = [(class_color(cid), f'{cid}: {names[cid]}' if cid in names else str(cid))
                for cid in sorted({box[0] for box in boxes})]
     if not entries:

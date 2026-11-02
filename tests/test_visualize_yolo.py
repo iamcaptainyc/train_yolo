@@ -93,11 +93,12 @@ class VisualizeTests(unittest.TestCase):
             header = preview.height - 100
             self.assertEqual(preview.width, 200)
             self.assertGreater(header, 0)
-            self.assertEqual(preview.getpixel((100, header + 70)), class_color(0))
+            expected_border = tuple(round(c * 128/255 + 255 * 127/255) for c in class_color(0))
+            self.assertEqual(preview.getpixel((100, header + 70)), expected_border)
             self.assertEqual(preview.getpixel((100, header + 80)), (255, 255, 255))
-            # Interior retains the underlying scene through a 25% color tint.
-            expected = tuple(round(c * 64/255 + 255 * 191/255) for c in class_color(0))
-            self.assertEqual(preview.getpixel((100, header + 50)), expected)
+            # The entire box interior stays untouched; only the border is blended.
+            interior = preview.crop((63, header + 33, 138, header + 68))
+            self.assertIsNone(ImageChops.difference(interior, Image.new('RGB', interior.size, 'white')).getbbox())
             for row in ('0 0.5 0.5 0 0.4', '0 1 0.5 0.4 0.4', '1 0.5 0.5 0.4 0.4',
                         '0 0.5 0.5 0.4 0.4 0.6 0.7', '-1 0.5 0.5 0.4 0.4'):
                 label.write_text(row)
