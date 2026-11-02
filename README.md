@@ -196,6 +196,8 @@ python visualize_yolo.py --source datasets/animals_yolo --output runs/labels_pre
 
 默认随机抽取 100 张，支持 YAML、图片目录或单张图片，`--split val` 限定验证集，`--limit 0` 导出全部；详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
 
+检查某一类的全部标注图片，可用 `python visualize_yolo.py --source yolo_datasets/sentrymode_data_v2 --classes left_green --output runs/left_green_preview`。`--classes` 支持类别名称或 ID；指定后默认导出全部匹配图片，仅显示所选类别框，也可用 `--limit` 抽样。
+
 ### AutoDL 首轮训练
 
 已下载且使用默认自动命名目录时，直接执行：

@@ -36,7 +36,7 @@ class VisualizeTests(unittest.TestCase):
                 image = self.make_image(root/'dataset', layout+'/nested/cat.png')
                 config = {'names': ['猫'], 'train': layout}
                 (root/'dataset/data.yaml').write_text(yaml.safe_dump(config), encoding='utf-8')
-                report = self.run_quiet(root/'dataset', root/'out', split='train')
+                report = self.run_quiet(root/'dataset', root/'out', split='train', classes=['猫'])
                 self.assertEqual(report['names'], {0: '猫'})
                 self.assertEqual(report['counts'], {'ok': 1})
                 self.assertEqual(report['images'][0]['image'], str(image.resolve()))
@@ -49,13 +49,78 @@ class VisualizeTests(unittest.TestCase):
             image = self.make_image(root/'dataset', 'images/a.png', label=None)
             (root/'custom').mkdir()
             (root/'custom/a.txt').write_text('7 0.5 0.5 0.4 0.4\n')
-            report = self.run_quiet(image.parent, root/'out', labels=root/'custom')
+            report = self.run_quiet(image.parent, root/'out', labels=root/'custom', classes=['7'])
             self.assertEqual(report['counts'], {'ok': 1})
             self.assertEqual(report['names'], {})
             # Flat datasets without metadata are also accepted.
             images, _, names = collect_source(root/'dataset')
             self.assertEqual(images, [image.resolve()])
             self.assertEqual(names, {})
+
+    def test_class_name_exports_all_matches_beyond_default_sample_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(101):
+                self.make_image(root/'dataset', f'images/{index:03d}.png')
+            self.make_image(root/'dataset', 'images/other.png', '1 0.5 0.5 0.4 0.4\n')
+            self.make_image(root/'dataset', 'images/empty.png', '')
+            (root/'dataset/data.yaml').write_text('names: [left_green, person]\n')
+            report = self.run_quiet(root/'dataset', root/'all', classes=['left_green'])
+            self.assertEqual(report['total_images'], 103)
+            self.assertEqual(report['matched_images'], 101)
+            self.assertEqual(report['selected_images'], 101)
+            self.assertEqual(report['counts'], {'ok': 101})
+            self.assertEqual(report['classes'], [0])
+            self.assertEqual(report['limit'], 0)
+            self.assertEqual(len(list((root/'all').glob('*.jpg'))), 101)
+            unfiltered = self.run_quiet(root/'dataset', root/'default')
+            self.assertEqual(unfiltered['selected_images'], 100)
+            self.assertEqual(unfiltered['limit'], 100)
+
+    def test_class_filter_samples_after_matching_and_draws_only_selected_boxes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(8):
+                self.make_image(root/'dataset', f'images/target{index}.png',
+                                '0 0.5 0.5 0.4 0.4\n1 0.2 0.2 0.2 0.2\n2 0.8 0.8 0.2 0.2\n')
+            for index in range(12):
+                self.make_image(root/'dataset', f'images/other{index}.png', '1 0.5 0.5 0.4 0.4\n')
+            (root/'dataset/data.yaml').write_text('names: [left_green, person, right_green]\n')
+            with patch('visualize_yolo.render_image', wraps=render_image) as render:
+                first = self.run_quiet(root/'dataset', root/'one', classes=['left_green', '2'], limit=3)
+            second = self.run_quiet(root/'dataset', root/'two', classes=['0', 'right_green'], limit=3)
+            self.assertEqual(first['images'], second['images'])
+            self.assertEqual(first['matched_images'], 8)
+            self.assertEqual(first['selected_images'], 3)
+            self.assertEqual(first['classes'], [0, 2])
+            self.assertEqual(render.call_count, 3)
+            for call in render.call_args_list:
+                self.assertEqual({box[0] for box in call.args[1]}, {0, 2})
+            self.assertTrue(all(record['boxes'] == 2 for record in first['images']))
+
+    def test_class_filter_reports_scan_errors_and_handles_no_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.make_image(root/'dataset', 'images/good.png')
+            self.make_image(root/'dataset', 'images/missing.png', None)
+            self.make_image(root/'dataset', 'images/bad.png', '0 nan 0.5 0.4 0.4\n')
+            self.make_image(root/'dataset', 'images/empty.png', '')
+            (root/'dataset/data.yaml').write_text('names: [left_green, person]\n')
+            report = self.run_quiet(root/'dataset', root/'out', classes=['0'])
+            self.assertEqual(report['matched_images'], 1)
+            self.assertEqual(report['counts'], {'ok': 1, 'failed': 1, 'missing_label': 1})
+            self.assertEqual(len(report['scan_issues']), 2)
+            self.assertTrue(all(issue.get('error') for issue in report['scan_issues']))
+            single = root/'dataset/images/good.png'
+            empty = self.run_quiet(single, root/'none', data=root/'dataset/data.yaml', classes=['person'])
+            self.assertEqual(empty['matched_images'], 0)
+            self.assertEqual(empty['selected_images'], 0)
+            self.assertEqual(empty['images'], [])
+            self.assertTrue((root/'none/report.json').is_file())
+            for classes in (['unknown'], ['99'], []):
+                with self.subTest(classes=classes), self.assertRaises(ValueError):
+                    self.run_quiet(root/'dataset', root/'invalid', classes=classes)
+                self.assertFalse((root/'invalid').exists())
 
     def test_external_yaml_lists_and_deduplication(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,10 +233,20 @@ class VisualizeTests(unittest.TestCase):
             command = [sys.executable, '-X', 'utf8', str(script), '--source', str(image), '--data', str(data)]
             result = subprocess.run(command + ['--output', str(root/'out')], capture_output=True, encoding='utf-8')
             self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(command + ['--classes', 'cat', '--output', str(root/'cat')],
+                                    capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads((root/'cat/report.json').read_text())['classes'], [0])
             (root/'labels/a.txt').unlink()
             result = subprocess.run(command + ['--output', str(root/'missing')], capture_output=True, encoding='utf-8')
             self.assertEqual(result.returncode, 1, result.stderr)
             report = json.loads((root/'missing/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['counts'], {'missing_label': 1})
+            result = subprocess.run(command + ['--classes', '0', '--output', str(root/'scan_missing')],
+                                    capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 1, result.stderr)
+            report = json.loads((root/'scan_missing/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['matched_images'], 0)
             self.assertEqual(report['counts'], {'missing_label': 1})
 
 

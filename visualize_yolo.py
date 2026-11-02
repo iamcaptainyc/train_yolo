@@ -1,4 +1,4 @@
-"""Export sampled YOLO detection annotations as images without loading a model."""
+"""Export YOLO detection previews, optionally filtering by class, without loading a model."""
 from __future__ import annotations
 
 import argparse
@@ -73,6 +73,48 @@ def read_boxes(path, names):
             for line in raw.decode('utf-8-sig').splitlines() if (row := line.split())]
 
 
+def parse_classes(values, names):
+    if values is None:
+        return None
+    selected = set()
+    for value in values:
+        text = str(value)
+        if text.isdecimal():
+            cid = int(text)
+            if names and cid not in names:
+                raise ValueError(f'Unknown class ID: {cid}')
+            selected.add(cid)
+        else:
+            matches = {cid for cid, name in names.items() if name == text}
+            if not matches:
+                raise ValueError(f'Unknown class name: {text!r}; use a numeric ID or provide --data with class names')
+            selected.update(matches)
+    if not selected:
+        raise ValueError('Provide at least one class ID or name')
+    return selected
+
+
+def filter_images(images, root, names, labels, class_ids):
+    matches, issues = [], []
+    for image in images:
+        record = {'image': str(image)}
+        try:
+            label = resolve_label(image, root, labels)
+            record['label'] = str(label)
+            if not label.is_file():
+                record.update(status='missing_label', error='Missing label; class membership cannot be determined')
+                issues.append(record)
+                continue
+            if any(box[0] in class_ids for box in read_boxes(label, names)):
+                matches.append(image)
+        except (OSError, ValueError) as exc:
+            record.update(status='failed', error=str(exc))
+            issues.append(record)
+    for issue in issues:
+        print(f'Label scan: {issue["image"]}: {issue["error"]}', file=sys.stderr)
+    return matches, issues
+
+
 def load_font(path=None, size=18):
     if path:
         return ImageFont.truetype(str(path), size)
@@ -145,11 +187,14 @@ def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='
     return draw_legend(image, entries, font)
 
 
-def visualize(source, output, *, split='all', data=None, labels=None, limit=100,
-              seed=42, max_size=1600, line_width=3, font=None):
-    if limit < 0 or max_size < 1 or line_width < 1:
+def visualize(source, output, *, split='all', data=None, labels=None, limit=None,
+              seed=42, max_size=1600, line_width=3, font=None, classes=None):
+    if (limit is not None and limit < 0) or max_size < 1 or line_width < 1:
         raise ValueError('limit must be >= 0; max-size and line-width must be > 0')
     images, root, names = collect_source(source, split, data)
+    class_ids = parse_classes(classes, names)
+    if limit is None:
+        limit = 0 if class_ids is not None else 100
     output = Path(output).expanduser().resolve()
     labels = Path(labels).expanduser().resolve() if labels else None
     if labels is not None and not labels.is_dir():
@@ -158,7 +203,12 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=100,
         raise ValueError(f'Use a new output directory: {output}')
     loaded_font = load_font(font)
     total = len(images)
-    if limit and total > limit:
+    scan_issues = []
+    if class_ids is not None:
+        images, scan_issues = filter_images(images, root, names, labels, class_ids)
+        print(f'Class filter {sorted(class_ids)}: {len(images)}/{total} matching images')
+    matched = len(images)
+    if limit and matched > limit:
         images = sorted(random.Random(seed).sample(images, limit), key=str)
     output.mkdir(parents=True)
     records = []
@@ -168,6 +218,10 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=100,
             label = resolve_label(image, root, labels)
             record['label'] = str(label)
             boxes = read_boxes(label, names) if label.is_file() else []
+            if class_ids is not None:
+                boxes = [box for box in boxes if box[0] in class_ids]
+                if not boxes:
+                    raise ValueError('Selected class annotations changed since the label scan')
             status = 'missing_label' if not label.is_file() else ('ok' if boxes else 'empty_label')
             preview = render_image(image, boxes, names, loaded_font, max_size, line_width, status)
             # Index avoids collisions, including external YAML paths and jpg/png twins.
@@ -178,10 +232,11 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=100,
             record.update(status='failed', error=str(exc))
             print(f'Failed: {image}: {exc}', file=sys.stderr)
         records.append(record)
-    counts = dict(Counter(r['status'] for r in records))
+    counts = dict(Counter(r['status'] for r in [*records, *scan_issues]))
     report = {'source': str(Path(source).expanduser().resolve()), 'split': split, 'seed': seed,
-              'total_images': total, 'selected_images': len(images), 'counts': counts,
-              'names': names, 'images': records}
+              'total_images': total, 'matched_images': matched, 'selected_images': len(images), 'counts': counts,
+              'classes': sorted(class_ids) if class_ids is not None else None, 'limit': limit,
+              'names': names, 'images': records, 'scan_issues': scan_issues}
     (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(f'Previewed {len(images)}/{total} images: {counts}\nOutput: {output}')
     return report
@@ -194,7 +249,9 @@ def main(argv=None):
     parser.add_argument('--data', help='Optional dataset YAML supplying class names')
     parser.add_argument('--labels', help='Labels directory mirroring the selected image directory')
     parser.add_argument('--split', choices=('all', 'train', 'val', 'test'), default='all')
-    parser.add_argument('--limit', type=int, default=100, help='Random sample size; 0 exports all images (default: 100)')
+    parser.add_argument('--classes', nargs='+', help='Class IDs or exact names; export matching images and draw only these classes')
+    parser.add_argument('--limit', type=int, default=None,
+                        help='Random sample size; 0 exports all (default: all matches with --classes, otherwise 100)')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--max-size', type=int, default=1600, help='Maximum preview width/height')
     parser.add_argument('--line-width', type=int, default=3, help='Box stroke in preview pixels')
