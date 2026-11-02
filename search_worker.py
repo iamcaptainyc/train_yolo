@@ -130,6 +130,7 @@ def execute_stage(job, reporter=None):
                         patience=job['patience'], amp=job['amp'], cache=False, save=True, val=True,
                         project=str(directory.parent), name=directory.name, exist_ok=True,
                         close_mosaic=min(10, max(0, job['epochs']//5)), plots=True,
+                        fliplr=job.get('fliplr', 0.5),
                         **train_options,
                         **{'batch': job['batch'], **job['params']})
         if not best.is_file():

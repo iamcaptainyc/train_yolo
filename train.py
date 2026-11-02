@@ -25,7 +25,14 @@ def main():
     p.add_argument('--conf', type=float, default=0.25, help='Prediction confidence only; validation uses Ultralytics default')
     p.add_argument('--cache', choices=['false', 'ram', 'disk'], default='false')
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--fliplr', type=float, default=None,
+                   help='Horizontal flip probability, 0 disables (new training default: 0.5; resume: saved value)')
     args = p.parse_args()
+    if args.fliplr is not None:
+        if not 0 <= args.fliplr <= 1:
+            p.error('--fliplr must be between 0 and 1')
+        if args.mode != 'train':
+            p.error('--fliplr is available only in train mode')
     if args.resume and args.mode != 'train':
         p.error('--resume is available only in train mode')
     if args.resume and not args.resume.is_file():
@@ -42,6 +49,10 @@ def main():
     install_phase_logging(model)
     device = {'device': args.device} if args.device is not None else {}
     if args.resume:
+        saved_fliplr = (model.ckpt or {}).get('train_args', {}).get('fliplr', 0.5)
+        if args.fliplr is not None and args.fliplr != saved_fliplr:
+            p.error('--fliplr differs from the checkpoint. Resume keeps saved settings; '
+                    'use --model CHECKPOINT with a new --name to start training with a different probability')
         model.train(resume=True, **device)
     elif args.mode == 'train':
         result = model.train(
@@ -50,7 +61,7 @@ def main():
             patience=args.patience, project=args.project,
             name=args.name or Path(args.model).stem, amp=args.amp,
             cache=False if args.cache == 'false' else args.cache,
-            val=True, plots=True, **device,
+            val=True, plots=True, fliplr=0.5 if args.fliplr is None else args.fliplr, **device,
         )
         print(f'Training output: {result.save_dir}')
         print('Evaluate weights/best.pt on the held-out test split with --mode val.')

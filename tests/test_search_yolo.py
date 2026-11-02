@@ -304,6 +304,31 @@ class SearchIntegrationTests(unittest.TestCase):
                 self.run_fake(args, gpu)
             self.assertEqual(len(gpu.calls), count)
 
+    def test_fliplr_isolates_experiments_and_reaches_all_trials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args, gpu = self.args(Path(tmp), trials=2), FakeGPU()
+            args.models = ['yolo11n.pt']
+            original_output = search_yolo.automatic_output(args)
+            args.fliplr = 0.5
+            self.assertEqual(search_yolo.automatic_output(args), original_output)
+            self.run_fake(args, gpu)
+            self.assertTrue(all(j['fliplr'] == 0.5 for j in gpu.calls if j['phase'] == 'train'))
+            args.fliplr = 0
+            self.assertNotEqual(search_yolo.automatic_output(args), original_output)
+            count = len(gpu.calls)
+            with self.assertRaisesRegex(ValueError, 'configuration/data changed'):
+                self.run_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)
+            args.output = Path(tmp)/'no_flip'
+            args.output.mkdir()
+            self.run_fake(args, gpu)
+            jobs = [j for j in gpu.calls[count:] if j['phase'] == 'train']
+            self.assertEqual(len(jobs), 2)
+            self.assertTrue(all(j['fliplr'] == 0 for j in jobs))
+            count = len(gpu.calls)
+            self.run_fake(args, gpu)
+            self.assertEqual(len(gpu.calls), count)
+
 
 class HumanReportTests(unittest.TestCase):
     def test_missing_and_zero_metrics_are_distinct(self):
@@ -314,6 +339,28 @@ class HumanReportTests(unittest.TestCase):
 
 
 class BatchSpaceTests(unittest.TestCase):
+    def test_tune_cli_flip_probability_and_experiment_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)/'data.yaml'
+            data.write_text('train: images/train\nval: images/val\ntest: images/test\nnames: [cat]\n')
+            outputs = set()
+            for probability in (0, 0.25, 0.5, 1):
+                output = io.StringIO()
+                with patch('sys.argv', ['tune.py', '--data', str(data), '--dry-run', '--fliplr', str(probability)]), \
+                        contextlib.redirect_stdout(output):
+                    search_yolo.main()
+                plan = json.loads(output.getvalue())
+                self.assertEqual(plan['fliplr'], probability)
+                self.assertFalse(Path(plan['output']).exists())
+                outputs.add(plan['output'])
+            self.assertEqual(len(outputs), 4)
+            for probability in ('-0.1', '1.1', 'nan', 'inf'):
+                with self.subTest(probability=probability), \
+                        patch('sys.argv', ['tune.py', '--fliplr='+probability]), \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exc:
+                    search_yolo.main()
+                self.assertEqual(exc.exception.code, 2)
+
     def test_each_batch_choice_is_sampled_as_a_category(self):
         for batch in (64, 128, 256):
             with self.subTest(batch=batch):
@@ -379,7 +426,12 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(model.train.call_args.kwargs['lr0'], .002)
             self.assertEqual(model.train.call_args.kwargs['batch'], 256)
             self.assertFalse(model.train.call_args.kwargs['cache'])
+            self.assertEqual(model.train.call_args.kwargs['fliplr'], 0.5)
             self.assertEqual(result['checkpoint_sha256'], digest(directory/'weights/best.pt'))
+            directory = Path(tmp)/'no_flip'
+            with patch.dict('sys.modules', {'ultralytics':sdk, 'torch':SimpleNamespace(__version__='fake')}):
+                execute({**job, 'train_dir':str(directory), 'fliplr':0})
+            self.assertEqual(model.train.call_args.kwargs['fliplr'], 0)
 
     def test_recovery_of_finished_checkpoint_skips_training(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -251,6 +251,15 @@ python train.py --model yolo26s.pt --epochs 100 --imgsz 640 --batch 8 --device 0
 
 训练从预训练权重微调；默认 seed=42、早停 patience=30、AMP 开启、不缓存图片。显存不足先降低 `--batch`，再考虑 `n` 模型或降低 `--imgsz`。Windows 默认 `--workers 0`，确认稳定后可调到 2 或 4。需要关闭混合精度可用 `--no-amp`。重复运行时 Ultralytics 会自动创建带序号的新目录，以下命令中的权重路径应按实际输出修改。
 
+`train.py` 和 `tune.py` 均支持 `--fliplr` 调整水平翻转概率：`--fliplr 0` 关闭，`--fliplr 0.5` 为新训练默认值，`--fliplr 1` 每次翻转，范围为 0～1。例如：
+
+```bash
+python train.py --data yolo_datasets/sentrymode_data_v2/data.yaml --model yolo11n.pt --fliplr 0 --name yolo11n_no_flip
+python tune.py --data yolo_datasets/sentrymode_data_v2/data.yaml --mode prune --models yolov8n.pt yolo11n.pt --fliplr 0
+```
+
+`train.py --resume` 沿用检查点的翻转概率；可重复传入相同的 `--fliplr`，传入不同值会报错。要改变概率，使用 `--model .../last.pt --fliplr 0 --name 新实验名` 开始新训练。`tune.py` 中改变概率会生成新的自动实验目录；显式指定 `--output` 时需选择新目录。
+
 在相同划分、图像尺寸、epoch、batch 和硬件条件下比较两个模型。相同 seed 不保证不同硬件/库版本的结果完全一致，早停也可能使实际 epoch 不同。
 
 断点恢复（仅用于中断、尚未完成的训练）：

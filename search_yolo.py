@@ -45,6 +45,9 @@ def experiment_identity(args):
         'patience': args.patience, 'seed': args.seed, 'amp': args.amp,
         'space_version': SPACE_VERSION, 'test_policy': args.test_policy,
         'metric': 'validation mAP50-95'}
+    # Keep legacy default experiment paths resumable; non-default augmentation is isolated.
+    if getattr(args, 'fliplr', 0.5) != 0.5:
+        identity['fliplr'] = args.fliplr
     if getattr(args, 'mode', 'standard') != 'standard':
         identity.update(mode=args.mode, pruning_version=1, prune_epochs=args.prune_epochs)
         if args.mode == 'progressive':
@@ -395,7 +398,8 @@ def search_studies(args, root, initial, storage, plans=None):
                     params = sample_params(candidate, args.batch)
                 config = {**{k: getattr(args, k) for k in ('epochs', 'imgsz', 'batch', 'patience', 'seed', 'amp')},
                           'data': str(args.data), 'model': model, 'trial': number, 'trial_dir': str(directory),
-                          'initial_checkpoint': initial[model], 'params': params}
+                          'initial_checkpoint': initial[model], 'params': params,
+                          'fliplr': getattr(args, 'fliplr', 0.5)}
                 config['batch'] = config['params']['batch']
                 if plans is not None:
                     config['parent'] = plans[model][number]['parent']
@@ -592,10 +596,14 @@ def main():
     p.add_argument('--device', default='0', help='One GPU index, or cpu; this search is serial')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument('--fliplr', type=float, default=0.5,
+                   help='Fixed horizontal flip probability for all trials, 0 disables (default: 0.5)')
     p.add_argument('--test-policy', choices=['every-trial', 'final'], default='every-trial',
                    help='Default: test each COMPLETE trial immediately; final explicitly tests only final winners')
     p.add_argument('--dry-run', action='store_true')
     args = p.parse_args()
+    if not 0 <= args.fliplr <= 1:
+        p.error('--fliplr must be between 0 and 1')
     args.epochs = args.epochs if args.epochs is not None else (100 if args.mode == 'standard' else 250)
     if args.mode != 'standard' and args.batch is None:
         args.batch = 64
@@ -637,7 +645,7 @@ def main():
                                   if args.mode == 'progressive' else len(selected_models(args))*args.trials,
                               'max_epochs_per_trial': args.epochs,
                               'batch_choices': [args.batch] if args.batch is not None else BATCH_CHOICES,
-                              'eval_batch': args.eval_batch, 'workers': args.workers,
+                              'eval_batch': args.eval_batch, 'workers': args.workers, 'fliplr': args.fliplr,
                               'selection_metric': 'validation mAP50-95', 'test_policy': args.test_policy,
                               'output': str(args.output), 'baseline': {**BASELINE, 'batch': args.batch if args.batch is not None else BASELINE['batch']}}, indent=2))
             return

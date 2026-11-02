@@ -75,8 +75,10 @@ class ModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             args,gpu=self.args(Path(tmp),'progressive'),EpochGPU()
             args.test_policy='every-trial'
+            args.fliplr=0.25
             self.run_fake(args,gpu)
             jobs=[j for j in gpu.calls if j['phase']!='prepare']
+            self.assertTrue(all(j['fliplr']==0.25 for j in jobs if j['phase']=='train'))
             for i,job in enumerate(jobs):
                 if job['phase']=='val':
                     self.assertEqual(jobs[i+1]['phase'],'test')

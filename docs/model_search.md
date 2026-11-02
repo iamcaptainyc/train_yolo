@@ -49,6 +49,16 @@ python tune.py \
 
 两种模式均无需手动命名，支持 `--dry-run` 预览；只训练一个模型就只传一个模型名。两个新模式未指定 `--batch` 时固定为 64；`--batch 128` 固定为 128。本次保留现有 lr0/weight_decay/mosaic 搜索空间，没有引入额外参数或修改网络结构。
 
+### 水平翻转概率
+
+三种模式均支持 `--fliplr 0` 关闭水平翻转；默认 `0.5`，可设置为 0～1 的任意概率，`1` 表示必定翻转。它是所有候选共用的固定训练设置，不参与 Optuna 搜索；基线、小尺寸筛选及晋级正式训练都使用该值。`--dry-run` 会显示概率，各候选 `config.json` 也会记录。
+
+```bash
+python tune.py --mode prune --data yolo_datasets/sentrymode_data_v2/data.yaml --models yolov8n.pt yolo11n.pt --trials 20 --imgsz 640 --epochs 250 --prune-epochs 30 80 --batch 128 --eval-batch 128 --workers 16 --device 0 --fliplr 0
+```
+
+改变概率会生成不同的自动输出目录，避免复用旧配置的试验；显式指定原 `--output` 时会拒绝混用，需换新目录。旧版本未记录概率的实验按默认 `0.5` 兼容恢复。如果曾手动修改代码中的翻转设置，应显式使用新输出目录重新训练。
+
 ### 恢复与报告
 
 旧实验可从 `final` 升级为 `every-trial`，不会重训或新建 Optuna trial。其他配置不变时，自动目录会优先恢复对应旧实验（新策略目录尚不存在时）；也可显式指定原 `--output`。恢复时先补齐已 COMPLETE 候选的 test，再继续训练。若旧命令显式写了 `--test-policy final`，删除该参数或改为 `every-trial`。
