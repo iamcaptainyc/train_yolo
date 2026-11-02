@@ -262,8 +262,10 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
         if fingerprint(spec)!=source['fingerprint']:
             raise ValueError(f'Source changed; update index first: {source["name"]}')
     for r in tqdm(chosen,desc='Check selected file stamps',unit='img'):
-        if stamp(r['image'])!=r['stamp']:
-            raise ValueError(f'Image changed; refresh index: {r["image"]}')
+        current_stamp = stamp(r['image'])
+        r['refresh_stamp'] = current_stamp!=r['stamp']
+        if r['refresh_stamp'] and (not repair_images or current_stamp[:2]!=r['stamp'][:2]):
+            raise ValueError(f'Image replaced or repair disabled; refresh index: {r["image"]}')
         if output==r['image'].parent or output in r['image'].parents or r['image'].is_relative_to(output):
             raise ValueError('Output must not overlap indexed images')
     labels = sorted({n for r in chosen for n,_ in r['rows']})
@@ -283,6 +285,7 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
                 evidence = json.loads(box['evidence'])
                 if evidence['format']=='coco':
                     x,y,w,h = map(float,evidence['bbox']); W,H = evidence['width'],evidence['height']
+                    r.setdefault('annotation_sizes',set()).add((W,H))
                     expected = [(x+w/2)/W,(y+h/2)/H,w/W,h/H]
                 else:
                     expected = list(map(float,evidence['row'].split()[1:]))
@@ -308,7 +311,19 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
                 continue
             if result['status']!='healthy' and result['status']!='repaired':
                 raise ValueError(f'Image repair failed: {image}: {result.get("reason")}')
-            if result['status']=='repaired':
+            if r['refresh_stamp'] and r.get('annotation_sizes'):
+                with Image.open(image) as decoded:
+                    actual_size = decoded.size
+                if r['annotation_sizes']!={actual_size}:
+                    image.unlink()
+                    repair_counts['dimension_mismatch_excluded'] += 1
+                    issues = output/'image_repair/issues.jsonl'
+                    issues.parent.mkdir(parents=True,exist_ok=True)
+                    with issues.open('a',encoding='utf-8') as stream:
+                        stream.write(json.dumps({'path':str(image),'status':'dimension_mismatch_excluded',
+                            'actual_size':actual_size,'annotation_sizes':sorted(r['annotation_sizes'])})+'\n')
+                    continue
+            if result['status']=='repaired' or r['refresh_stamp']:
                 # In-place repair also changes the source inode and all aliases.
                 # Update indexed stamps so subsequent sampling accepts our own repair.
                 db = connect(index)
@@ -318,6 +333,8 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
                     db.commit()
                 finally:
                     db.close()
+                if r['refresh_stamp']:
+                    repair_counts['changed_metadata_refreshed'] += 1
         label.write_text(''.join(f'{ids[n]} '+ ' '.join(b)+'\n' for n,b in r['rows']),encoding='utf-8')
         actual = [(int(line.split()[0]),tuple(line.split()[1:])) for line in label.read_text().splitlines()]
         if actual!=[(ids[n],b) for n,b in r['rows']] or not os.path.samefile(image,r['image']):
@@ -351,6 +368,8 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
         report['scope'] = 'Counts are image memberships; sums may exceed unique images. Selected images decoded/repaired inline; no full image-content hash.'
     if repair_counts['deleted']:
         report['excluded']['undecodable_selected_images'] = repair_counts['deleted']
+    if repair_counts['dimension_mismatch_excluded']:
+        report['excluded']['changed_image_dimension_mismatch'] = repair_counts['dimension_mismatch_excluded']
     with (output/'selection.jsonl').open('w',encoding='utf-8') as stream:
         for r in chosen:
             stream.write(json.dumps({'image':r['image_rel'].as_posix(),'label':r['label_rel'].as_posix(),

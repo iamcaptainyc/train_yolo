@@ -34,6 +34,31 @@ def catalog():
 
 
 class AnimalDataTests(unittest.TestCase):
+    def test_changed_metadata_revalidated_inline_and_bad_dimensions_excluded(self):
+        from PIL import Image
+        from animal_index import stamp
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);spec=fixture(root/'s',['rabbit'],[5])
+            for image in (root/'s').glob('*.jpg'):
+                Image.new('RGB',(100,100)).save(image)
+            index=root/'index.sqlite';build(index,[spec])
+            Image.new('RGB',(100,100),(20,50,90)).save(root/'s/0.jpg')
+            Image.new('RGB',(200,100)).save(root/'s/1.jpg')
+            policy={'groups':{'rabbit':{'members':['rabbit']}},'negative_fraction':0}
+            report=export(index,catalog(),policy,5,root/'out',repair_images=True)
+            self.assertEqual(report['selected_images'],4)
+            self.assertEqual(report['image_repair']['counts']['changed_metadata_refreshed'],1)
+            self.assertEqual(report['excluded']['changed_image_dimension_mismatch'],1)
+            db=connect(index)
+            saved=json.loads(db.execute('SELECT stamp FROM images WHERE original_id=?',('0',)).fetchone()[0]);db.close()
+            self.assertEqual(saved,stamp(root/'s/0.jpg'))
+            self.assertTrue((root/'s/1.jpg').exists())
+            # Replaced inode is not silently trusted even if dimensions match.
+            replacement=root/'replacement.jpg';Image.new('RGB',(100,100)).save(replacement)
+            replacement.replace(root/'s/2.jpg')
+            with self.assertRaisesRegex(ValueError,'Image replaced'):
+                export(index,catalog(),policy,5,root/'replaced',repair_images=True)
+
     def test_lila_area_override_any_box_strict_boundary_and_negatives(self):
         from animal_data import area_ratio
         import argparse
