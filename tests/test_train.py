@@ -1,4 +1,5 @@
 import contextlib
+import argparse
 import io
 from pathlib import Path
 import tempfile
@@ -35,14 +36,34 @@ class TrainFlipTests(unittest.TestCase):
                     model = self.invoke(root, flags)
                     self.assertEqual(model.train.call_args.kwargs['fliplr'], 0.5 if probability is None else probability)
 
-    def test_invalid_probabilities_and_non_training_mode_rejected(self):
+    def test_invalid_training_probabilities_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for flags in (['--fliplr=-0.1'], ['--fliplr', '1.1'], ['--fliplr', 'nan'],
-                          ['--fliplr', 'inf'], ['--mode', 'val', '--fliplr', '0']):
+                          ['--fliplr', 'inf']):
                 with self.subTest(flags=flags), self.assertRaises(SystemExit) as exc:
                     self.invoke(root, flags)
                 self.assertEqual(exc.exception.code, 2)
+
+    def test_validation_ignores_flip_and_enables_confusion_matrix_plots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for flags in ([], ['--fliplr','0'], ['--fliplr','0.5']):
+                model=self.invoke(root,['--mode','val','--split','val',*flags])
+                model.train.assert_not_called()
+                self.assertEqual(model.val.call_args.kwargs['split'],'val')
+                self.assertTrue(model.val.call_args.kwargs['plots'])
+                self.assertNotIn('fliplr',model.val.call_args.kwargs)
+            # Reproduce a deployment with a non-None training flip default.
+            original=argparse.ArgumentParser.add_argument
+            def argument(parser,*args,**kwargs):
+                if '--fliplr' in args:
+                    kwargs['default']=0.0
+                return original(parser,*args,**kwargs)
+            with patch.object(argparse.ArgumentParser,'add_argument',argument):
+                model=self.invoke(root,['--mode','val','--split','val'])
+            model.val.assert_called_once()
+            model.train.assert_not_called()
 
     def test_resume_preserves_saved_flip_and_rejects_changes(self):
         with tempfile.TemporaryDirectory() as tmp:

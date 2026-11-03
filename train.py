@@ -26,13 +26,11 @@ def main():
     p.add_argument('--cache', choices=['false', 'ram', 'disk'], default='false')
     p.add_argument('--amp', action=argparse.BooleanOptionalAction, default=True)
     p.add_argument('--fliplr', type=float, default=None,
-                   help='Horizontal flip probability, 0 disables (new training default: 0.5; resume: saved value)')
+                   help='Training horizontal flip probability; ignored in val/predict (new training default: 0.5; resume: saved value)')
     args = p.parse_args()
-    if args.fliplr is not None:
+    if args.mode == 'train' and args.fliplr is not None:
         if not 0 <= args.fliplr <= 1:
             p.error('--fliplr must be between 0 and 1')
-        if args.mode != 'train':
-            p.error('--fliplr is available only in train mode')
     if args.resume and args.mode != 'train':
         p.error('--resume is available only in train mode')
     if args.resume and not args.resume.is_file():
