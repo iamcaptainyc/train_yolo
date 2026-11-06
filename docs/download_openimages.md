@@ -9,9 +9,9 @@ python download_openimages.py \
   --max-per-class 5000 --workers 16 --retries 5
 ```
 
-默认跨 train/validation/test 汇总筛选，每个原始类别最多 5000 张。类别样本不足时全部保留；使用种子固定的蓄水池随机抽样，不要求把标签表全部载入内存。
+默认跨 train/validation/test 汇总筛选，每个合并后的输出类别最多 5000 张。类别样本不足时全部保留；使用种子固定的蓄水池随机抽样，不要求把标签表全部载入内存。
 
-Wolf、Red wolf、Coyote、Jackal 是原始标签中的狼、红狼、郊狼、胡狼，按业务要求统一保存在 wolf/；不是生物学分类合并。它们分别最多 5000 张，去重后 wolf 最多 20000 张。Cat、Lion、Crocodile 分别保存在 cat/、lion/、crocodile/，各最多 5000 张。可用 --splits train 只筛选原训练集。
+Wolf、Red wolf、Coyote、Jackal 是原始标签中的狼、红狼、郊狼、胡狼，按业务要求统一保存在 wolf/；不是生物学分类合并。四者去重合并后 wolf 总共最多 5000 张，内部按原始类别轮流抽取，尽量均衡，某个来源不足时由其他来源补齐。Cat、Lion、Crocodile 分别保存在 cat/、lion/、crocodile/，各最多 5000 张。可用 --splits train 只筛选原训练集。
 
 来源使用官方完整的图像级类别表和人工图像标签，仅选择 Confidence=1。图片通过官方 open-images-dataset AWS 公开桶下载，无须登录。首次下载的全类别 CSV 标签表较大，需预留额外磁盘空间和扫描时间。
 

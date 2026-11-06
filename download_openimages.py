@@ -97,6 +97,32 @@ def select_images(files, class_ids, maximum, seed):
         else:
             record['group'] = record.pop('groups')[0]
             selected.append(record)
+    # Balance fine classes within each output class; cap unique images after merging.
+    groups = defaultdict(lambda: defaultdict(list))
+    for record in selected:
+        for name in record['original_classes']:
+            groups[record['group']][name].append(record)
+    selected = []
+    for group in sorted(groups):
+        buckets = groups[group]
+        for name in sorted(buckets):
+            rng.shuffle(buckets[name])
+        used = set()
+        while len(used) < maximum:
+            added = False
+            for name in sorted(buckets):
+                bucket = buckets[name]
+                while bucket and (bucket[-1]['split'], bucket[-1]['id']) in used:
+                    bucket.pop()
+                if bucket:
+                    record = bucket.pop()
+                    used.add((record['split'], record['id']))
+                    selected.append(record)
+                    added = True
+                    if len(used) == maximum:
+                        break
+            if not added:
+                break
     return selected, dict(available), conflicts
 
 
@@ -104,7 +130,8 @@ def run(args):
     output = args.output.resolve()
     meta = output/'_metadata'
     meta.mkdir(parents=True, exist_ok=True)
-    config = {'classes':args.classes, 'splits':args.splits, 'seed':args.seed, 'max_per_class':args.max_per_class}
+    config = {'classes':args.classes, 'splits':args.splits, 'seed':args.seed,
+              'max_per_class':args.max_per_class, 'cap_scope':'merged_output_class'}
     config_path = meta/'download_config.json'
     if config_path.exists() and json.loads(config_path.read_text()) != config:
         raise ValueError('Selection settings changed; use a new output directory')
@@ -146,13 +173,14 @@ def run(args):
                     counts[record['group']] += 1
                     original.update(record['original_classes'])
     report = {'available_positive_labels':available, 'downloaded_original_class_memberships':dict(original),
-        'downloaded_images':dict(counts), 'total_images':sum(counts.values()), 'max_per_original_class':args.max_per_class,
+        'downloaded_images':dict(counts), 'total_images':sum(counts.values()), 'max_per_output_class':args.max_per_class,
         'conflicting_selected_images_skipped':len(conflicts), 'failures':failures, 'seed':args.seed,
         'splits':args.splits, 'classes':args.classes}
     (output/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
     lines = ['# Open Images 图片下载统计', '', '仅筛选人工确认的正图像标签。未生成检测框。',
              'Wolf、Red wolf、Coyote、Jackal 按业务规则统一为 wolf。',
-             f'每个原始类别最多 {args.max_per_class} 张，合并后的 wolf 最多 {4*args.max_per_class} 张。',
+             f'每个输出类别最多 {args.max_per_class} 张，wolf 的四个来源合计也最多 {args.max_per_class} 张。',
+             'wolf 内部按原始类别轮流抽取，尽量均衡；不足的来源由其他来源补齐。',
              '同一图片的多个 wolf 原始标签去重；已选择图片中不同输出类别冲突的图片跳过。',
              '同图仍可能存在其他未筛选动物，后续按文件夹生成伪标注时需要复核。',
              '', '| 输出类别 | 已下载图片 |', '| --- | ---: |']
@@ -170,7 +198,7 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--classes',nargs='+',default=DEFAULT_CLASSES)
     p.add_argument('--splits',nargs='+',choices=['train','validation','test'],default=['train','validation','test'])
-    p.add_argument('--max-per-class',type=int,default=5000,help='Cap each ORIGINAL class across all requested splits')
+    p.add_argument('--max-per-class',type=int,default=5000,help='Cap each MERGED OUTPUT class across all requested splits')
     p.add_argument('--workers',type=int,default=16)
     p.add_argument('--retries',type=int,default=5)
     p.add_argument('--seed',type=int,default=42)

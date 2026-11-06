@@ -24,13 +24,31 @@ class DownloadOpenImagesTests(unittest.TestCase):
                 writer.writerow([f'{102:016x}','lion',1])
             classes = {'wolf':'Wolf','red':'Red wolf','jackal':'Jackal','cat':'Cat','lion':'Lion'}
             records, available, conflicts = select_images([('train',path)], classes, 5, 42)
-            self.assertEqual(len(records),6)
+            self.assertEqual(len(records),5)
             self.assertEqual({r['group'] for r in records},{'wolf'})
             self.assertEqual(available['Wolf'],20)
             self.assertEqual(available['Cat'],1)
             self.assertEqual(len(conflicts),1)
             again = select_images([('train',path)], classes, 5, 42)
             self.assertEqual(records,again[0])
+            self.assertTrue(any('Red wolf' in r['original_classes'] for r in records))
+
+    def test_merged_wolf_cap_balances_all_four_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'labels.csv'
+            classes = {str(i):name for i,name in enumerate(['Wolf','Red wolf','Coyote','Jackal','Cat'])}
+            with path.open('w', newline='') as stream:
+                writer = csv.writer(stream)
+                writer.writerow(['ImageID','LabelName','Confidence'])
+                for cid in classes:
+                    for index in range(20):
+                        writer.writerow([f'{int(cid)*100+index:016x}',cid,1])
+            records, _, _ = select_images([('train',path)],classes,8,42)
+            wolves = [r for r in records if r['group']=='wolf']
+            self.assertEqual(len(wolves),8)
+            self.assertEqual(len([r for r in records if r['group']=='cat']),8)
+            for name in ['Wolf','Red wolf','Coyote','Jackal']:
+                self.assertEqual(sum(name in r['original_classes'] for r in wolves),2)
 
     def test_resume_range_and_reuse_complete_file(self):
         with tempfile.TemporaryDirectory() as tmp:
