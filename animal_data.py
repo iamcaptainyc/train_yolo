@@ -93,6 +93,8 @@ def main():
         parser.add_argument('--output',type=Path,required=True,help='New output directory (preview: reports only)')
         if command=='sample':
             parser.add_argument('--class-id-start',type=int,default=0)
+            parser.add_argument('--repair-workers',type=int,default=8,
+                                help='Parallel image inspection processes during sampling (default: 8)')
             parser.add_argument('--repair-images',action=argparse.BooleanOptionalAction,default=True,
                                 help='Check/repair each selected image while writing (default: enabled)')
     args = p.parse_args()
@@ -128,7 +130,7 @@ def main():
         with FileLock(str(args.index)+'.lock',timeout=0):
             if args.command=='sample':
                 report = export(args.index,catalog,policy,args.max_images,args.output,args.class_id_start,
-                                repair_images=args.repair_images)
+                                repair_images=args.repair_images,repair_workers=args.repair_workers)
             else:
                 _,report,_ = plan(args.index,catalog,policy,args.max_images)
                 args.output.mkdir(parents=True)

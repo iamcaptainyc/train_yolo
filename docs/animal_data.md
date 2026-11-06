@@ -89,6 +89,8 @@ python animal_data.py sample \
 
 最终数量、各类/分集计数与 selection.jsonl 均按保留样本更新，问题记录在 `image_repair/issues.jsonl`，详情在附录。坏图剔除后不重复抽样补足，因此可能少于30K；某类全部剔除时保留其ID定义（0张），正文类别数只计有样本类别。可修复表示解码正常，不代表恢复原本丢失的画面。权限或磁盘错误等非坏图问题会中止并保留 INCOMPLETE 标记，不能将这种错误当成坏图删除。
 
+抽取时默认用 8 个进程并行检查选中的图片。可以在原 `sample` 命令后加 `--repair-workers 16` 调整并发，或用 `--repair-workers 1` 串行执行。只有检测到损坏且可恢复的 JPEG 才会重新编码。
+
 ### 单独使用 repair_images.py
 
 对已有数据集递归检查、修复，无法解码的图片和对应标签自动删除：

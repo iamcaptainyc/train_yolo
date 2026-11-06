@@ -1,7 +1,10 @@
 """Configurable hierarchy projection and recursive fair whole-image sampling."""
 from collections import Counter, defaultdict, deque
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import closing
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import random
@@ -256,11 +259,48 @@ def plan(index,catalog,policy,maximum):
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
 
-def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False):
+def _link_and_check(source, image, operations):
+    image.parent.mkdir(parents=True, exist_ok=True)
+    os.link(source, image)
+    if operations is not None:
+        from repair_images import inspect_image
+        return inspect_image(image, operations=operations)
+    return None
+
+
+def _checked_images(chosen, output, repair, workers):
+    operations = output/'image_repair/operations' if repair else None
+    if not repair or workers == 1:
+        for record in chosen:
+            yield record, _link_and_check(record['image'], output/record['image_rel'], operations)
+        return
+
+    # Native decoder warning capture redirects process-wide stderr. Isolate workers.
+    from repair_images import initialize_worker
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
+                             initializer=initialize_worker) as pool:
+        pending = deque()
+        try:
+            for record in chosen:
+                future = pool.submit(_link_and_check, record['image'], output/record['image_rel'], operations)
+                pending.append((record, future))
+                if len(pending) >= 2 * workers:
+                    first, job = pending.popleft()
+                    yield first, job.result()
+            while pending:
+                first, job = pending.popleft()
+                yield first, job.result()
+        finally:
+            for _, job in pending:
+                job.cancel()
+
+
+def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False,repair_workers=1):
+    if repair_workers < 1:
+        raise ValueError('repair-workers must be positive')
     if repair_images:
         import cv2
         from PIL import Image
-        from repair_images import inspect_image
     output = Path(output).resolve()
     if start_id<0 or output.exists():
         raise ValueError('Use a new output directory and nonnegative class-id-start')
@@ -305,53 +345,54 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
     finally:
         evidence_db.close()
     kept,repair_counts = [],Counter()
-    for r in tqdm(chosen,desc='Write / repair / audit' if repair_images else 'Write and audit hardlinks/labels',unit='img'):
-        image,label = output/r['image_rel'],output/r['label_rel']
-        image.parent.mkdir(parents=True,exist_ok=True); label.parent.mkdir(parents=True,exist_ok=True)
-        os.link(r['image'],image)
-        if repair_images:
-            result = inspect_image(image,operations=output/'image_repair/operations')
-            repair_counts[result['status']] += 1
-            if result['status']!='healthy':
-                issues = output/'image_repair/issues.jsonl'
-                issues.parent.mkdir(parents=True,exist_ok=True)
-                with issues.open('a',encoding='utf-8') as stream:
-                    stream.write(json.dumps(result,ensure_ascii=False)+'\n')
-            if result['status']=='deleted':
-                # The output hardlink is gone; never create its YOLO label.
-                continue
-            if result['status']!='healthy' and result['status']!='repaired':
-                raise ValueError(f'Image repair failed: {image}: {result.get("reason")}')
-            if r['refresh_stamp'] and r.get('annotation_sizes'):
-                with Image.open(image) as decoded:
-                    actual_size = decoded.size
-                if r['annotation_sizes']!={actual_size}:
-                    image.unlink()
-                    repair_counts['dimension_mismatch_excluded'] += 1
+    checked = _checked_images(chosen, output, repair_images, min(repair_workers, len(chosen)))
+    with closing(checked), tqdm(total=len(chosen),desc='Write / repair / audit' if repair_images else 'Write and audit hardlinks/labels',unit='img') as progress:
+        for r, result in checked:
+            progress.update()
+            image,label = output/r['image_rel'],output/r['label_rel']
+            label.parent.mkdir(parents=True,exist_ok=True)
+            if repair_images:
+                repair_counts[result['status']] += 1
+                if result['status']!='healthy':
                     issues = output/'image_repair/issues.jsonl'
                     issues.parent.mkdir(parents=True,exist_ok=True)
                     with issues.open('a',encoding='utf-8') as stream:
-                        stream.write(json.dumps({'path':str(image),'status':'dimension_mismatch_excluded',
-                            'actual_size':actual_size,'annotation_sizes':sorted(r['annotation_sizes'])})+'\n')
+                        stream.write(json.dumps(result,ensure_ascii=False)+'\n')
+                if result['status']=='deleted':
+                    # The output hardlink is gone; never create its YOLO label.
                     continue
-            if result['status']=='repaired' or r['refresh_stamp']:
-                # In-place repair also changes the source inode and all aliases.
-                # Update indexed stamps so subsequent sampling accepts our own repair.
-                db = connect(index)
-                try:
-                    db.execute("UPDATE images SET stamp=? WHERE json_extract(stamp,'$[0]')=? AND json_extract(stamp,'$[1]')=?",
-                               (json.dumps(stamp(r['image'])),r['stamp'][0],r['stamp'][1]))
-                    db.commit()
-                finally:
-                    db.close()
-                if r['refresh_stamp']:
-                    repair_counts['changed_metadata_refreshed'] += 1
-        label.write_text(''.join(f'{ids[n]} '+ ' '.join(b)+'\n' for n,b in r['rows']),encoding='utf-8')
-        actual = [(int(line.split()[0]),tuple(line.split()[1:])) for line in label.read_text().splitlines()]
-        if actual!=[(ids[n],b) for n,b in r['rows']] or not os.path.samefile(image,r['image']):
-            raise ValueError('Independent written label/link audit failed')
-        audit_rows += len(actual)
-        kept.append(r)
+                if result['status']!='healthy' and result['status']!='repaired':
+                    raise ValueError(f'Image repair failed: {image}: {result.get("reason")}')
+                if r['refresh_stamp'] and r.get('annotation_sizes'):
+                    with Image.open(image) as decoded:
+                        actual_size = decoded.size
+                    if r['annotation_sizes']!={actual_size}:
+                        image.unlink()
+                        repair_counts['dimension_mismatch_excluded'] += 1
+                        issues = output/'image_repair/issues.jsonl'
+                        issues.parent.mkdir(parents=True,exist_ok=True)
+                        with issues.open('a',encoding='utf-8') as stream:
+                            stream.write(json.dumps({'path':str(image),'status':'dimension_mismatch_excluded',
+                                'actual_size':actual_size,'annotation_sizes':sorted(r['annotation_sizes'])})+'\n')
+                        continue
+                if result['status']=='repaired' or r['refresh_stamp']:
+                    # In-place repair also changes the source inode and all aliases.
+                    # Update indexed stamps so subsequent sampling accepts our own repair.
+                    db = connect(index)
+                    try:
+                        db.execute("UPDATE images SET stamp=? WHERE json_extract(stamp,'$[0]')=? AND json_extract(stamp,'$[1]')=?",
+                                   (json.dumps(stamp(r['image'])),r['stamp'][0],r['stamp'][1]))
+                        db.commit()
+                    finally:
+                        db.close()
+                    if r['refresh_stamp']:
+                        repair_counts['changed_metadata_refreshed'] += 1
+            label.write_text(''.join(f'{ids[n]} '+ ' '.join(b)+'\n' for n,b in r['rows']),encoding='utf-8')
+            actual = [(int(line.split()[0]),tuple(line.split()[1:])) for line in label.read_text().splitlines()]
+            if actual!=[(ids[n],b) for n,b in r['rows']] or not os.path.samefile(image,r['image']):
+                raise ValueError('Independent written label/link audit failed')
+            audit_rows += len(actual)
+            kept.append(r)
     chosen = kept
     if not any(r['rows'] for r in chosen):
         raise ValueError('No positive images remain after repair; output is incomplete')

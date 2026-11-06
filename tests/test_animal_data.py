@@ -299,11 +299,12 @@ class AnimalDataTests(unittest.TestCase):
             damaged.write_bytes(damaged.read_bytes()[:-2])
             alias=root/'alias.jpg';os.link(damaged,alias)
             (root/'s/1.jpg').write_bytes(b'not an image')
+            healthy = root/'s/2.jpg'
+            original = (healthy.read_bytes(), healthy.stat().st_mtime_ns)
             index=root/'index.sqlite';build(index,[spec])
             policy={'groups':{'rabbit':{'members':['rabbit']}},'negative_fraction':0}
-            with patch('repair_images.inspect_image',wraps=inspect_image) as check:
-                report=export(index,catalog(),policy,5,root/'out',repair_images=True)
-                self.assertEqual(check.call_count,5)
+            report=export(index,catalog(),policy,5,root/'out',repair_images=True,repair_workers=2)
+            self.assertEqual((healthy.read_bytes(), healthy.stat().st_mtime_ns), original)
             self.assertEqual(report['selected_images'],4)
             self.assertEqual(report['image_repair']['counts'],{'healthy':3,'repaired':1,'deleted':1})
             self.assertEqual(sum(report['split_image_counts'].values()),4)
@@ -315,7 +316,9 @@ class AnimalDataTests(unittest.TestCase):
             self.assertTrue(alias.read_bytes().endswith(b'\xff\xd9'))
             self.assertTrue((root/'s/1.jpg').exists())
             # A second extraction must accept the stamps changed by our own repair.
-            export(index,catalog(),policy,5,root/'again',repair_images=True)
+            with patch('repair_images.inspect_image',wraps=inspect_image) as check:
+                export(index,catalog(),policy,5,root/'again',repair_images=True)
+                self.assertEqual(check.call_count,5)
             # Standalone repair also refreshes the new compact animal report.
             from repair_dataset_report import refresh_dataset_reports
             victim=next((root/'out/images').rglob('*.jpg'))
