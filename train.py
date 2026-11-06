@@ -13,6 +13,7 @@ def main():
     p.add_argument('--epochs', type=int, default=100)
     p.add_argument('--imgsz', type=int, default=640)
     p.add_argument('--batch', type=int, default=8)
+    p.add_argument('--eval-batch', type=int, default=32, help='Post-training train/val/test evaluation batch size')
     p.add_argument('--device', default=None, help='0, 0,1, cpu; omitted = Ultralytics auto selection')
     p.add_argument('--workers', type=int, default=0, help='Windows-safe default; increase if loading is slow')
     p.add_argument('--seed', type=int, default=42)
@@ -20,7 +21,7 @@ def main():
     p.add_argument('--project', default='runs/animals')
     p.add_argument('--name', default=None)
     p.add_argument('--resume', type=Path, help='Resume an interrupted run from weights/last.pt; keeps saved run settings')
-    p.add_argument('--split', choices=['val', 'test'], default='test', help='Evaluation split in val mode')
+    p.add_argument('--split', choices=['train', 'val', 'test'], default='test', help='Evaluation split in val mode')
     p.add_argument('--source', help='Image, directory, video or stream in predict mode')
     p.add_argument('--conf', type=float, default=0.25, help='Prediction confidence only; validation uses Ultralytics default')
     p.add_argument('--cache', choices=['false', 'ram', 'disk'], default='false')
@@ -51,7 +52,7 @@ def main():
         if args.fliplr is not None and args.fliplr != saved_fliplr:
             p.error('--fliplr differs from the checkpoint. Resume keeps saved settings; '
                     'use --model CHECKPOINT with a new --name to start training with a different probability')
-        model.train(resume=True, **device)
+        result = model.train(resume=True, **device)
     elif args.mode == 'train':
         result = model.train(
             data=str(args.data.resolve()), epochs=args.epochs, imgsz=args.imgsz,
@@ -62,19 +63,41 @@ def main():
             val=True, plots=True, fliplr=0.5 if args.fliplr is None else args.fliplr, **device,
         )
         print(f'Training output: {result.save_dir}')
-        print('Evaluate weights/best.pt on the held-out test split with --mode val.')
     elif args.mode == 'val':
-        metrics = model.val(data=str(args.data.resolve()), split=args.split,
+        from evaluation_artifacts import evaluate_logged
+        # Let Ultralytics choose a unique evaluation directory, then place artifacts there.
+        from ultralytics.cfg import get_cfg, get_save_dir
+        directory = get_save_dir(get_cfg(overrides={'project':args.project,
+                                 'name':args.name or f'eval_{args.split}', 'mode':'val', 'task':'detect'}))
+        metrics = evaluate_logged(model, directory, args.split, args.model, data=str(args.data.resolve()),
                             imgsz=args.imgsz, batch=args.batch, workers=args.workers,
-                            project=args.project, name=args.name or f'eval_{args.split}',
-                            plots=True, **device)
-        print(metrics.results_dict)
-        print(f'Evaluation output: {metrics.save_dir}')
+                            project=str(directory.parent), name=directory.name, exist_ok=True, **device)
+        print(metrics['metrics'])
+        print(f'Evaluation output: {directory}')
     else:
         for result in model.predict(source=args.source, imgsz=args.imgsz, conf=args.conf,
                                     project=args.project, name=args.name or 'predict',
                                     save=True, save_txt=True, save_conf=True, stream=True, **device):
             print(f'{result.path}: {len(result.boxes)} detections')
+    if args.mode == 'train':
+        import yaml
+        from evaluation_artifacts import evaluate_logged
+        trainer = model.trainer
+        directory = Path(trainer.save_dir)
+        checkpoint = Path(trainer.best)
+        evaluated = YOLO(str(checkpoint), task='detect')
+        data = trainer.args.data
+        config = yaml.safe_load(Path(data).read_text(encoding='utf-8-sig'))
+        for split in ('val', 'test', 'train'):
+            if not config.get(split):
+                from search_worker import write_json
+                write_json(directory/f'{split}_result.json', {'status':'skipped', 'split':split,
+                                                             'reason':'Split is absent from dataset YAML'})
+                continue
+            evaluate_logged(evaluated, directory, split, checkpoint, data=str(data),
+                imgsz=trainer.args.imgsz, batch=args.eval_batch, workers=args.workers,
+                project=str(directory/'evaluation'), name=split, exist_ok=True, **device)
+        print(f'Metrics, logs and confusion-matrix JSON: {directory}')
 
 
 if __name__ == '__main__':

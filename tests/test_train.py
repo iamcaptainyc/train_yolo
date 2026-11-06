@@ -1,6 +1,7 @@
 import contextlib
 import argparse
 import io
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -11,15 +12,23 @@ import train
 
 
 class TrainFlipTests(unittest.TestCase):
-    def invoke(self, root, flags=(), saved_fliplr=0.5):
+    def invoke(self, root, flags=(), saved_fliplr=0.5, all_splits=False):
         data = root/'data.yaml'
-        data.write_text('names: [cat]\n')
+        data.write_text('names: [cat]\n'+('train: images/train\nval: images/val\ntest: images/test\n' if all_splits else ''))
         checkpoint = root/'last.pt'
         checkpoint.touch()
         model = Mock(ckpt={'train_args': {'fliplr': saved_fliplr}})
+        model.trainer = SimpleNamespace(best=checkpoint, save_dir=root/'output',
+                                        args=SimpleNamespace(data=str(data), imgsz=640))
+        model.val.return_value = SimpleNamespace(
+            box=SimpleNamespace(mp=.7, mr=.6, map50=.8, map=.5),
+            confusion_matrix=SimpleNamespace(matrix=[[3,1],[2,0]], names={0:'cat'}),
+            speed={}, save_dir=root/'output')
         model.train.return_value = SimpleNamespace(save_dir=root/'output')
         sdk = SimpleNamespace(YOLO=Mock(return_value=model))
         modules = {'ultralytics': sdk,
+                   'ultralytics.cfg': SimpleNamespace(get_cfg=lambda **kw:kw,
+                       get_save_dir=lambda cfg:root/'eval'),
                    'torch': SimpleNamespace(__version__='fake', cuda=SimpleNamespace(is_available=lambda: False))}
         with patch('sys.argv', ['train.py', '--data', str(data), *flags]), \
                 patch.dict('sys.modules', modules), \
@@ -35,6 +44,17 @@ class TrainFlipTests(unittest.TestCase):
                     flags = [] if probability is None else ['--fliplr', str(probability)]
                     model = self.invoke(root, flags)
                     self.assertEqual(model.train.call_args.kwargs['fliplr'], 0.5 if probability is None else probability)
+
+    def test_finished_training_evaluates_best_on_all_three_splits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model = self.invoke(root, ['--eval-batch','16'], all_splits=True)
+            self.assertEqual([c.kwargs['split'] for c in model.val.call_args_list], ['val','test','train'])
+            for split in ('train','val','test'):
+                saved = json.loads((root/'output'/f'{split}_result.json').read_text())
+                self.assertEqual(saved['metrics']['map50'], .8)
+                self.assertTrue((root/'output'/f'{split}_confusion_matrix.json').exists())
+            self.assertTrue(all(c.kwargs['batch']==16 for c in model.val.call_args_list))
 
     def test_invalid_training_probabilities_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

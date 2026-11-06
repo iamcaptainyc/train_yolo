@@ -451,6 +451,7 @@ class WorkerTests(unittest.TestCase):
             checkpoint = Path(tmp)/'best.pt'
             checkpoint.write_bytes(b'checkpoint')
             metrics = SimpleNamespace(box=SimpleNamespace(mp=.6, mr=.5, map50=.7, map=.4),
+                                      confusion_matrix=SimpleNamespace(matrix=[[4,1],[2,0]], names={0:'cat'}),
                                       speed={'inference':1.2}, summary=lambda:[{'Class':'cat','mAP50-95':.4}])
             model = Mock()
             model.val.return_value = metrics
@@ -463,6 +464,12 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(model.val.call_args.kwargs['split'], 'test')
             self.assertEqual(model.val.call_args.kwargs['conf'], .001)
             self.assertEqual(result['per_class'][0]['Class'], 'cat')
+            with patch.dict('sys.modules', {'ultralytics':sdk,'torch':SimpleNamespace(__version__='fake')}):
+                execute({**job, 'phase':'val'})
+            self.assertEqual(model.val.call_args.kwargs['split'], 'train')
+            self.assertTrue((Path(tmp)/'val_confusion_matrix.json').exists())
+            self.assertTrue((Path(tmp)/'test_confusion_matrix.json').exists())
+            self.assertTrue((Path(tmp)/'evaluation/train/train_confusion_matrix.json').exists())
 
     def test_json_accepts_scientific_scalar_values(self):
         with tempfile.TemporaryDirectory() as tmp:

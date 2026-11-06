@@ -149,19 +149,18 @@ def execute_stage(job, reporter=None):
     model = YOLO(job['checkpoint'])
     from training_diagnostics import install_phase_logging
     install_phase_logging(model)
-    metrics = model.val(data=job['data'], split=phase, imgsz=job.get('eval_imgsz', job['imgsz']), batch=job['eval_batch'],
+    from evaluation_artifacts import evaluate_logged
+    directory = Path(job['trial_dir'])
+    options = dict(data=job['data'], imgsz=job.get('eval_imgsz', job['imgsz']), batch=job['eval_batch'],
                         device=job['device'], workers=job['workers'],
-                        project=str(Path(job['trial_dir'])/'evaluation'), name=phase, exist_ok=True,
-                        conf=0.001, iou=0.7, max_det=300, plots=True, save_json=False)
-    scores = {'precision': float(metrics.box.mp), 'recall': float(metrics.box.mr),
-              'map50': float(metrics.box.map50), 'map50_95': float(metrics.box.map)}
-    if not all(math.isfinite(v) and 0 <= v <= 1 for v in scores.values()):
-        raise ValueError(f'Invalid {phase} metrics: {scores}')
-    # DetMetrics.summary() reports only classes with ground-truth annotations.
-    per_class = metrics.summary() if hasattr(metrics, 'summary') else []
-    return {'split': phase, 'metrics': scores, 'per_class': per_class,
-            'speed_ms_per_image': {k: float(v) for k, v in metrics.speed.items()},
-            'checkpoint_sha256': digest(job['checkpoint']), 'environment': environment}
+                        project=str(directory/'evaluation'), exist_ok=True,
+                        conf=0.001, iou=0.7, max_det=300, save_json=False)
+    result = evaluate_logged(model, directory, phase, job['checkpoint'], name=phase, **options)
+    if phase == 'val':
+        # Separate names protect the training-stage train_result.json/train.log.
+        evaluate_logged(model, directory/'evaluation/train', 'train', job['checkpoint'],
+                        name='train', **options)
+    return {**result, 'checkpoint_sha256': digest(job['checkpoint']), 'environment': environment}
 
 
 def main():
@@ -172,8 +171,11 @@ def main():
     output = Path(job['result'])
     logfile = Path(job['log'])
     logfile.parent.mkdir(parents=True, exist_ok=True)
+    # Evaluation owns per-split logging; avoid nesting two tees to the same file.
+    logged_here = job['phase'] not in ('val', 'test')
     with logfile.open('a', encoding='utf-8', buffering=1) as log, \
-            contextlib.redirect_stdout(Tee(sys.stdout, log)), contextlib.redirect_stderr(Tee(sys.stderr, log)):
+            (contextlib.redirect_stdout(Tee(sys.stdout, log)) if logged_here else contextlib.nullcontext()), \
+            (contextlib.redirect_stderr(Tee(sys.stderr, log)) if logged_here else contextlib.nullcontext()):
         print(f'\n--- Starting stage {job["phase"]} ---', flush=True)
         try:
             result = execute(job)
