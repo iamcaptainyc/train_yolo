@@ -70,6 +70,14 @@ def pool(index, catalog, policy):
     db = connect(index)
     try:
         sources = {r['id']:dict(r) for r in db.execute('SELECT * FROM sources ORDER BY name')}
+        allowed = policy.get('allowed_sources')
+        if allowed is not None:
+            known = {s['name'] for s in sources.values()} | {json.loads(s['spec']).get('family',s['name']) for s in sources.values()}
+            if not isinstance(allowed,list) or not allowed or any(not isinstance(s,str) for s in allowed):
+                raise ValueError('allowed_sources must be a non-empty list of source families/names')
+            if set(allowed)-known:
+                raise ValueError(f'Unknown or unindexed sources: {sorted(set(allowed)-known)}')
+            sources = {i:s for i,s in sources.items() if s['name'] in allowed or json.loads(s['spec']).get('family',s['name']) in allowed}
         cats = {(r['source'],r['cid']):r['name'] for r in db.execute('SELECT * FROM categories')}
         annotations = defaultdict(list)
         for r in db.execute('SELECT * FROM boxes ORDER BY image,rowid'):
@@ -77,6 +85,8 @@ def pool(index, catalog, policy):
         records, excluded = [],Counter()
         priority = policy.get('source_priority',['ap10k','animals','lila'])
         for image in db.execute('SELECT images.* FROM images JOIN sources ON sources.id=images.source ORDER BY sources.name,images.original_id'):
+            if image['source'] not in sources:
+                continue
             source = sources[image['source']]
             spec = json.loads(source['spec'])
             scope = spec.get('catalog_scope',source['name'])
@@ -103,7 +113,7 @@ def pool(index, catalog, policy):
             source_type = spec.get('family',source['name'])
             rank = priority.index(source_type) if source_type in priority else len(priority)
             token = hashlib.sha256(f'{source["name"]}/{image["original_id"]}'.encode()).hexdigest()
-            records.append({'index_id':image['id'],'dataset':source['name'],'priority':rank,
+            records.append({'index_id':image['id'],'dataset':source['name'],'source_family':source_type,'priority':rank,
                 'image':Path(image['path']),'stamp':s,'image_stamp':{'device':s[0],'inode':s[1]},
                 'split':'train','relative':image['original_id'],'rows':list(dict.fromkeys(projected)),
                 'paths':paths,'origins':origins,'group_keys':[(source['name'],*g) for g in json.loads(image['groups_json'])],
@@ -236,6 +246,7 @@ def plan(index,catalog,policy,maximum):
         db.close()
     return chosen,{'maximum_images':maximum,'selected_images':len(chosen),'hierarchy_sampling':details,
         'requested_groups':list(policy['groups']),
+        'allowed_sources':policy.get('allowed_sources'),
         'sampling_priority':strategy,
         'unselected_groups':[g for g in policy['groups'] if not counts[(g,)]],
         'raw_category_inventory':inventory,
@@ -373,7 +384,7 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
     with (output/'selection.jsonl').open('w',encoding='utf-8') as stream:
         for r in chosen:
             stream.write(json.dumps({'image':r['image_rel'].as_posix(),'label':r['label_rel'].as_posix(),
-                'source':r['dataset'],'original_id':r['relative'],'source_image':str(r['image']),
+                'source':r['dataset'],'source_family':r['source_family'],'original_id':r['relative'],'source_image':str(r['image']),
                 'index_image_id':r['index_id'],'component':r['component'],
                 'original_classes':sorted(r['origins']),'output_boxes':[(ids[n],b) for n,b in r['rows']]},ensure_ascii=False)+'\n')
     report.update(names=ids,split=splitting,audited_boxes=audit_rows,
@@ -382,6 +393,9 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
         original_box_evidence_audited=True,
         index=str(Path(index).resolve()),source_snapshots=[json.loads(s['spec'])|{'fingerprint':s['fingerprint']} for s in sources.values()],
         catalog=catalog,policy=policy)
+    report['source_split_stats'] = source_split_stats(
+        ({'source':r['dataset'],'source_family':r['source_family'],'image':r['image_rel'].as_posix(),
+          'output_boxes':r['rows']} for r in chosen), report['source_snapshots'])
     names = {i:f'reserved_{i}' for i in range(start_id)} | {v:k for k,v in ids.items()}
     config = {'path':str(output),'train':'images/train','val':'images/val','test':'images/test','names':names,'nc':len(names)}
     import yaml
@@ -390,6 +404,21 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False)
     write_preview(report,output/'REPORT.md')
     (output/'INCOMPLETE.txt').unlink()
     return report
+
+
+def source_split_stats(records,snapshots=()):
+    families = {s['name']:s.get('family',s['name']) for s in snapshots}
+    stats = {}
+    for record in records:
+        source = record.get('source_family') or families.get(record['source'],record['source'])
+        split = Path(record['image']).parts[1]
+        if split not in ('train','val','test'):
+            raise ValueError(f'Unknown selection split: {split}')
+        rows = stats.setdefault(source,{s:{'images':0,'negative_images':0,'boxes':0} for s in ('train','val','test')})
+        rows[split]['images'] += 1
+        rows[split]['negative_images'] += not record['output_boxes']
+        rows[split]['boxes'] += len(record['output_boxes'])
+    return stats
 
 
 def write_preview(report,path):
@@ -407,7 +436,17 @@ def write_preview(report,path):
             value = totals.get(split,0) if totals else '未记录，请刷新报告'
             lines.append(f'| {split} | {value} |')
         lines += [f'| **总计** | **{report["selected_images"]}** |', '',
-                  f'负样本：{report.get("negative_images", "未记录")} 张（已计入总数）。', '',
+                  f'负样本：{report.get("negative_images", "未记录")} 张（已计入总数）。', '']
+        if report.get('source_split_stats'):
+            lines += ['## 来源和划分','','| 来源 | 划分 | 图片 | 负样本 | 框 |','| --- | --- | ---: | ---: | ---: |']
+            totals = {s:Counter() for s in ('train','val','test')}
+            for source,rows in sorted(report['source_split_stats'].items()):
+                for split,row in rows.items():
+                    totals[split].update(row)
+                    lines.append(f'| {source} | {split} | {row["images"]} | {row["negative_images"]} | {row["boxes"]} |')
+            for split,row in totals.items():
+                lines.append(f'| 合计 | {split} | {row["images"]} | {row["negative_images"]} | {row["boxes"]} |')
+        lines += ['',
                   '## 类别统计', '',
                   '| ID | 类别 | train | val | test | 合计 |',
                   '| ---: | --- | ---: | ---: | ---: | ---: |']
@@ -432,6 +471,9 @@ def refresh_report(directory):
     """Regenerate presentation from saved metadata, without touching images."""
     directory = Path(directory)
     report = json.loads((directory/'report.json').read_text(encoding='utf-8'))
+    if 'names' in report:
+        with (directory/'selection.jsonl').open(encoding='utf-8') as stream:
+            report['source_split_stats'] = source_split_stats((json.loads(line) for line in stream),report.get('source_snapshots',[]))
     if 'names' in report and 'split_image_counts' not in report:
         counts,negatives = Counter(),0
         with (directory/'selection.jsonl').open(encoding='utf-8') as stream:
@@ -445,7 +487,7 @@ def refresh_report(directory):
         if sum(counts.values())!=report['selected_images']:
             raise ValueError('selection.jsonl count does not match report.json')
         report.update(split_image_counts=dict(counts),negative_images=negatives)
-        (directory/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    (directory/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     write_preview(report,directory/'REPORT.md')
 
 

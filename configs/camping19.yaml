@@ -26,11 +26,12 @@ groups:
     - leopard
     - cheetah
     - jaguar
+    # Application grouping: cougar/puma is not taxonomically a leopard.
+    - cougar
+    - puma
   lion:
     members:
     - lion
-    - cougar
-    - puma
   elephant:
     members:
     - elephant

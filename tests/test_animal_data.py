@@ -34,6 +34,45 @@ def catalog():
 
 
 class AnimalDataTests(unittest.TestCase):
+    def test_source_filter_profiles_and_cli_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            specs=[fixture(root/'a',['rabbit'],[6],name='ap10k'),
+                   fixture(root/'b',['rabbit'],[6],name='animals'),
+                   fixture(root/'c',['rabbit'],[6],name='caltech',family='lila')]
+            index=root/'index.sqlite';build(index,specs)
+            policy={'groups':{'rabbit':{'members':['rabbit']}},'negative_fraction':0}
+            script=Path(__file__).resolve().parents[1]/'animal_data.py'
+            (root/'policy.yaml').write_text(yaml.safe_dump(policy))
+            (root/'catalog.yaml').write_text(yaml.safe_dump(catalog()))
+            for profile,expected in [('sources_lila.yaml',{'caltech'}),('sources_ap10k_animals.yaml',{'ap10k','animals'})]:
+                args=[sys.executable,str(script),'preview','--index',str(index),'--policy',str(root/'policy.yaml'),
+                      '--catalog',str(root/'catalog.yaml'),'--source-config',str(script.parent/'configs'/profile),
+                      '--output',str(root/profile)]
+                result=subprocess.run(args,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                report=json.loads((root/profile/'report.json').read_text(encoding='utf-8'))
+                self.assertEqual({r['source'] for r in report['provenance']},expected)
+            policy['allowed_sources']=['caltech']
+            selected,_,_=plan(index,catalog(),policy,30)
+            self.assertEqual({r['dataset'] for r in selected},{'caltech'})
+            policy['allowed_sources']=['misspelled']
+            with self.assertRaisesRegex(ValueError,'Unknown or unindexed'): plan(index,catalog(),policy,30)
+            args[-1]=str(root/'override')
+            result=subprocess.run(args+['--only-sources','lila'],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads((root/'override/report.json').read_text(encoding='utf-8'))['allowed_sources'],['lila'])
+
+    def test_family_source_split_stats_counts_images_negatives_and_boxes(self):
+        from animal_sampling import source_split_stats
+        rows=[{'source':'caltech','image':'images/train/a.jpg','output_boxes':[(0,()),(0,())]},
+              {'source':'swg','image':'images/train/b.jpg','output_boxes':[]},
+              {'source':'ap10k','image':'images/val/c.jpg','output_boxes':[(0,())]}]
+        stats=source_split_stats(rows,[{'name':'caltech','family':'lila'},{'name':'swg','family':'lila'}])
+        self.assertEqual(stats['lila']['train'],{'images':2,'negative_images':1,'boxes':2})
+        self.assertEqual(stats['lila']['test']['images'],0)
+        self.assertEqual(stats['ap10k']['val']['images'],1)
+
     def test_changed_metadata_revalidated_inline_and_bad_dimensions_excluded(self):
         from PIL import Image
         from animal_index import stamp
@@ -169,6 +208,9 @@ class AnimalDataTests(unittest.TestCase):
             markdown=(root/'out/REPORT.md').read_text(encoding='utf-8')
             self.assertIn('类别数：**1**',markdown)
             self.assertIn('| **总计** | **20** |',markdown)
+            self.assertIn('## 来源和划分',markdown)
+            self.assertEqual(sum(r['images'] for r in report['source_split_stats']['animals'].values()),20)
+            self.assertEqual(sum(r['boxes'] for r in report['source_split_stats']['animals'].values()),20)
             self.assertNotIn('原始细类与来源',markdown)
             self.assertIn('原始细类与来源',(root/'out/REPORT_APPENDIX.md').read_text(encoding='utf-8'))
             # Refresh old exports using selection metadata, without reading image bytes.
@@ -283,6 +325,7 @@ class AnimalDataTests(unittest.TestCase):
             refresh_dataset_reports([root/'out'],operations)
             refreshed=json.loads((root/'out/report.json').read_text(encoding='utf-8'))
             self.assertEqual(refreshed['selected_images'],3)
+            self.assertEqual(sum(r['images'] for r in refreshed['source_split_stats']['animals'].values()),3)
             self.assertEqual(sum(refreshed['split_image_counts'].values()),3)
             self.assertEqual(refreshed['provenance'][0]['selected_images'],3)
             self.assertEqual(len((root/'out/selection.jsonl').read_text().splitlines()),3)
@@ -293,6 +336,9 @@ class AnimalDataTests(unittest.TestCase):
         policy=yaml.safe_load((root/'configs/camping19.yaml').read_text())
         result=compile_policy(cat,policy)
         self.assertEqual(len(policy['groups']),19)
+        for name in ('cougar','puma','mountain_lion'):
+            self.assertEqual(result[name][0],'leopard')
+        self.assertEqual(result['lion'][0],'lion')
         for excluded in ('camel','pig','squirrel','turtle','panda'):
             self.assertNotIn(excluded,result)
         self.assertEqual(result['eagle'][0],'eagle')

@@ -110,7 +110,7 @@ def recount(root, ops):
         'method': 'Recount current images and YOLO labels; class IDs and splits unchanged; original conversion audit is historical',
         'original_report': baseline.name if baseline.exists() else None}
     if 'hierarchy_sampling' in report and 'names' in report and (root/'selection.jsonl').exists():
-        from animal_sampling import compile_policy, write_preview
+        from animal_sampling import compile_policy, write_preview, source_split_stats
         mapping = compile_policy(report['catalog'],report['policy'])
         manifest = root/'selection.jsonl'
         backup = root/'selection.before_image_repair.jsonl'
@@ -134,6 +134,7 @@ def recount(root, ops):
             raise ValueError('Current images do not match animal selection manifest')
         report.update(selected_images=total,split_image_counts={s:r['images'] for s,r in stats.items()},
                       negative_images=sum(r['negative_images'] for r in stats.values()))
+        report['source_split_stats'] = source_split_stats((json.loads(line) for line in retained),report.get('source_snapshots',[]))
         counts = {n:{s:r['class_images'].get(n,0) for s,r in stats.items()} for n in report['names']}
         report['split']['class_image_counts'] = counts
         report['split']['groups'] = len(components)

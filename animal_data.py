@@ -82,6 +82,8 @@ def main():
         parser.add_argument('--index',type=Path,required=True)
         parser.add_argument('--catalog',type=Path,default=ROOT/'configs/animal_catalog.json')
         parser.add_argument('--policy',type=Path,default=ROOT/'configs/camping19.yaml')
+        parser.add_argument('--source-config',type=Path,help='Source-only YAML with allowed_sources; shares the class policy')
+        parser.add_argument('--only-sources',nargs='+',help='Allowed source families or exact source names; overrides source config/policy')
         parser.add_argument('--max-images',type=int,default=30000)
         parser.add_argument('--source-first',action=argparse.BooleanOptionalAction,default=None,
                             help='Prioritize sources within each output class; --no-source-first prioritizes fine-class balance; default: policy')
@@ -109,6 +111,13 @@ def main():
         if args.output.exists() or args.max_images<1:
             raise ValueError('Use a new output directory and positive max-images')
         catalog,policy = read(args.catalog),read(args.policy)
+        if args.source_config:
+            source_config = read(args.source_config)
+            if not isinstance(source_config,dict) or set(source_config)!={'allowed_sources'}:
+                raise ValueError('Source config must contain only allowed_sources')
+            policy['allowed_sources'] = source_config['allowed_sources']
+        if args.only_sources is not None:
+            policy['allowed_sources'] = args.only_sources
         if args.source_first is not None:
             policy['sampling_priority'] = 'source_first' if args.source_first else 'hierarchy_first'
         if args.lila_min_area is not None:

@@ -32,6 +32,37 @@ AP-10K 只读一套 split 方案（默认1），汇总该方案的 train/val/tes
 
 ## 2. 先预览
 
+### 通用来源筛选（共用一份19类配置）
+
+索引仍可包含所有来源。`--source-config` 只控制候选池，不改变类别方案、图片面积门槛或抽样模式。内置两个来源配置：
+
+| 来源配置 | 允许来源 |
+| --- | --- |
+| `configs/sources_lila.yaml` | 仅 LILA（包含已建立索引的各 LILA 子集） |
+| `configs/sources_ap10k_animals.yaml` | 仅 AP-10K 和 Animals Detection |
+
+```bash
+# 只用 LILA，最多30K、起始ID27、默认平铺硬链接及逐图修复
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
+  --source-config configs/sources_lila.yaml \
+  --lila-ratio 1/16 --max-images 30000 --class-id-start 27 \
+  --output yolo_datasets/animals_30k_lila
+
+# 只用 AP-10K 和 Animals Detection
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
+  --source-config configs/sources_ap10k_animals.yaml \
+  --source-first --max-images 30000 --class-id-start 27 \
+  --output yolo_datasets/animals_30k_ap_animals
+```
+
+也可不用额外文件，直接 `--only-sources lila` 或 `--only-sources ap10k animals`；支持原始来源的精确名称，例如 `--only-sources caltech-camera-traps`。命令行覆盖来源配置，来源配置覆盖主 policy 中的 `allowed_sources`；全部未设置则使用索引中的所有来源。未知名称、空来源列表会报错，避免误选。`preview` 支持同样选项。筛选后不强行凑满30K或19类，缺少的类别会在附录列出；实际有样本类别才生成ID。
+
+主报告新增“来源和划分”表：按来源家族（lila/animals/ap10k）汇总各分集图片、负样本及框数，并列各分集合计。以实际保留图像为准，不累加多类别图片造成重复。旧输出运行 `python animal_data.py report --dataset 输出目录` 即可补表，无需重新抽样；独立 repair 删除后也同步更新。
+
+当前 camping19 将 cougar/puma 及其下级按应用需求归入 `leopard`，不再归入 `lion`；这是业务合并，美洲狮在生物分类上不属于狮子或豹。旧输出只刷新报告不会改变标签，使用新映射需要重新抽样，原始索引可复用。
+
 ```bash
 python animal_data.py preview \
   --index datasets/animal_index.sqlite \
