@@ -191,12 +191,12 @@ datasets/animals_yolo/
 已有 YOLO 数据集也可单独生成标注预览，无需运行转换或加载模型：
 
 ```bash
-python visualize_yolo.py --source datasets/animals_yolo --output runs/labels_preview
+python visualize_yolo.py datasets/animals_yolo
 ```
 
-默认随机抽取 100 张，支持 YAML、图片目录或单张图片，`--split val` 限定验证集，`--limit 0` 导出全部；详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
+直接传数据集目录会把所有有框图片导出到 `preview/类别/划分`。需要指定 YAML、单张图片或抽样数量时，使用 `--source` 模式。详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
 
-检查某一类的全部标注图片，可用 `python visualize_yolo.py --source yolo_datasets/sentrymode_data_v2 --classes left_green --output runs/left_green_preview`。`--classes` 支持类别名称或 ID；指定后默认导出全部匹配图片，仅显示所选类别框，也可用 `--limit` 抽样。
+检查某一类的全部标注图片，可用 `python visualize_yolo.py yolo_datasets/sentrymode_data_v2 --classes left_green`。`--classes` 支持类别名称或 ID，导出的图片保留全部类别框。
 
 ### AutoDL 首轮训练
 

@@ -3,6 +3,15 @@
 `visualize_yolo.py` 将真实标签画到图片上，输出 JPEG 预览和 `report.json`，无需模型或 GPU。使用项目已有的 Pillow、PyYAML、tqdm 依赖。
 
 ```bash
+python visualize_yolo.py datasets/animals_yolo
+python visualize_yolo.py datasets/animals_yolo --classes fox rabbit
+```
+
+直接传数据集目录时，脚本按原划分输出到 `preview/类别/train`、`preview/类别/val`、`preview/类别/test`。默认导出所有有标注框的类别。`--classes` 可传类别名或 ID，控制生成哪些类别目录。多类别图片在各匹配目录各保存一份，每份保留全部框和图例。图像区域最长边为 960 像素，JPEG 质量为 78。无框图片跳过，缺失或损坏的标签及图片错误记入 `preview/report.json`。重新生成前请移走已有的 `preview` 目录。
+
+使用 `--source` 可访问自定义输出、抽样和单图预览模式。
+
+```bash
 # 数据集根目录：默认以种子 42 随机抽取 100 张
 python visualize_yolo.py --source datasets/animals_yolo
 

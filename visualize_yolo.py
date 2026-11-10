@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import colorsys
+from io import BytesIO
 import json
 from pathlib import Path
 import random
+import re
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
+from tqdm import tqdm
 import yaml
 
 from merge_yolo_ids import SUFFIXES, images_for, label_for, load_dataset, validate_label
@@ -242,14 +245,73 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=None
     return report
 
 
+def visualize_dataset(source, classes=None):
+    root = Path(source).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f'Expected a YOLO dataset directory: {root}')
+    dataset = load_split_source(dataset_file(root))
+    names = dataset['names']
+    selected = parse_classes(classes, names)
+    splits = ('train', 'val', 'test')
+    output = root/'preview'
+    if output.exists() or output.is_symlink():
+        raise ValueError(f'Move the existing preview directory before generating a new preview: {output}')
+    images_by_split = {split: images_for(dataset, split) for split in splits}
+    if not any(dataset['config'].get(split) for split in splits):
+        images, _ = collect_images(dataset)
+        for image in images:
+            images_by_split[original_split(image, dataset)].append(image)
+    if not any(images_by_split.values()):
+        raise ValueError(f'No images found in train, val or test: {root}')
+
+    # Keep directory names portable and distinguish names that collide on Windows.
+    folder_names = {cid: re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .')[:100].rstrip(' .')
+                    for cid, name in names.items()}
+    collisions = Counter(name.casefold() for name in folder_names.values())
+    for cid, name in folder_names.items():
+        reserved = re.fullmatch(r'(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])', name.split('.')[0], re.I)
+        if not name or reserved or name.isdecimal() or collisions[name.casefold()] > 1:
+            folder_names[cid] = str(cid)
+    font = load_font()
+    counts, issues = defaultdict(Counter), []
+    output.mkdir()
+    for split, images in images_by_split.items():
+        unique_images = list(dict.fromkeys(images))
+        for index, image in enumerate(tqdm(unique_images, desc=f'Preview {split}', unit='img'), 1):
+            try:
+                boxes = read_boxes(resolve_label(image, root), names)
+                class_ids = {box[0] for box in boxes}
+                if selected is not None:
+                    class_ids &= selected
+                if not class_ids:
+                    continue
+                preview = render_image(image, boxes, names, font, max_size=960)
+                encoded = BytesIO()
+                preview.save(encoded, format='JPEG', quality=78, optimize=True)
+                jpeg = encoded.getvalue()
+                for cid in sorted(class_ids):
+                    folder = folder_names.get(cid, str(cid))
+                    target = output/folder/split/f'{index:06d}_{image.stem[:100]}.jpg'
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(jpeg)
+                    counts[folder][split] += 1
+            except (OSError, ValueError, SyntaxError) as exc:
+                issues.append({'image': str(image), 'split': split, 'error': str(exc)})
+    report = {'counts': counts, 'issues': issues, 'class_folders': folder_names}
+    (output/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+    print(f'Exported {sum(sum(v.values()) for v in counts.values())} previews to {output}; issues: {len(issues)}')
+    return int(bool(issues))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', required=True, help='Dataset directory/YAML, image directory, or single image')
+    parser.add_argument('dataset', nargs='?', help='YOLO dataset directory; save to preview/<class>/<split>')
+    parser.add_argument('--source', help='Legacy mode: dataset directory/YAML, image directory, or single image')
     parser.add_argument('--output', default='runs/labels_preview', help='New directory for JPEG previews and report.json')
     parser.add_argument('--data', help='Optional dataset YAML supplying class names')
     parser.add_argument('--labels', help='Labels directory mirroring the selected image directory')
     parser.add_argument('--split', choices=('all', 'train', 'val', 'test'), default='all')
-    parser.add_argument('--classes', nargs='+', help='Class IDs or exact names; export matching images and draw only these classes')
+    parser.add_argument('--classes', nargs='+', help='Class IDs or exact names; select class folders in dataset mode')
     parser.add_argument('--limit', type=int, default=None,
                         help='Random sample size; 0 exports all (default: all matches with --classes, otherwise 100)')
     parser.add_argument('--seed', type=int, default=42)
@@ -257,7 +319,15 @@ def main(argv=None):
     parser.add_argument('--line-width', type=int, default=3, help='Box stroke in preview pixels')
     parser.add_argument('--font', help='TTF/TTC font, e.g. a Chinese font on Linux')
     args = parser.parse_args(argv)
+    if bool(args.dataset) == bool(args.source):
+        parser.error('Provide a dataset directory or --source')
+    if args.dataset and any(value != parser.get_default(name) for name, value in vars(args).items()
+                            if name not in ('dataset', 'classes')):
+        parser.error('Dataset mode accepts a directory and optional --classes; use --source for other options')
     try:
+        if args.dataset:
+            return visualize_dataset(args.dataset, args.classes)
+        del args.dataset
         report = visualize(**vars(args))
     except (OSError, ValueError, yaml.YAMLError) as exc:
         parser.exit(1, f'Error: {exc}\n')

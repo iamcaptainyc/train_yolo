@@ -249,6 +249,38 @@ class VisualizeTests(unittest.TestCase):
             self.assertEqual(report['matched_images'], 0)
             self.assertEqual(report['counts'], {'missing_label': 1})
 
+    def test_cli_dataset_groups_by_class_and_split_and_preserves_all_boxes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = Path(__file__).resolve().parents[1]/'visualize_yolo.py'
+            for classes in ([], ['--classes', 'cat']):
+                with self.subTest(classes=classes):
+                    dataset = root/('selected' if classes else 'all')
+                    train = self.make_image(dataset, 'images/train/shared.png',
+                        '0 0.2 0.5 0.2 0.4\n1 0.7 0.5 0.2 0.4\n')
+                    Image.new('RGB', (2000, 1000), 'white').save(train)
+                    self.make_image(dataset, 'images/val/cat.png')
+                    self.make_image(dataset, 'images/test/dog.png', '1 0.5 0.5 0.4 0.4\n')
+                    config = {'names': ['cat', 'dog'], **{s:f'images/{s}' for s in ('train','val','test')}}
+                    (dataset/'data.yaml').write_text(yaml.safe_dump(config), encoding='utf-8')
+                    command = [sys.executable, '-X', 'utf8', str(script), str(dataset), *classes]
+                    result = subprocess.run(command, capture_output=True, encoding='utf-8')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    output = dataset/'preview'
+                    cat_preview = next((output/'cat/train').glob('*.jpg'))
+                    self.assertEqual(len(list((output/'cat/val').glob('*.jpg'))), 1)
+                    with Image.open(cat_preview) as preview:
+                        self.assertEqual(preview.width, 960)
+                        # The dog box is retained even in the cat-only export.
+                        body_top = preview.height - 480
+                        self.assertLess(min(preview.getpixel((576, body_top+240))), 235)
+                    if classes:
+                        self.assertFalse((output/'dog').exists())
+                    else:
+                        dog_preview = next((output/'dog/train').glob('*.jpg'))
+                        self.assertEqual(cat_preview.read_bytes(), dog_preview.read_bytes())
+                        self.assertEqual(len(list((output/'dog/test').glob('*.jpg'))), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
