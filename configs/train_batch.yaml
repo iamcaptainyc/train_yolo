@@ -1,0 +1,23 @@
+# Paths are relative to this file, or may be absolute.
+model: ../weights/yolo11n.pt
+output: ../runs/batch_train
+
+defaults:
+  epochs: 250
+  imgsz: 640
+  batch: 128
+  eval_batch: 32
+  workers: 16
+  device: 0
+  seed: 42
+  patience: 50
+
+datasets:
+  - name: animals_19
+    data: ../yolo_datasets/animals_30k_19/data.yaml
+  - name: animals_21
+    data: ../yolo_datasets/animals_30k_21/data.yaml
+    # Optional overrides for this experiment:
+    # params:
+    #   batch: 64
+    #   fliplr: 0

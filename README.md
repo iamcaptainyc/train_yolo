@@ -289,6 +289,18 @@ python train.py --resume runs/animals/yolo11s/weights/last.pt --device 0
 
 恢复时沿用检查点记录的训练配置。如果训练已结束、想追加一轮微调，用 `--model .../last.pt --epochs 50 --name finetune` 新开训练。
 
+### 同一模型在多个数据集上训练
+
+编辑 `configs/train_batch.yaml`，将 `model` 指向已有本地权重，在 `datasets` 列出数据集目录或 YAML。相对路径以配置文件目录为基准。`defaults` 适用于全部实验，每个数据集的可选 `params` 覆盖对应参数。省略的参数使用 `train.py` 的默认值。
+
+```bash
+python train_batch.py --config configs/train_batch.yaml
+```
+
+每个实验从同一份初始权重依次独立训练。批次目录下的 `SUMMARY.md`、`summary.csv` 和 `summary.json` 随实验完成而更新，汇总验证集和测试集的 P、R、mAP50、mAP50–95。各实验的权重、评估日志和混淆矩阵位于对应的 `training/` 目录。普通训练失败时会记录错误并继续下一个实验，Ctrl+C 停止整个批次并保留已完成的结果。
+
+汇总使用各数据集自身的验证集和测试集。要判断哪个训练数据方案在同一目标上更好，请使用相同的测试集和类别定义做横向对比。
+
 ### Linux 训练异常退出保护
 
 需要自动比较 YOLOv8n/s、YOLO11n/s 时，运行 `python tune.py --data 数据集/data.yaml`，无需指定名称。原有 `--mode standard` 默认先跑 auto 基线，再比较 batch 并搜索参数，每模型 8 次。新增 `--mode progressive`（小尺寸筛选→正式尺寸训练）和 `--mode prune`（始终正式尺寸，30/80 轮剪枝→完整训练），均使用 Optuna Pruner、默认固定 batch=64。三种模式默认每个 COMPLETE 候选立即测试并保存指标，渐进模式包含筛选阶段；PRUNED 不测试。`--batch 128` 可指定固定 batch；`--dry-run` 查看计划。三种模式始终按验证集选优，详见 [完整命令与恢复说明](docs/model_search.md)。
