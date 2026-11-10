@@ -81,6 +81,14 @@ groups:
     - mole
     - tree_shrew
     - hedgehog
+    - western_spotted_skunk
+    - weasel
+    - weasel_family
+    - bamboo_rat
+    # Skip coarse labels while retaining yellow_throated_marten and crab_eating_mongoose.
+    exclude_exact:
+    - marten
+    - mongoose
 sampling_priority: source_first
 source_priority:
 - ap10k

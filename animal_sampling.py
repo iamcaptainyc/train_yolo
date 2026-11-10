@@ -44,7 +44,8 @@ def compile_policy(catalog, policy):
             # additional root-member quotas simply because children carry tags too.
             tagged = [n for n in tagged if not any(a!=n and a in paths[n] for a in tagged)]
             members = list(dict.fromkeys(members+sorted(tagged)))
-        if not members or len(members)!=len(set(members)) or set(members+rule.get('exclude',[]))-nodes.keys():
+        excluded_nodes = set(rule.get('exclude', [])) | set(rule.get('exclude_exact', []))
+        if not members or len(members)!=len(set(members)) or (set(members) | excluded_nodes)-nodes.keys():
             raise ValueError(f'Unknown/duplicate/empty members: {group}')
         if any(a!=b and a in paths[b] for a in members for b in members):
             raise ValueError(f'Overlapping ancestor/child members within {group}')
@@ -53,7 +54,7 @@ def compile_policy(catalog, policy):
     for node,chain in paths.items():
         matches = []
         for group,rule in expanded.items():
-            if set(chain)&set(rule.get('exclude',[])):
+            if node in rule.get('exclude_exact', []) or set(chain)&set(rule.get('exclude',[])):
                 continue
             for member in rule['members']:
                 if member in chain:

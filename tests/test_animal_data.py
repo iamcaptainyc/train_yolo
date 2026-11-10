@@ -342,14 +342,27 @@ class AnimalDataTests(unittest.TestCase):
         for name in ('cougar','puma','mountain_lion'):
             self.assertEqual(result[name][0],'leopard')
         self.assertEqual(result['lion'][0],'lion')
-        for excluded in ('camel','pig','squirrel','turtle','panda'):
+        for excluded in ('camel','pig','squirrel','turtle','panda','galago','mouse','mole',
+                         'tree_shrew','hedgehog','western_spotted_skunk','weasel','back_striped_weasel',
+                         'unidentified_weasel','yellow_bellied_weasel','weasel_family','bamboo_rat',
+                         'mongoose','marten'):
             self.assertNotIn(excluded,result)
         self.assertEqual(result['eagle'][0],'eagle')
         self.assertEqual(result['owl'][0],'bird')
         self.assertEqual(result['fox'][0],'small_mammal')
-        for name in ('mongoose','crab_eating_mongoose','weasel','yellow_bellied_weasel','yellow_throated_marten',
-                     'civet','large_indian_civet','spotted_linsang','beaver','mole','mink','opossum','tree_shrew'):
+        for name in ('crab_eating_mongoose','yellow_throated_marten','civet','large_indian_civet',
+                     'spotted_linsang','beaver','mink','opossum','porcupine','rabbit','striped_skunk'):
             self.assertEqual(result[name][0],'small_mammal',name)
+        variant=yaml.safe_load((root/'configs/camping21.yaml').read_text(encoding='utf-8'))
+        self.assertEqual(len(variant['groups']),21)
+        mapped=compile_policy(cat,variant)
+        expected={}
+        for name,(group,path) in result.items():
+            branch = path[1]
+            if group=='small_mammal' and branch=='porcupine':
+                continue
+            expected[name] = branch if group=='small_mammal' and branch in ('fox','rabbit') else group
+        self.assertEqual({name:group for name,(group,_) in mapped.items()},expected)
 
     def test_size_tag_balances_member_families_despite_different_leaf_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
