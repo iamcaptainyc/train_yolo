@@ -230,9 +230,9 @@ python visualize_yolo.py --source datasets/stanford_dogs_yolo --split val --clas
 
 将 `--source` 指向解压目录。脚本识别 `Images/` 和 `Annotation/`，也支持 Kaggle 外层的 `images/Images/` 和 `annotations/Annotation/`。标注按犬种目录及图片文件名匹配，支持无扩展名 XML 和 `.xml`。
 
-默认将所有狗框标为 `dog`（ID `0`），可加 `--class-mode breed` 按图片的犬种目录分配类别。默认按固定种子重新划分为 `train/val/test`（8:1:1），相同内容的图片留在同一划分。用 `--ratios 8 1 1` 和 `--seed 42` 调整划分。输出包含 `images/`、`labels/`、`data.yaml` 和 `report.json`。
+默认将所有框标为 `dog`（ID `0`）。`--class-mode breed` 按犬种目录分配类别，`--class-mode xml` 读取每个 `<object>` 的 `<name>`，可在同一张图中保留不同类别。XML 模式也支持平铺的 VOC `JPEGImages/` 和 `Annotations/`。默认按固定种子重新划分为 `train/val/test`（8:1:1），相同内容的图片留在同一划分。输出包含 `images/`、`labels/`、`data.yaml` 和 `report.json`。
 
-默认将 XML 的 `xmin/ymin/xmax/ymax` 作为像素边界。明确采用从 1 开始计数且包含两端像素的标注时，可加 `--coordinates voc`。越界框会裁到图像边缘，零面积框、损坏图片和无效标注默认报错。`--skip-invalid` 跳过问题图片并记录原因。图片默认优先硬链接，失败时复制。需要独立副本时使用 `--copy-mode copy`。
+默认将 XML 的 `xmin/ymin/xmax/ymax` 作为像素边界。明确采用从 1 开始计数且包含两端像素的标注时，可加 `--coordinates voc`。需要校正 EXIF 方向的图片会生成新文件，并同步变换对应的框。XML 尺寸与原始像素相符时，框按原始方向解释。仅与校正后尺寸相符时，框按校正后的方向解释。越界框裁到图像边缘，无法安全转换的图片默认跳过并记入 `report.json`，可加 `--strict` 遇错即停。其余图片默认优先硬链接，失败时复制，或使用 `--copy-mode copy` 创建独立副本。
 
 ## 3. 训练 YOLO11 和 YOLO26
 
