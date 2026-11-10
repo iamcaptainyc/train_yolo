@@ -59,6 +59,17 @@ python animal_data.py sample \
 
 也可不用额外文件，直接 `--only-sources lila` 或 `--only-sources ap10k animals`；支持原始来源的精确名称，例如 `--only-sources caltech-camera-traps`。命令行覆盖来源配置，来源配置覆盖主 policy 中的 `allowed_sources`；全部未设置则使用索引中的所有来源。未知名称、空来源列表会报错，避免误选。`preview` 支持同样选项。筛选后不强行凑满30K或19类，缺少的类别会在附录列出；实际有样本类别才生成ID。
 
+各来源可选不同物种。在 `--source-config` 指定的 YAML 中写入 `source_members`，键为索引中登记的精确来源名，值为目录中的动物标签。例如：
+
+```yaml
+source_members:
+  animals: [fox, rabbit]
+  wild_boar_dataset: [wild_boar]
+  farm_harmful_dataset: [wolf, lion]
+```
+
+来源清单与 `allowed_sources` 或 `--only-sources` 取交集。填写 `fox` 会选中赤狐等下级类别，再按 `--policy` 归并，例如 19 类归入 `small_mammal`，21 类输出 `fox`。一张图包含来源规则未允许的框时，整张图跳过。已确认的负样本仍由主配置的 `negative_fraction` 控制。调整这些规则可复用现有索引。`report.json` 会记录 `source_members`，附录会列出各来源和原始标签的实际入选数。
+
 主报告新增“来源和划分”表：按来源家族（lila/animals/ap10k）汇总各分集图片、负样本及框数，并列各分集合计。以实际保留图像为准，不累加多类别图片造成重复。旧输出运行 `python animal_data.py report --dataset 输出目录` 即可补表，无需重新抽样；独立 repair 删除后也同步更新。
 
 当前 camping19 将 cougar/puma 及其下级按应用需求归入 `leopard`，不再归入 `lion`；这是业务合并，美洲狮在生物分类上不属于狮子或豹。旧输出只刷新报告不会改变标签，使用新映射需要重新抽样，原始索引可复用。

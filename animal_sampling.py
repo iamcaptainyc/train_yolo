@@ -67,6 +67,25 @@ def compile_policy(catalog, policy):
     return mapping
 
 
+def compile_source_members(rules, sources, nodes, mapping):
+    if not isinstance(rules, dict) or not rules:
+        raise ValueError('source_members must map indexed source names to non-empty lists of catalog concepts')
+    unknown_sources = rules.keys()-{source['name'] for source in sources.values()}
+    if unknown_sources:
+        raise ValueError(f'Unknown or unindexed source_members names: {sorted(map(str, unknown_sources))}')
+    for source, members in rules.items():
+        if not isinstance(members, list) or not members or any(not isinstance(n, str) or n not in nodes for n in members):
+            raise ValueError(f'source_members for {source} must list known catalog concepts')
+
+    descendants = defaultdict(set)
+    for concept in mapping:
+        ancestor = concept
+        while ancestor:
+            descendants[ancestor].add(concept)
+            ancestor = nodes[ancestor].get('parent')
+    return {source: set().union(*(descendants[n] for n in members)) for source, members in rules.items()}
+
+
 def pool(index, catalog, policy):
     if not 0 <= policy.get('lila_min_area', 1/16) < 1:
         raise ValueError('LILA bbox area ratio must be >= 0 and < 1')
@@ -74,6 +93,9 @@ def pool(index, catalog, policy):
     db = connect(index)
     try:
         sources = {r['id']:dict(r) for r in db.execute('SELECT * FROM sources ORDER BY name')}
+        source_members = None
+        if 'source_members' in policy:
+            source_members = compile_source_members(policy['source_members'], sources, catalog['nodes'], mapping)
         allowed = policy.get('allowed_sources')
         if allowed is not None:
             known = {s['name'] for s in sources.values()} | {json.loads(s['spec']).get('family',s['name']) for s in sources.values()}
@@ -82,6 +104,10 @@ def pool(index, catalog, policy):
             if set(allowed)-known:
                 raise ValueError(f'Unknown or unindexed sources: {sorted(set(allowed)-known)}')
             sources = {i:s for i,s in sources.items() if s['name'] in allowed or json.loads(s['spec']).get('family',s['name']) in allowed}
+        if source_members is not None:
+            sources = {i:s for i,s in sources.items() if s['name'] in source_members}
+            if not sources:
+                raise ValueError('No sources match both source_members and allowed_sources')
         cats = {(r['source'],r['cid']):r['name'] for r in db.execute('SELECT * FROM categories')}
         annotations = defaultdict(list)
         for r in db.execute('SELECT * FROM boxes ORDER BY image,rowid'):
@@ -92,6 +118,7 @@ def pool(index, catalog, policy):
             if image['source'] not in sources:
                 continue
             source = sources[image['source']]
+            allowed_concepts = source_members[source['name']] if source_members is not None else None
             spec = json.loads(source['spec'])
             scope = spec.get('catalog_scope',source['name'])
             projected,paths,origins = [],set(),set()
@@ -102,6 +129,10 @@ def pool(index, catalog, policy):
                 concept = scoped.get(key(raw),key(raw) if key(raw) in catalog['nodes'] else None)
                 if concept not in mapping:
                     excluded[f'{source["name"]}/{raw}'] += 1
+                    bad = True
+                    continue
+                if allowed_concepts is not None and concept not in allowed_concepts:
+                    excluded[f'source_members/{source["name"]}/{raw}'] += 1
                     bad = True
                     continue
                 group,path = mapping[concept]
@@ -251,6 +282,7 @@ def plan(index,catalog,policy,maximum):
     return chosen,{'maximum_images':maximum,'selected_images':len(chosen),'hierarchy_sampling':details,
         'requested_groups':list(policy['groups']),
         'allowed_sources':policy.get('allowed_sources'),
+        'source_members':policy.get('source_members'),
         'sampling_priority':strategy,
         'unselected_groups':[g for g in policy['groups'] if not counts[(g,)]],
         'raw_category_inventory':inventory,

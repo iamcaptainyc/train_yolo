@@ -34,6 +34,36 @@ def catalog():
 
 
 class AnimalDataTests(unittest.TestCase):
+    def test_source_config_selects_different_species_by_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            specs = [fixture(root/name, ['red_fox','rabbit'], [4,4], name=name)
+                     for name in ('first','second','unlisted')]
+            path = Path(specs[0]['annotations'][0])
+            annotations = json.loads(path.read_text())
+            annotations['annotations'].append({'id':8,'image_id':0,'category_id':1,'bbox':[60,10,20,20]})
+            path.write_text(json.dumps(annotations))
+            index = root/'index.sqlite'
+            build(index, specs)
+            policy = {'groups':{'small_mammal':{'members':['fox','rabbit']}}, 'negative_fraction':0}
+            source_config = {'source_members':{'first':['fox'], 'second':['rabbit']}}
+            for name, config in [('policy',policy), ('catalog',catalog()), ('sources',source_config)]:
+                (root/f'{name}.yaml').write_text(yaml.safe_dump(config))
+            script = Path(__file__).resolve().parents[1]/'animal_data.py'
+            result = subprocess.run([sys.executable, '-X', 'utf8', str(script), 'sample', '--index', str(index),
+                '--policy', str(root/'policy.yaml'), '--catalog', str(root/'catalog.yaml'),
+                '--source-config', str(root/'sources.yaml'), '--no-repair-images', '--output', str(root/'out')],
+                capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((root/'out/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['source_members'], source_config['source_members'])
+            self.assertEqual({(r['source'],r['concept']):r['selected_images'] for r in report['provenance']},
+                             {('first','red_fox'):3, ('second','rabbit'):4})
+            with self.assertRaisesRegex(ValueError, 'Unknown or unindexed source_members'):
+                plan(index, catalog(), {**policy,'source_members':{'typo':['fox']}}, 30)
+            with self.assertRaisesRegex(ValueError, 'known catalog concepts'):
+                plan(index, catalog(), {**policy,'source_members':{'first':['typo']}}, 30)
+
     def test_source_filter_profiles_and_cli_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
