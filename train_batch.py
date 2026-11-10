@@ -17,6 +17,7 @@ from search_worker import write_json
 
 
 TRAIN_SCRIPT = Path(__file__).resolve().with_name('train.py')
+DATASETS_DIR = TRAIN_SCRIPT.parent/'yolo_datasets'
 PARAMETERS = {
     'epochs': int, 'imgsz': int, 'batch': int, 'eval_batch': int,
     'workers': int, 'seed': int, 'patience': int, 'device': (str, int),
@@ -75,9 +76,16 @@ def load_config(path):
     for entry in entries:
         if not isinstance(entry, dict) or entry.keys()-{'name', 'data', 'params'}:
             raise ValueError('Each dataset entry supports name, data and optional params')
-        data = resolve(entry.get('data'), 'datasets.data')
+        value = entry.get('data')
+        data = resolve(value, 'datasets.data')
+        if (value not in ('.', '..') and not any(char in value for char in '/\\:')
+                and Path(value).suffix.lower() not in ('.yaml', '.yml')):
+            candidate = DATASETS_DIR/value
+            if candidate.is_dir() or not data.exists():
+                data = candidate/'data.yaml'
         if data.is_dir():
             data = data/'data.yaml'
+        data = data.resolve()
         if data.suffix.lower() not in ('.yaml', '.yml') or not data.is_file():
             raise ValueError(f'Dataset YAML does not exist: {data}')
         name = entry.get('name', data.parent.name if data.stem == 'data' else data.stem)

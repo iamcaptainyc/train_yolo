@@ -11,6 +11,22 @@ from train_batch import load_config, run_batch
 
 
 class TrainBatchTests(unittest.TestCase):
+    def test_bare_dataset_name_uses_repository_datasets_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root/'configs/batch.yaml'
+            config.parent.mkdir()
+            dataset = root/'yolo_datasets/animals_30k_19/data.yaml'
+            dataset.parent.mkdir(parents=True)
+            dataset.touch()
+            (root/'model.pt').touch()
+            config.write_text('model: ../model.pt\ndatasets: [{data: animals_30k_19}]\n')
+            with patch('train_batch.DATASETS_DIR', root/'yolo_datasets'):
+                _, _, experiments = load_config(config)
+            self.assertEqual(experiments, [
+                {'name':'animals_30k_19', 'data':str(dataset.resolve()), 'params':{}}
+            ])
+
     def test_independent_training_defaults_overrides_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

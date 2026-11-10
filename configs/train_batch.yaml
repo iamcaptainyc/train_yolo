@@ -1,4 +1,5 @@
 # Paths are relative to this file, or may be absolute.
+# A bare dataset folder name is looked up under the repository's yolo_datasets.
 model: ../weights/yolo11n.pt
 output: ../runs/batch_train
 
@@ -13,10 +14,8 @@ defaults:
   patience: 50
 
 datasets:
-  - name: animals_19
-    data: ../yolo_datasets/animals_30k_19/data.yaml
-  - name: animals_21
-    data: ../yolo_datasets/animals_30k_21/data.yaml
+  - data: animals_30k_19
+  - data: animals_30k_21
     # Optional overrides for this experiment:
     # params:
     #   batch: 64

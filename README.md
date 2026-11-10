@@ -291,7 +291,7 @@ python train.py --resume runs/animals/yolo11s/weights/last.pt --device 0
 
 ### 同一模型在多个数据集上训练
 
-编辑 `configs/train_batch.yaml`，将 `model` 指向已有本地权重，在 `datasets` 列出数据集目录或 YAML。相对路径以配置文件目录为基准。`defaults` 适用于全部实验，每个数据集的可选 `params` 覆盖对应参数。省略的参数使用 `train.py` 的默认值。
+编辑 `configs/train_batch.yaml`，将 `model` 指向已有本地权重。在 `datasets` 中可直接写 `data: animals_30k_19`，脚本会从仓库的 `yolo_datasets/animals_30k_19/data.yaml` 读取，并用文件夹名作为实验名。也可传入目录路径或 YAML 路径，显式相对路径以配置文件目录为基准。`defaults` 适用于全部实验，每个数据集的可选 `params` 覆盖对应参数。省略的参数使用 `train.py` 的默认值。
 
 ```bash
 python train_batch.py --config configs/train_batch.yaml
