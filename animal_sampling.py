@@ -295,35 +295,44 @@ def _link_and_check(source, image, operations):
     os.link(source, image)
     if operations is not None:
         from repair_images import inspect_image
-        return inspect_image(image, operations=operations)
+        from repair_operations import journal_for
+        result = inspect_image(image, operations=operations)
+        if result['status'] in ('repaired', 'deleted'):
+            journal_for(operations, image).unlink(missing_ok=True)
+        return result
     return None
 
 
 def _checked_images(chosen, output, repair, workers):
-    operations = output/'image_repair/operations' if repair else None
-    if not repair or workers == 1:
-        for record in chosen:
-            yield record, _link_and_check(record['image'], output/record['image_rel'], operations)
-        return
-
-    # Native decoder warning capture redirects process-wide stderr. Isolate workers.
-    from repair_images import initialize_worker
-    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
-                             initializer=initialize_worker) as pool:
-        pending = deque()
-        try:
+    operations = output/'.repair-recovery' if repair else None
+    try:
+        if not repair or workers == 1:
             for record in chosen:
-                future = pool.submit(_link_and_check, record['image'], output/record['image_rel'], operations)
-                pending.append((record, future))
-                if len(pending) >= 2 * workers:
+                yield record, _link_and_check(record['image'], output/record['image_rel'], operations)
+            return
+
+        # Native decoder warning capture redirects process-wide stderr. Isolate workers.
+        from repair_images import initialize_worker
+        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
+                                 initializer=initialize_worker) as pool:
+            pending = deque()
+            try:
+                for record in chosen:
+                    future = pool.submit(_link_and_check, record['image'], output/record['image_rel'], operations)
+                    pending.append((record, future))
+                    if len(pending) >= 2 * workers:
+                        first, job = pending.popleft()
+                        yield first, job.result()
+                while pending:
                     first, job = pending.popleft()
                     yield first, job.result()
-            while pending:
-                first, job = pending.popleft()
-                yield first, job.result()
-        finally:
-            for _, job in pending:
-                job.cancel()
+            finally:
+                for _, job in pending:
+                    job.cancel()
+    finally:
+        # Workers have exited. Preserve any journal needed to recover an interrupted write.
+        if operations is not None and operations.is_dir() and not any(operations.iterdir()):
+            operations.rmdir()
 
 
 def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False,repair_workers=1):
@@ -384,11 +393,6 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False,
             label.parent.mkdir(parents=True,exist_ok=True)
             if repair_images:
                 repair_counts[result['status']] += 1
-                if result['status']!='healthy':
-                    issues = output/'image_repair/issues.jsonl'
-                    issues.parent.mkdir(parents=True,exist_ok=True)
-                    with issues.open('a',encoding='utf-8') as stream:
-                        stream.write(json.dumps(result,ensure_ascii=False)+'\n')
                 if result['status']=='deleted':
                     # The output hardlink is gone; never create its YOLO label.
                     continue
@@ -400,11 +404,6 @@ def export(index,catalog,policy,maximum,output,start_id=0,*,repair_images=False,
                     if r['annotation_sizes']!={actual_size}:
                         image.unlink()
                         repair_counts['dimension_mismatch_excluded'] += 1
-                        issues = output/'image_repair/issues.jsonl'
-                        issues.parent.mkdir(parents=True,exist_ok=True)
-                        with issues.open('a',encoding='utf-8') as stream:
-                            stream.write(json.dumps({'path':str(image),'status':'dimension_mismatch_excluded',
-                                'actual_size':actual_size,'annotation_sizes':sorted(r['annotation_sizes'])})+'\n')
                         continue
                 if result['status']=='repaired' or r['refresh_stamp']:
                     # In-place repair also changes the source inode and all aliases.
@@ -575,7 +574,7 @@ def write_appendix(report,path):
         lines.append(f'| {" / ".join(r["path"])} | {r["source_bucket"]} | {r["available_images"]} | {r["selected_images"]} |')
     if 'image_repair' in report:
         lines += ['','## 图片修复','',json.dumps(report['image_repair'],ensure_ascii=False),'',
-                  '原位修复同步影响所有硬链接；解码通过不代表缺失画面能够恢复。问题明细见 image_repair/issues.jsonl（集成修复）或独立修复命令指定的日志目录。']
+                  '内联修复的统计汇总在此处。原位修复会同步影响同一文件的硬链接。']
     if 'names' in report:
         lines += ['','## 最终训练类别与划分','', '| ID | 标签 | train 图片 | val 图片 | test 图片 |','| ---: | --- | ---: | ---: | ---: |']
         for name,cid in report['names'].items():
