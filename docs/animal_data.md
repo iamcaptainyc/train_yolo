@@ -68,7 +68,15 @@ source_members:
   farm_harmful_dataset: [wolf, lion]
 ```
 
-来源清单与 `allowed_sources` 或 `--only-sources` 取交集。填写 `fox` 会选中赤狐等下级类别，再按 `--policy` 归并，例如 19 类归入 `small_mammal`，21 类输出 `fox`。一张图包含来源规则未允许的框时，整张图跳过。已确认的负样本仍由主配置的 `negative_fraction` 控制。调整这些规则可复用现有索引。`report.json` 会记录 `source_members`，附录会列出各来源和原始标签的实际入选数。
+单独使用 `source_members` 时，只使用其中列出的来源。设置 `allowed_sources` 或 `--only-sources` 时，由该名单决定哪些来源参与，`source_members` 只对写了物种列表的来源额外筛选。例如：
+
+```yaml
+allowed_sources: [ap10k, animals, dog_wolves]
+source_members:
+  dog_wolves: [wolf]
+```
+
+以上配置让 AP-10K 和 Animals Detection 按主配置抽取，`dog_wolves` 的正样本额外限定为 `wolf` 及其目录下级。填写 `fox` 同理会纳入赤狐等下级类别，再按 `--policy` 归并。一张图包含来源规则未允许的框时，整张图跳过。已确认的负样本仍由主配置的 `negative_fraction` 控制。调整这些规则可复用现有索引。`report.json` 会记录 `source_members`，附录会列出各来源和原始标签的实际入选数。
 
 主报告新增“来源和划分”表：按来源家族（lila/animals/ap10k）汇总各分集图片、负样本及框数，并列各分集合计。以实际保留图像为准，不累加多类别图片造成重复。旧输出运行 `python animal_data.py report --dataset 输出目录` 即可补表，无需重新抽样；独立 repair 删除后也同步更新。
 

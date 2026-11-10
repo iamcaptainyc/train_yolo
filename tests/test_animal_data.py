@@ -50,15 +50,28 @@ class AnimalDataTests(unittest.TestCase):
             for name, config in [('policy',policy), ('catalog',catalog()), ('sources',source_config)]:
                 (root/f'{name}.yaml').write_text(yaml.safe_dump(config))
             script = Path(__file__).resolve().parents[1]/'animal_data.py'
-            result = subprocess.run([sys.executable, '-X', 'utf8', str(script), 'sample', '--index', str(index),
+            command = [sys.executable, '-X', 'utf8', str(script), 'sample', '--index', str(index),
                 '--policy', str(root/'policy.yaml'), '--catalog', str(root/'catalog.yaml'),
-                '--source-config', str(root/'sources.yaml'), '--no-repair-images', '--output', str(root/'out')],
+                '--source-config', str(root/'sources.yaml'), '--no-repair-images']
+            result = subprocess.run(command+['--output', str(root/'out')],
                 capture_output=True, encoding='utf-8')
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads((root/'out/report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['source_members'], source_config['source_members'])
             self.assertEqual({(r['source'],r['concept']):r['selected_images'] for r in report['provenance']},
                              {('first','red_fox'):3, ('second','rabbit'):4})
+            source_config['allowed_sources'] = ['first','second','unlisted']
+            source_config['source_members'] = {'first':['fox']}
+            (root/'sources.yaml').write_text(yaml.safe_dump(source_config))
+            result = subprocess.run(command+['--output', str(root/'combined')],
+                capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((root/'combined/report.json').read_text(encoding='utf-8'))
+            self.assertEqual({(r['source'],r['concept']):r['selected_images'] for r in report['provenance']},
+                             {('first','red_fox'):3, ('second','red_fox'):4, ('second','rabbit'):4,
+                              ('unlisted','red_fox'):4, ('unlisted','rabbit'):4})
+            selected, _, _ = plan(index, catalog(), {**policy, **source_config, 'allowed_sources':['second']}, 30)
+            self.assertEqual(Counter(row['dataset'] for row in selected), {'second':8})
             with self.assertRaisesRegex(ValueError, 'Unknown or unindexed source_members'):
                 plan(index, catalog(), {**policy,'source_members':{'typo':['fox']}}, 30)
             with self.assertRaisesRegex(ValueError, 'known catalog concepts'):

@@ -104,10 +104,8 @@ def pool(index, catalog, policy):
             if set(allowed)-known:
                 raise ValueError(f'Unknown or unindexed sources: {sorted(set(allowed)-known)}')
             sources = {i:s for i,s in sources.items() if s['name'] in allowed or json.loads(s['spec']).get('family',s['name']) in allowed}
-        if source_members is not None:
+        elif source_members is not None:
             sources = {i:s for i,s in sources.items() if s['name'] in source_members}
-            if not sources:
-                raise ValueError('No sources match both source_members and allowed_sources')
         cats = {(r['source'],r['cid']):r['name'] for r in db.execute('SELECT * FROM categories')}
         annotations = defaultdict(list)
         for r in db.execute('SELECT * FROM boxes ORDER BY image,rowid'):
@@ -118,7 +116,7 @@ def pool(index, catalog, policy):
             if image['source'] not in sources:
                 continue
             source = sources[image['source']]
-            allowed_concepts = source_members[source['name']] if source_members is not None else None
+            allowed_concepts = source_members.get(source['name']) if source_members is not None else None
             spec = json.loads(source['spec'])
             scope = spec.get('catalog_scope',source['name'])
             projected,paths,origins = [],set(),set()
