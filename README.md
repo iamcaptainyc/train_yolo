@@ -14,6 +14,7 @@ train_yolo/
   kaggle_resume.py          # 整包 Range 续传与校验
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
+  prepare_stanford_dogs.py # Stanford Dogs XML 边界框 → YOLO
   animal_data.py            # 通用原始标注索引、分组预览与逐层均衡采样
   split_yolo.py             # 批量重分 YOLO，默认 8:1:1，--in-place 直接更新原目录
   visualize_yolo.py         # YOLO 检测标注抽样可视化，导出带框图片和检查报告
@@ -49,7 +50,7 @@ git clone https://github.com/iamcaptainyc/train_yolo.git
 cd train_yolo
 ```
 
-安装环境后，依次执行“下载 → 转换并检查预览 → 训练 → 测试集评估”。下载工具可用于其他 Kaggle 数据集；转换器只适用于下文描述的 Animals Detection 原始格式。
+安装环境后，依次执行“下载 → 转换并检查预览 → 训练 → 测试集评估”。下载工具可用于其他 Kaggle 数据集。`prepare_dataset.py` 对应 Animals Detection 的原始文本标注，`prepare_stanford_dogs.py` 对应 Stanford Dogs 的 XML 边界框。
 
 LILA 相机陷阱数据集使用独立下载器，默认 AWS、32 并发：
 
@@ -218,6 +219,20 @@ python train.py --data datasets/animals_yolo/data.yaml --model yolo11s.pt --epoc
 ```
 
 `yolo11s.pt` 若不在本地由 Ultralytics 获取；已有权重可传 `--model weights/yolo11s.pt`。batch=8 是起始配置，显存不足时减小。转换默认遇到坏图或异常标注会停止；确认要跳过时加 `--skip-invalid`，它会跳过整图并记入报告，不生成假负样本。转换期间显示图片校验/哈希和输出进度，尚未开始训练。
+
+### Stanford Dogs XML 转 YOLO
+
+```bash
+python download_kaggle.py jessicali9530/stanford-dogs-dataset --output datasets/stanford_dogs
+python prepare_stanford_dogs.py --source datasets/stanford_dogs --output datasets/stanford_dogs_yolo
+python visualize_yolo.py --source datasets/stanford_dogs_yolo --split val --classes dog --limit 20 --output runs/stanford_dogs_preview
+```
+
+将 `--source` 指向解压目录。脚本识别 `Images/` 和 `Annotation/`，也支持 Kaggle 外层的 `images/Images/` 和 `annotations/Annotation/`。标注按犬种目录及图片文件名匹配，支持无扩展名 XML 和 `.xml`。
+
+默认将所有狗框标为 `dog`（ID `0`），可加 `--class-mode breed` 按图片的犬种目录分配类别。默认按固定种子重新划分为 `train/val/test`（8:1:1），相同内容的图片留在同一划分。用 `--ratios 8 1 1` 和 `--seed 42` 调整划分。输出包含 `images/`、`labels/`、`data.yaml` 和 `report.json`。
+
+默认将 XML 的 `xmin/ymin/xmax/ymax` 作为像素边界。明确采用从 1 开始计数且包含两端像素的标注时，可加 `--coordinates voc`。越界框会裁到图像边缘，零面积框、损坏图片和无效标注默认报错。`--skip-invalid` 跳过问题图片并记录原因。图片默认优先硬链接，失败时复制。需要独立副本时使用 `--copy-mode copy`。
 
 ## 3. 训练 YOLO11 和 YOLO26
 
