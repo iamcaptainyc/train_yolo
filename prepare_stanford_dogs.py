@@ -42,7 +42,8 @@ def read_boxes(annotation, image, coordinates):
     if root.tag != 'annotation':
         raise ValueError('expected an annotation XML root')
     filename = root.findtext('filename', '').strip()
-    if filename and Path(filename).stem != image.stem:
+    # Some source annotations retain the literal filename placeholder.
+    if filename not in ('', '%s') and Path(filename).stem != image.stem:
         raise ValueError(f'XML filename {filename!r} does not match {image.name}')
     width = int(root.findtext('size/width', '0'))
     height = int(root.findtext('size/height', '0'))
