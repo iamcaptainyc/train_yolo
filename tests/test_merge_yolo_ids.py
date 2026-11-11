@@ -64,6 +64,57 @@ class MergeIDsTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return merge(*args, **kwargs)
 
+    def test_cli_offsets_all_splits_and_supports_shifting_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = '0 0.500 0.5 0.2 0.3\n1 0.4 0.4 0.1 0.2\n'
+            source = dataset(root/'source', {0:'cat', 1:'dog'}, rows)
+            config = root/'merge.yaml'
+            config.write_text('datasets: [./source]\noutput: shifted\nid_offset: 27\n')
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            command = [sys.executable, '-X', 'utf8', str(script)]
+            result = subprocess.run(command+['--config', str(config)],
+                                    capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = root/'shifted'
+            exported = yaml.safe_load((output/'data.yaml').read_text())
+            self.assertEqual(exported['nc'], 29)
+            self.assertEqual(exported['names'],
+                             {**{i:f'reserved_{i}' for i in range(27)}, 27:'cat', 28:'dog'})
+            report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['id_mapping'], {'0':27, '1':28})
+            self.assertEqual(report['names'], {'27':'cat', '28':'dog'})
+            self.assertEqual(report['output_padding_ids'], list(range(27)))
+            for split in ('train', 'val', 'test'):
+                label, = (output/'labels'/split).glob('*.txt')
+                self.assertEqual(label.read_text(), '27 0.500 0.5 0.2 0.3\n28 0.4 0.4 0.1 0.2\n')
+                image, = (output/'images'/split).glob('*.jpg')
+                self.assertTrue(os.path.samefile(image, source/'images'/split/'same_name.jpg'))
+                self.assertEqual((source/'labels'/split/'same_name.txt').read_text(), rows)
+                self.assertEqual(report['class_box_counts'][split], {'27':1, '28':1})
+            restored = root/'restored'
+            result = subprocess.run(command+['--datasets', str(output), '--output', str(restored),
+                                             '--reserved-ids', '1:0-26', '--id-offset', '-27'],
+                                    capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(yaml.safe_load((restored/'data.yaml').read_text())['names'], {0:'cat', 1:'dog'})
+            label, = (restored/'labels/train').glob('*.txt')
+            self.assertEqual(label.read_text(), rows)
+
+    def test_invalid_offsets_fail_before_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = dataset(root/'source', {0:'cat', 2:'dog'}, '0 0.5 0.5 0.2 0.3\n')
+            output = root/'out'
+            for kwargs, message in (
+                ({'id_offset':27}, 'consecutive'),
+                ({'id_offset':27, 'compact_ids':True}, 'cannot be combined'),
+                ({'id_offset':-1, 'include_ids':{1:{0}}}, 'negative'),
+            ):
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, message):
+                    self.call_merge([source], output, **kwargs)
+                self.assertFalse(output.exists())
+
     def test_real_83_class_case_reserved_padding_hardlinks_and_boxes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

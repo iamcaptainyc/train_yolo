@@ -18,6 +18,21 @@ python merge_yolo_ids.py \
 
 每个输入可以是包含 `data.yaml` 的目录，也可以直接是 YAML 文件；支持单个数据集抽取，或多个数据集合并。输出必须是独立的新目录。
 
+## 整体偏移类别 ID
+
+把已有数据集的类别 ID 从 0～20 整体加 27，得到 27～47：
+
+```bash
+python merge_yolo_ids.py \
+  --datasets yolo_datasets/animals_30k_21 \
+  --id-offset 27 \
+  --output yolo_datasets/animals_30k_21_id27
+```
+
+也可在合并配置中写 `id_offset: 27`。标签与输出 YAML 同步更新，报告列出原 ID 和新 ID。输出 YAML 的前缀 ID 0～26 用 `reserved_0` 等名称占位，后续把它作为第 2 份数据合并时加 `--reserved-ids 2:0-26`。
+
+支持负数偏移，例如将带占位的 27～47 移回 0～20 时，加 `--reserved-ids 1:0-26 --id-offset -27`。筛选和占位参数使用输入 ID。保留的真实 ID 必须连续，偏移后不能小于 0。非零偏移与 `--compact-ids` 互斥。
+
 ## 只提取指定类别
 
 只取一份数据中的原 ID `0、25、26`，单独生成可训练的三类数据集：
@@ -57,7 +72,7 @@ python merge_yolo_ids.py \
 - 参数格式为 `来源序号:ID列表`，来源序号按 --datasets 顺序从 1 开始。支持范围、逗号，以及一次传入多个值，例如 `--reserved-ids "1:0,2-5,9" "2:0-26"`。也兼容重复参数或混合写法，例如 `--reserved-ids "1:0,2-5,9" --reserved-ids "2:0-26"`；同一来源重复声明的 ID 合并处理。默认不传；范围只作用于指定来源，不影响其他来源的同 ID。
 - 标签中实际使用了占位 ID 或未声明 ID 时停止，不能靠另一来源同 ID 的名称掩盖输入错误。
 - 同 ID、相同名称允许；同 ID、不同真实名称报错。不同 ID 即使名称相同，也保持原 ID，不自动做语义合并。
-- 最终真实类别表必须从 0 连续；没有被真实类别填补的占位缺口会报错。不会自动改 ID；只有显式添加 `--compact-ids` 才重排。
+- 默认要求最终真实类别表从 0 连续。可以显式添加 `--compact-ids` 重排，或用 `--id-offset` 整体偏移连续的类别 ID。
 - 合并原 train/val/test，不重新划分。缺少 test 时允许，最终只在有 test 图片时声明 test；train 和 val 必须有图片。
 - YAML 的 `path`、各 split 目录（含子目录）、目录列表或图片清单 txt 都支持。相对 `path` 按 YAML 目录解析，相对 split 按数据根目录解析，相对图片清单行按 txt 所在目录解析。清单行是一张图的完整路径，不解析行内注释。
 - 图片路径需采用标准 `images/...` 与 `labels/...` 对应布局，标签 TXT 与图片同名。图片支持 jpg/jpeg/png/bmp/webp/tif/tiff。缺失标签报错；空 TXT 保留为负样本；只接受五列的目标检测标签，不支持分割/姿态标签。
