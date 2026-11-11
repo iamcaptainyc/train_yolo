@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 SUFFIXES = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff'}
 SPLITS = ('train', 'val', 'test')
+DATASETS_DIR = Path(__file__).resolve().parent/'yolo_datasets'
 
 
 def load_dataset(value):
@@ -316,7 +317,17 @@ def read_merge_config(path):
             raise ValueError('Config output must be a path')
         config['output'] = path.parent/Path(config['output']).expanduser()
     if 'datasets' in config:
-        config['datasets'] = [path.parent/Path(value).expanduser() for value in config['datasets']]
+        datasets = []
+        for value in config['datasets']:
+            dataset_path = Path(value).expanduser()
+            resolved = path.parent/dataset_path
+            if (value not in ('.', '..') and not any(char in value for char in '/\\:')
+                    and dataset_path.suffix.lower() not in ('.yaml', '.yml')):
+                candidate = DATASETS_DIR/value
+                if candidate.is_dir() or not resolved.exists():
+                    resolved = candidate
+            datasets.append(resolved)
+        config['datasets'] = datasets
     return config
 
 

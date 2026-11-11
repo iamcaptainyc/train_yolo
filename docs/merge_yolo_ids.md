@@ -6,7 +6,7 @@
 python merge_yolo_ids.py --config configs/merge_yolo_ids.yaml
 ```
 
-`datasets` 可填写数据集目录或 YAML 文件，`output` 填新输出目录。配置中的相对路径以配置文件所在目录为基准。`include_ids` 和 `reserved_ids` 填字符串列表，例如 `["1:0,25,26", "2:27-35"]`，来源序号按 `datasets` 的顺序从 1 开始。选填的 `compact_ids`、`copy_images`、`keep_negatives` 默认是 `false`。命令行显式参数优先，例如 `--output /data/merged` 或 `--no-copy-images`。
+`datasets` 可直接填写文件夹名，例如 `animals_30k_21`，脚本会优先读取仓库的 `yolo_datasets/animals_30k_21/data.yaml`。也可填写目录路径或 YAML 文件路径。`output` 填新输出目录。显式相对路径以配置文件所在目录为基准。`include_ids` 和 `reserved_ids` 填字符串列表，例如 `["1:0,25,26", "2:27-35"]`，来源序号按 `datasets` 的顺序从 1 开始。选填的 `compact_ids`、`copy_images`、`keep_negatives` 默认是 `false`。命令行显式参数优先，例如 `--output /data/merged` 或 `--no-copy-images`。
 
 `merge_yolo_ids.py` 用于已统一全局类别 ID 的 YOLO 检测数据，不绑定动物类别、来源数量、具体 ID 范围或总类别数。不要与带动物类别归并逻辑的 `merge_yolo_datasets.py` 混用。
 

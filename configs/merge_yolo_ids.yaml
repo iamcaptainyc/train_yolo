@@ -1,7 +1,8 @@
-# Paths are relative to this config file.
+# Folder names are looked up under the repository's yolo_datasets.
+# Explicit relative paths are relative to this config file.
 datasets:
-  - ../yolo_datasets/other_targets
-  - ../yolo_datasets/animals_30k_21
+  - other_targets
+  - animals_30k_21
 output: ../yolo_datasets/merged
 
 # Source numbers follow the order in datasets and start at 1.
