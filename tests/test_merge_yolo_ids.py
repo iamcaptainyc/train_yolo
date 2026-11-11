@@ -115,6 +115,54 @@ class MergeIDsTests(unittest.TestCase):
                     self.call_merge([source], output, **kwargs)
                 self.assertFalse(output.exists())
 
+    def test_explicit_id_map_from_config_and_cli_applies_simultaneously(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = dataset(root/'source', {0:'cat', 3:'dog', 5:'bird'},
+                             '0 0.5 0.5 0.2 0.3\n3 0.500 0.5 0.2 0.3\n5 0.4 0.4 0.1 0.2\n')
+            config = root/'merge.yaml'
+            config.write_text('datasets: [./source]\noutput: shifted\nid_map: ["3:5", "5:2"]\n')
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            command = [sys.executable, '-X', 'utf8', str(script), '--config', str(config)]
+            result = subprocess.run(command, capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = root/'shifted'
+            exported = yaml.safe_load((output/'data.yaml').read_text())
+            self.assertEqual(exported['nc'], 6)
+            self.assertEqual(exported['names'], {
+                0:'cat', 1:'reserved_1', 2:'bird', 3:'reserved_3', 4:'reserved_4', 5:'dog',
+            })
+            report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['id_mapping'], {'0':0, '3':5, '5':2})
+            self.assertEqual(report['output_padding_ids'], [1, 3, 4])
+            for split in ('train', 'val', 'test'):
+                label, = (output/'labels'/split).glob('*.txt')
+                self.assertEqual(label.read_text(),
+                                 '0 0.5 0.5 0.2 0.3\n5 0.500 0.5 0.2 0.3\n2 0.4 0.4 0.1 0.2\n')
+                self.assertEqual(report['class_box_counts'][split], {'0':1, '5':1, '2':1})
+                image, = (output/'images'/split).glob('*.jpg')
+                self.assertTrue(os.path.samefile(image, source/'images'/split/'same_name.jpg'))
+            result = subprocess.run(command+['--output', str(root/'swap'), '--id-map', '3:5', '5:3'],
+                                    capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            swapped = json.loads((root/'swap/report.json').read_text(encoding='utf-8'))
+            self.assertEqual(swapped['names'], {'0':'cat', '3':'bird', '5':'dog'})
+
+    def test_explicit_id_map_rejects_conflicts_and_missing_classes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = dataset(root/'source', {0:'cat', 1:'dog'}, '0 0.5 0.5 0.2 0.3\n')
+            output = root/'out'
+            for mapping, message in (
+                ({0:1}, 'Output ID 1 conflicts'),
+                ({0:5, 1:5}, 'Output ID 5 conflicts'),
+                ({2:5}, 'source IDs must be retained'),
+                ({0:-1}, 'non-negative'),
+            ):
+                with self.subTest(mapping=mapping), self.assertRaisesRegex(ValueError, message):
+                    self.call_merge([source], output, id_map=mapping)
+                self.assertFalse(output.exists())
+
     def test_real_83_class_case_reserved_padding_hardlinks_and_boxes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

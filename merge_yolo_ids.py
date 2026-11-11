@@ -133,12 +133,31 @@ def selected_label(raw, selected, id_mapping):
     return ''.join(lines).encode('utf-8'), counts
 
 
+def parse_id_map(specs):
+    mapping = {}
+    for spec in specs or ():
+        match = re.fullmatch(r'([0-9]+):([0-9]+)', spec)
+        if not match:
+            raise ValueError(f'Invalid --id-map entry {spec!r}; use OLD:NEW with non-negative integers')
+        old, new = map(int, match.groups())
+        if old in mapping:
+            raise ValueError(f'Duplicate source ID {old} in --id-map')
+        mapping[old] = new
+    return mapping
+
+
 def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=None,
-          compact_ids=False, keep_negatives=False, id_offset=0):
+          compact_ids=False, keep_negatives=False, id_offset=0, id_map=None):
     if type(id_offset) is not int:
         raise ValueError('ID offset must be an integer')
     if id_offset and compact_ids:
         raise ValueError('--id-offset cannot be combined with --compact-ids')
+    id_map = id_map or {}
+    if id_map and (compact_ids or id_offset):
+        raise ValueError('--id-map cannot be combined with --compact-ids or a nonzero --id-offset')
+    if any(type(old) is not int or type(new) is not int or old < 0 or new < 0
+           for old, new in id_map.items()):
+        raise ValueError('--id-map requires non-negative integer IDs')
     sources = [load_dataset(value) for value in datasets]
     requested_reserved = {}
     absent_reserved = {}
@@ -181,17 +200,26 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
     if not names:
         raise ValueError('No real class IDs remain')
     first_id = min(names) if id_offset else 0
-    if not compact_ids and max(names) - first_id + 1 != len(names):
+    if not (compact_ids or id_map) and max(names) - first_id + 1 != len(names):
         if id_offset:
             raise ValueError('Class IDs must be consecutive for --id-offset; it preserves the distance between IDs')
         raise ValueError('Merged real class IDs must be continuous from 0; reserved names cannot fill gaps. '
                          'Use --compact-ids to explicitly renumber a selected subset.')
     if first_id + id_offset < 0:
         raise ValueError('--id-offset would produce negative class IDs')
-    id_mapping = {cid: new if compact_ids else cid + id_offset for new, cid in enumerate(sorted(names))}
+    unknown = id_map.keys() - names.keys()
+    if unknown:
+        raise ValueError(f'--id-map source IDs must be retained after filtering: {sorted(unknown)}')
+    id_mapping = {cid: new if compact_ids else id_map.get(cid, cid + id_offset)
+                  for new, cid in enumerate(sorted(names))}
     original_names = dict(names)
-    names = {id_mapping[cid]: names[cid] for cid in id_mapping}
-    padding = {cid: f'reserved_{cid}' for cid in range(min(names))}
+    by_target = {}
+    for old, new in id_mapping.items():
+        if new in by_target:
+            raise ValueError(f'Output ID {new} conflicts: input IDs {by_target[new]} and {old}')
+        by_target[new] = old
+    names = {new: original_names[by_target[new]] for new in sorted(by_target)}
+    padding = {cid: f'reserved_{cid}' for cid in range(max(names)) if cid not in names}
     records = []
     inode_splits = {}
     seen_paths = set()
@@ -222,7 +250,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                         stats[reason] += 1
                         stats['removed_boxes'] += sum(counts.values())
                         continue
-                if selected is not None or compact_ids or id_offset:
+                if selected is not None or compact_ids or id_offset or id_map:
                     total_before = sum(counts.values())
                     raw, counts = selected_label(raw, selected, id_mapping)
                     stats['removed_boxes'] += total_before-sum(counts.values())
@@ -258,7 +286,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                                  'use --copy-images to explicitly copy instead. Use a new output for retry.') from exc
         (output/'labels'/split/(filename+'.txt')).write_bytes(raw)
     config = {'path': output.as_posix(), 'train': 'images/train', 'val': 'images/val',
-              'nc': len(padding) + len(names), 'names': padding | names}
+              'nc': len(padding) + len(names), 'names': dict(sorted((padding | names).items()))}
     if split_stats['test']['images']:
         config['test'] = 'images/test'
     report = {'sources': [str(s['yaml']) for s in sources],
@@ -281,6 +309,8 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
     id_note = '类别 ID 已按原 ID 升序重排为连续编号' if compact_ids else '类别 ID 保持原值'
     if id_offset:
         id_note = f'类别 ID 统一偏移 {id_offset:+d}'
+    if id_map:
+        id_note = '已应用显式类别 ID 映射'
     lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。{id_note}；保留框的坐标原文与原 train/val/test 划分保留。',
              '', f'图片保存方式：{report["image_mode"]}；图片按来源前缀平铺，标签单独写入。',
              '', '仅检查已知相同文件/硬链接跨划分重复，不校验所有图片内容或判断框的语义正确性。',
@@ -290,16 +320,16 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
              '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 |', '| --- | ---: | ---: |']
     lines += [f'| {s} | {split_stats[s]["images"]} | {split_stats[s]["negative_images"]} |' for s in SPLITS]
     if padding:
-        lines += ['', f'输出 data.yaml 的 ID 0–{len(padding)-1} 为占位项，无标注使用这些 ID。']
+        lines += ['', f'输出 data.yaml 含 {len(padding)} 个未使用的占位 ID，详见 report.json 的 output_padding_ids。']
     if include_ids:
         lines += ['', '## 类别筛选与编号映射', '',
                   '指定来源只保留所选类别的框。混合类别图片保留，但删除未选类别的标签行；它们不属于本次检测任务。',
                   '不含所选类别的正样本图片不输出；筛选来源的原始负样本仅在 --keep-negatives 时保留。未指定筛选的来源全部保留。',
                   '', '各来源选择（null 为全部）：'+json.dumps(report['included_ids'],ensure_ascii=False),
                   '', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
-    elif compact_ids or id_offset:
+    elif compact_ids or id_offset or id_map:
         lines += ['', '## 类别编号映射', '', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
-    if include_ids or compact_ids or id_offset:
+    if include_ids or compact_ids or id_offset or id_map:
         lines += [f'| {cid} | {new} | {original_names[cid].replace(chr(124), chr(92)+chr(124))} |'
                   for cid,new in id_mapping.items()]
     if include_ids or compact_ids:
@@ -321,7 +351,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
 def read_merge_config(path):
     path = path.expanduser().resolve()
     config = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
-    list_keys = ('datasets', 'include_ids', 'reserved_ids')
+    list_keys = ('datasets', 'include_ids', 'reserved_ids', 'id_map')
     flag_keys = ('copy_images', 'compact_ids', 'keep_negatives')
     if not isinstance(config, dict) or config.keys() - {*list_keys, *flag_keys, 'output', 'id_offset'}:
         raise ValueError('Unexpected config fields; see configs/merge_yolo_ids.yaml')
@@ -365,6 +395,8 @@ def main():
                         help='One or more source class selections, e.g. 1:0,25,26 2:27-35; other sources remain unfiltered. Repeatable.')
     parser.add_argument('--compact-ids', action=argparse.BooleanOptionalAction, help='Renumber selected global IDs to 0..N-1')
     parser.add_argument('--id-offset', type=int, help='Add the same signed integer to all selected class IDs')
+    parser.add_argument('--id-map', action='extend', nargs='+', metavar='OLD:NEW',
+                        help='Set individual global class IDs, e.g. 3:10 5:2. Unspecified IDs stay the same. Repeatable.')
     parser.add_argument('--keep-negatives', action=argparse.BooleanOptionalAction, help='Keep original empty-label images from class-filtered sources')
     args = parser.parse_args()
     try:
@@ -378,7 +410,8 @@ def main():
         included = parse_reserved_ids(args.include_ids, len(args.datasets), option='--include-ids')
         report = merge(args.datasets, args.output, args.copy_images, reserved_ids=reserved,
                        include_ids=included, compact_ids=args.compact_ids, keep_negatives=args.keep_negatives,
-                       id_offset=0 if args.id_offset is None else args.id_offset)
+                       id_offset=0 if args.id_offset is None else args.id_offset,
+                       id_map=parse_id_map(args.id_map))
         print(f'Done: {len(report["names"])} classes; YAML: {args.output / "data.yaml"}')
     except KeyboardInterrupt:
         parser.exit(130, '\nStopped. Source datasets unchanged. Use a new output directory for retry.\n')

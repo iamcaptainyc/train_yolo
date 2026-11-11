@@ -33,6 +33,19 @@ python merge_yolo_ids.py \
 
 支持负数偏移，例如将带占位的 27～47 移回 0～20 时，加 `--reserved-ids 1:0-26 --id-offset -27`。筛选和占位参数使用输入 ID。保留的真实 ID 必须连续，偏移后不能小于 0。非零偏移与 `--compact-ids` 互斥。
 
+## 指定单个类别的新 ID
+
+```bash
+python merge_yolo_ids.py \
+  --datasets yolo_datasets/source \
+  --id-map 3:10 5:2 \
+  --output yolo_datasets/remapped
+```
+
+配置文件可写 `id_map: ["3:10", "5:2"]`。各映射都基于原 ID 同时生效，支持交换，例如 `--id-map 3:5 5:3`。未指定的类别保留原 ID。每个目标 ID 只能对应一个保留类别，例如原 ID 2 仍保留时，单独写 `5:2` 会报冲突。
+
+映射应用于筛选后的全局类别表，对所有输入中保留的同一类别生效。`--include-ids` 和 `--reserved-ids` 使用原 ID。显式映射可留下空缺，输出 `data.yaml` 会填入占位名称，具体 ID 记录在 `report.json` 的 `output_padding_ids`。后续再次合并时，可用这些 ID 显式指定 `--reserved-ids`。显式映射与 `--compact-ids`、非零 `--id-offset` 互斥。
+
 ## 只提取指定类别
 
 只取一份数据中的原 ID `0、25、26`，单独生成可训练的三类数据集：

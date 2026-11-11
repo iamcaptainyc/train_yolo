@@ -11,5 +11,7 @@ include_ids: []
 compact_ids: false
 # Add the same integer to every retained class ID.
 id_offset: 0
+# Explicit global OLD:NEW mappings, e.g. ["3:10", "5:2"].
+id_map: []
 copy_images: false
 keep_negatives: false
