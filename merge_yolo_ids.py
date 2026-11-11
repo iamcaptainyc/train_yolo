@@ -228,9 +228,12 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
     boxes = {split: Counter() for split in SPLITS}
     filtering = {f'd{i}': {split: {'scanned_images':0, 'kept_images':0,
                                   'excluded_without_selected_class':0, 'excluded_negatives':0,
+                                  'excluded_cross_split_duplicates':0,
                                   'removed_boxes':0} for split in SPLITS} for i in range(1,len(sources)+1)}
-    for index, source in enumerate(sources, 1):
-        for split in SPLITS:
+    # Evaluate all higher-priority splits before considering any lower-priority source.
+    split_priority = ('test', 'val', 'train')
+    for split in split_priority:
+        for index, source in enumerate(sources, 1):
             for image in tqdm(images_for(source, split), desc=f'Check d{index}/{split}', unit='img'):
                 stat = image.stat()
                 if not image.is_file() or stat.st_size == 0:
@@ -239,10 +242,14 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                 if key in seen_paths:
                     raise ValueError(f'Duplicate image entry: {image}')
                 seen_paths.add(key)
-                label = label_for(image)
-                raw, counts = validate_label(label, source)
                 stats = filtering[f'd{index}'][split]
                 stats['scanned_images'] += 1
+                identity = (stat.st_dev, stat.st_ino)
+                preferred_split = inode_splits.get(identity)
+                if preferred_split is not None and preferred_split != split:
+                    stats['excluded_cross_split_duplicates'] += 1
+                    continue
+                raw, counts = validate_label(label_for(image), source)
                 selected = source['include']
                 if selected is not None and not (selected & counts.keys()):
                     if counts or not keep_negatives:
@@ -255,10 +262,8 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                     raw, counts = selected_label(raw, selected, id_mapping)
                     stats['removed_boxes'] += total_before-sum(counts.values())
                 stats['kept_images'] += 1
-                identity = (stat.st_dev, stat.st_ino)
-                if stat.st_ino and identity in inode_splits and inode_splits[identity] != split:
-                    raise ValueError(f'Same image/hardlink in different splits: {image}')
-                inode_splits[identity] = split
+                if stat.st_ino:
+                    inode_splits[identity] = split
                 token = hashlib.sha256(str(image).encode('utf-8')).hexdigest()
                 filename = f'd{index}_{token}'
                 records.append((split, image, raw, filename))
@@ -267,7 +272,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                 class_images[split].update(counts.keys())
                 boxes[split].update(counts)
     if not split_stats['train']['images'] or not split_stats['val']['images']:
-        raise ValueError('Merged dataset must have non-empty train and val splits')
+        raise ValueError('Merged dataset must have non-empty train and val splits after filtering and duplicate removal')
     output.mkdir(parents=True)
     marker = output/'INCOMPLETE.txt'
     marker.write_text('Merge incomplete. Do not train until data.yaml and MERGE_REPORT.md are generated.\n')
@@ -304,7 +309,8 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
                                          for i, s in enumerate(sources, 1)},
               'class_image_counts': class_images, 'class_box_counts': boxes,
               'image_mode': 'copy' if copy_images else 'hardlink',
-              'duplicate_check': 'same inode across splits only; no full content hash or visual/semantic audit'}
+              'duplicate_check': 'same inode across splits only; no full content hash or visual/semantic audit',
+              'cross_split_priority': split_priority}
     (output/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
     id_note = '类别 ID 已按原 ID 升序重排为连续编号' if compact_ids else '类别 ID 保持原值'
     if id_offset:
@@ -313,12 +319,15 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
         id_note = '已应用显式类别 ID 映射'
     lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。{id_note}；保留框的坐标原文与原 train/val/test 划分保留。',
              '', f'图片保存方式：{report["image_mode"]}；图片按来源前缀平铺，标签单独写入。',
-             '', '仅检查已知相同文件/硬链接跨划分重复，不校验所有图片内容或判断框的语义正确性。',
+             '', '同一文件或硬链接出现在多个划分时，按 test → val → train 的优先级保留，跳过低优先级的图片和标签。',
              '', '## 显式指定的占位类别', '', '默认不按类别名称忽略任何 ID；以下仅为用户指定且确认未被标签使用的占位项。',
              '', json.dumps(report['ignored_reserved_names'], ensure_ascii=False),
              '', '请求范围中未在对应 YAML 声明的 ID（无需处理）：' + json.dumps(absent_reserved, ensure_ascii=False),
-             '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 |', '| --- | ---: | ---: |']
-    lines += [f'| {s} | {split_stats[s]["images"]} | {split_stats[s]["negative_images"]} |' for s in SPLITS]
+             '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 | 跳过的跨划分重复图片 |',
+             '| --- | ---: | ---: | ---: |']
+    for split in SPLITS:
+        skipped = sum(stats[split]['excluded_cross_split_duplicates'] for stats in filtering.values())
+        lines.append(f'| {split} | {split_stats[split]["images"]} | {split_stats[split]["negative_images"]} | {skipped} |')
     if padding:
         lines += ['', f'输出 data.yaml 含 {len(padding)} 个未使用的占位 ID，详见 report.json 的 output_padding_ids。']
     if include_ids:
@@ -333,12 +342,13 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
         lines += [f'| {cid} | {new} | {original_names[cid].replace(chr(124), chr(92)+chr(124))} |'
                   for cid,new in id_mapping.items()]
     if include_ids or compact_ids:
-        lines += ['', '| 来源 / 划分 | 扫描图片 | 保留图片 | 排除无所选类图片 | 排除负样本 | 删除框 |',
-                  '| --- | ---: | ---: | ---: | ---: | ---: |']
+        lines += ['', '| 来源 / 划分 | 扫描图片 | 保留图片 | 排除无所选类图片 | 排除负样本 | 跳过跨划分重复 | 删除框 |',
+                  '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
         for source, splits in filtering.items():
             for split, stats in splits.items():
                 values = ' | '.join(str(stats[k]) for k in ('scanned_images','kept_images',
-                    'excluded_without_selected_class','excluded_negatives','removed_boxes'))
+                    'excluded_without_selected_class','excluded_negatives',
+                    'excluded_cross_split_duplicates','removed_boxes'))
                 lines.append(f'| {source}/{split} | {values} |')
     lines += ['', '## 类别统计', '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 框总数 |', '| ---: | --- | ---: | ---: | ---: | ---: |']
     lines += [f'| {cid} | {name.replace(chr(124), chr(92)+chr(124))} | {class_images["train"][cid]} | {class_images["val"][cid]} | {class_images["test"][cid]} | {sum(boxes[s][cid] for s in SPLITS)} |' for cid, name in names.items()]

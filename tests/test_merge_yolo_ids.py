@@ -223,16 +223,38 @@ class MergeIDsTests(unittest.TestCase):
                     self.call_merge([a,b],root/'out', reserved_ids={2:{0}})
                 self.assertFalse((root/'out').exists())
 
-    def test_shared_hardlink_across_splits_rejected(self):
+    def test_shared_hardlinks_across_splits_keep_higher_priority_images_and_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            a = dataset(root/'a',{0:'cat'},'')
-            b = dataset(root/'b',{1:'dog'},'')
-            image=b/'images/test/same_name.jpg'
-            image.unlink()
-            os.link(a/'images/train/same_name.jpg',image)
-            with self.assertRaisesRegex(ValueError,'different splits'):
-                self.call_merge([a,b],root/'out')
+            cat = '0 0.5 0.5 0.2 0.2\n'
+            dog = '1 0.5 0.5 0.3 0.3\n'
+            a = dataset(root/'a', {0:'cat'}, cat)
+            b = dataset(root/'b', {1:'dog'}, dog)
+            shared_test = b/'images/test/same_name.jpg'
+            for split in ('train', 'val'):
+                duplicate = a/'images'/split/'same_name.jpg'
+                duplicate.unlink()
+                os.link(shared_test, duplicate)
+            shared_val = b/'images/val/same_name.jpg'
+            os.link(shared_val, a/'images/train/val_duplicate.jpg')
+            (a/'labels/train/val_duplicate.txt').write_text(cat)
+
+            output = root/'out'
+            report = self.call_merge([a,b], output)
+            self.assertEqual(report['filtering']['d1']['train']['excluded_cross_split_duplicates'], 2)
+            self.assertEqual(report['filtering']['d1']['val']['excluded_cross_split_duplicates'], 1)
+            for split in ('train', 'val'):
+                label, = (output/'labels'/split).glob('*.txt')
+                self.assertEqual(label.read_text(), dog)
+                self.assertEqual(report['class_box_counts'][split], {1:1})
+            self.assertEqual(report['class_box_counts']['test'], {0:1, 1:1})
+            self.assertEqual((a/'labels/train/same_name.txt').read_text(), cat)
+            self.assertTrue(os.path.samefile(shared_test, a/'images/train/same_name.jpg'))
+            for kept_split, original in (('val', shared_val), ('test', shared_test)):
+                matches = [split for split in ('train', 'val', 'test')
+                           for image in (output/'images'/split).glob('*.jpg')
+                           if os.path.samefile(image, original)]
+                self.assertEqual(matches, [kept_split])
 
     def test_real_reserved_names_are_never_automatically_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -340,7 +362,7 @@ class MergeIDsTests(unittest.TestCase):
             report=self.call_merge([a],root/'out',include_ids={1:{0}})
             self.assertEqual(report['filtering']['d1']['train'],{
                 'scanned_images':3,'kept_images':1,'excluded_without_selected_class':1,
-                'excluded_negatives':1,'removed_boxes':2})
+                'excluded_negatives':1,'excluded_cross_split_duplicates':0,'removed_boxes':2})
             report=self.call_merge([a],root/'with_negatives',include_ids={1:{0}},keep_negatives=True)
             self.assertEqual(report['splits']['train'],{'images':2,'negative_images':1})
             self.assertEqual(report['class_image_counts']['train'][0],1)
