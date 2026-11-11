@@ -29,6 +29,33 @@ def dataset(root, names, rows, split_list=False):
 
 
 class MergeIDsTests(unittest.TestCase):
+    def test_yaml_cli_resolves_paths_and_applies_class_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset(root/'a', {0:'cat', 1:'dog'}, '0 0.5 0.5 0.2 0.3\n1 0.5 0.5 0.2 0.3\n')
+            dataset(root/'b', {0:'padding', 1:'dog'}, '1 0.5 0.5 0.2 0.3\n')
+            config = root/'configs/merge.yaml'
+            config.parent.mkdir()
+            config.write_text(yaml.safe_dump({
+                'datasets':['../a', '../b/data.yaml'], 'output':'../merged',
+                'include_ids':['1:0'], 'reserved_ids':['2:0'], 'copy_images':True,
+            }), encoding='utf-8')
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            command = [sys.executable, '-X', 'utf8', str(script), '--config', str(config)]
+            result = subprocess.run(command, cwd=root, capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = root/'merged'
+            self.assertEqual(yaml.safe_load((output/'data.yaml').read_text())['names'], {0:'cat', 1:'dog'})
+            cat_label, = (output/'labels/train').glob('d1_*.txt')
+            self.assertEqual(cat_label.read_text(), '0 0.5 0.5 0.2 0.3\n')
+            cat_image, = (output/'images/train').glob('d1_*.jpg')
+            self.assertFalse(os.path.samefile(cat_image, root/'a/images/train/same_name.jpg'))
+            result = subprocess.run(command+['--output', 'override', '--no-copy-images'],
+                                    cwd=root, capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cat_image, = (root/'override/images/train').glob('d1_*.jpg')
+            self.assertTrue(os.path.samefile(cat_image, root/'a/images/train/same_name.jpg'))
+
     def call_merge(self, *args, **kwargs):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return merge(*args, **kwargs)

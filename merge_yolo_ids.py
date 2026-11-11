@@ -297,19 +297,49 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
     return report
 
 
+def read_merge_config(path):
+    path = path.expanduser().resolve()
+    config = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
+    list_keys = ('datasets', 'include_ids', 'reserved_ids')
+    flag_keys = ('copy_images', 'compact_ids', 'keep_negatives')
+    if not isinstance(config, dict) or config.keys() - {*list_keys, *flag_keys, 'output'}:
+        raise ValueError('Expected datasets, output, include_ids, reserved_ids, copy_images, compact_ids or keep_negatives in config')
+    for key in list_keys:
+        if key in config and (not isinstance(config[key], list)
+                or any(not isinstance(value, str) or not value.strip() for value in config[key])):
+            raise ValueError(f'Config {key} must be a list of non-empty strings')
+    for key in flag_keys:
+        if key in config and not isinstance(config[key], bool):
+            raise ValueError(f'Config {key} must be true or false')
+    if 'output' in config:
+        if not isinstance(config['output'], str) or not config['output'].strip():
+            raise ValueError('Config output must be a path')
+        config['output'] = path.parent/Path(config['output']).expanduser()
+    if 'datasets' in config:
+        config['datasets'] = [path.parent/Path(value).expanduser() for value in config['datasets']]
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--datasets', type=Path, nargs='+', required=True, help='Dataset directories with data.yaml, or YAML paths')
-    parser.add_argument('--output', type=Path, required=True, help='New directory, outside source datasets')
-    parser.add_argument('--copy-images', action='store_true', help='Copy images instead of hardlinking across filesystems')
-    parser.add_argument('--reserved-ids', action='extend', nargs='+', default=[],
+    parser.add_argument('--config', type=Path, help='Merge YAML; explicit CLI options override its settings')
+    parser.add_argument('--datasets', type=Path, nargs='+', help='Dataset directories with data.yaml, or YAML paths')
+    parser.add_argument('--output', type=Path, help='New directory, outside source datasets')
+    parser.add_argument('--copy-images', action=argparse.BooleanOptionalAction, help='Copy images across filesystems')
+    parser.add_argument('--reserved-ids', action='extend', nargs='+',
                         help='One or more unused padding ID ranges per source (1-based), e.g. 1:27-82 2:0-26. Only declared IDs are ignored; absent IDs are no-ops. Repeatable.')
-    parser.add_argument('--include-ids', action='extend', nargs='+', default=[],
+    parser.add_argument('--include-ids', action='extend', nargs='+',
                         help='One or more source class selections, e.g. 1:0,25,26 2:27-35; other sources remain unfiltered. Repeatable.')
-    parser.add_argument('--compact-ids', action='store_true', help='Explicitly renumber selected global IDs to 0..N-1')
-    parser.add_argument('--keep-negatives', action='store_true', help='Keep original empty-label images from class-filtered sources')
+    parser.add_argument('--compact-ids', action=argparse.BooleanOptionalAction, help='Renumber selected global IDs to 0..N-1')
+    parser.add_argument('--keep-negatives', action=argparse.BooleanOptionalAction, help='Keep original empty-label images from class-filtered sources')
     args = parser.parse_args()
     try:
+        if args.config:
+            for key, value in read_merge_config(args.config).items():
+                if getattr(args, key) is None:
+                    setattr(args, key, value)
+        if not args.datasets or args.output is None:
+            parser.error('datasets and output are required in the config or on the command line')
         reserved = parse_reserved_ids(args.reserved_ids, len(args.datasets))
         included = parse_reserved_ids(args.include_ids, len(args.datasets), option='--include-ids')
         report = merge(args.datasets, args.output, args.copy_images, reserved_ids=reserved,

@@ -1,0 +1,12 @@
+# Paths are relative to this config file.
+datasets:
+  - ../yolo_datasets/other_targets
+  - ../yolo_datasets/animals_30k_21
+output: ../yolo_datasets/merged
+
+# Source numbers follow the order in datasets and start at 1.
+reserved_ids: ["2:0-26"]
+include_ids: []
+compact_ids: false
+copy_images: false
+keep_negatives: false
