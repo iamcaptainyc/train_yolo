@@ -95,6 +95,22 @@ python merge_yolo_ids.py \
 
 合并后输出 `data.yaml`、`report.json`、`MERGE_REPORT.md`，列出忽略的占位 ID、各划分图片数、每类图片数及框数。完成前保留 INCOMPLETE.txt；出错或中断后使用新输出目录重新执行。源数据不修改。
 
+## 检查信号灯 ID 和框数
+
+在训练环境中运行，传入源数据、实际训练用的合并数据和本地可信权重：
+
+```bash
+python audit_light_ids.py \
+  --source yolo_datasets/light \
+  --merged yolo_datasets/merged \
+  --weights runs/detect/experiment/weights/best.pt \
+  --output light_audit.json
+```
+
+`--source` 可传多个路径；数据集参数接受目录或 `data.yaml`。默认从类名识别信号灯，可用 `--classes red_left red_straight green_left` 精确选择。脚本读取现有标签和权重中的类别表，输出各划分的框数和 ID 对比，不运行推理。缺失的划分显示为 `—`，有划分但该类无框显示为 `0`。
+
+脚本会读取合并目录的 `report.json`。当其中的源路径与当前输入一致时，`mapped` 表示 ID 变化与合并记录一致；路径移动后，对未匹配的来源只做直接对比。合并数据与权重之间应使用相同的类别 ID。JSON 还记录缺失标签、非法行和未知 ID 的数量及部分示例。
+
 这里保留 ID 的前提是它们已经具有全局一致的含义。两个独立训练、都从 ID 0 开始但类别不同的数据集，应先显式重新映射 ID，不能直接靠本脚本忽略冲突。
 
 你的 0～26 与 27～82 数据（第二份 YAML 带占位项）使用：
