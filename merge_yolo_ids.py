@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from collections.abc import Hashable
 import hashlib
 import json
 import math
@@ -19,11 +20,41 @@ SPLITS = ('train', 'val', 'test')
 DATASETS_DIR = Path(__file__).resolve().parent/'yolo_datasets'
 
 
+class UniqueKeyLoader(yaml.SafeLoader):
+    def __init__(self, stream):
+        super().__init__(stream)
+        self.checked_mappings = set()
+
+    def flatten_mapping(self, node):
+        if node not in self.checked_mappings:
+            self.checked_mappings.add(node)
+            keys = set()
+            for key_node, _ in node.value:
+                if key_node.tag == 'tag:yaml.org,2002:merge':
+                    continue  # Preserve YAML anchor defaults and explicit overrides.
+                if key_node.tag == 'tag:yaml.org,2002:value':
+                    key_node.tag = 'tag:yaml.org,2002:str'
+                key = self.construct_object(key_node)
+                if not isinstance(key, Hashable):
+                    raise yaml.constructor.ConstructorError(
+                        'while constructing a mapping', node.start_mark,
+                        'found unhashable key', key_node.start_mark,
+                    )
+                if key in keys:
+                    raise yaml.constructor.ConstructorError(
+                        'while constructing a mapping', node.start_mark,
+                        f'duplicate YAML key {key!r}', key_node.start_mark,
+                    )
+                keys.add(key)
+        super().flatten_mapping(node)
+
+
 def load_dataset(value):
     path = Path(value).expanduser().resolve()
     if path.is_dir():
         path = path/'data.yaml'
-    config = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
+    with path.open(encoding='utf-8-sig') as stream:
+        config = yaml.load(stream, Loader=UniqueKeyLoader)
     if not isinstance(config, dict):
         raise ValueError(f'Invalid YAML: {path}')
     names = config.get('names')
@@ -219,6 +250,10 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
             raise ValueError(f'Output ID {new} conflicts: input IDs {by_target[new]} and {old}')
         by_target[new] = old
     names = {new: original_names[by_target[new]] for new in sorted(by_target)}
+    ids_by_name = defaultdict(list)
+    for cid, name in names.items():
+        ids_by_name[name].append(cid)
+    duplicate_names = {name: ids for name, ids in ids_by_name.items() if len(ids) > 1}
     padding = {cid: f'reserved_{cid}' for cid in range(max(names)) if cid not in names}
     records = []
     inode_splits = {}
@@ -298,6 +333,7 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
               'class_ids_preserved': all(cid==new for cid,new in id_mapping.items()),
               'compact_ids': compact_ids, 'id_offset': id_offset, 'id_mapping': id_mapping,
               'original_names': original_names, 'output_padding_ids': list(padding),
+              'same_name_different_ids': duplicate_names,
               'included_ids': {f'd{i}':sorted(s['include']) if s['include'] is not None else None
                                for i,s in enumerate(sources,1)},
               'filtering': filtering, 'keep_original_negatives_when_filtering':keep_negatives,
@@ -330,6 +366,9 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
         lines.append(f'| {split} | {split_stats[split]["images"]} | {split_stats[split]["negative_images"]} | {skipped} |')
     if padding:
         lines += ['', f'输出 data.yaml 含 {len(padding)} 个未使用的占位 ID，详见 report.json 的 output_padding_ids。']
+    if duplicate_names:
+        lines += ['', '以下类别名称对应多个输出 ID，各 ID 分开统计：',
+                  '', json.dumps(duplicate_names, ensure_ascii=False)]
     if include_ids:
         lines += ['', '## 类别筛选与编号映射', '',
                   '指定来源只保留所选类别的框。混合类别图片保留，但删除未选类别的标签行；它们不属于本次检测任务。',
@@ -360,7 +399,8 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
 
 def read_merge_config(path):
     path = path.expanduser().resolve()
-    config = yaml.safe_load(path.read_text(encoding='utf-8-sig'))
+    with path.open(encoding='utf-8-sig') as stream:
+        config = yaml.load(stream, Loader=UniqueKeyLoader)
     list_keys = ('datasets', 'include_ids', 'reserved_ids', 'id_map')
     flag_keys = ('copy_images', 'compact_ids', 'keep_negatives')
     if not isinstance(config, dict) or config.keys() - {*list_keys, *flag_keys, 'output', 'id_offset'}:

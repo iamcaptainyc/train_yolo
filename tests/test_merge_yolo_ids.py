@@ -10,7 +10,7 @@ import unittest
 
 import yaml
 
-from merge_yolo_ids import merge, parse_reserved_ids
+from merge_yolo_ids import merge, parse_reserved_ids, read_merge_config
 
 
 def dataset(root, names, rows, split_list=False):
@@ -166,13 +166,19 @@ class MergeIDsTests(unittest.TestCase):
     def test_real_83_class_case_reserved_padding_hardlinks_and_boxes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            a = dataset(root/'a', {i:f'a{i}' for i in range(27)}, '26 0.5 0.5 0.2 0.3\n')
+            directions = ('left', 'straight', 'right')
+            lights = [f'{color}_{direction}' for color in ('red', 'green') for direction in directions]
+            anames = {i:f'a{i}' for i in range(27)}
+            anames.update(dict(enumerate(lights)))
+            a = dataset(root/'a', anames,
+                        ''.join(f'{i} 0.5 0.5 0.2 0.3\n' for i in range(len(lights))))
             bnames = {i:f'reserved_{i}' if i < 27 else f'b{i}' for i in range(83)}
             b = dataset(root/'b', bnames, '27 0.5 0.5 0.2 0.3\n82 0.4 0.4 0.2 0.2\n')
             report = self.call_merge([a, b], root/'out', reserved_ids={2:set(range(27))})
             config = yaml.safe_load((root/'out/data.yaml').read_text())
             self.assertEqual(config['nc'], 83)
-            self.assertEqual(config['names'][0], 'a0')
+            self.assertEqual([config['names'][i] for i in range(len(lights))], lights)
+            self.assertTrue(report['class_ids_preserved'])
             self.assertEqual(config['names'][27], 'b27')
             self.assertEqual(report['ignored_reserved_ids']['d2'], list(range(27)))
             self.assertFalse((root/'out/INCOMPLETE.txt').exists())
@@ -186,6 +192,34 @@ class MergeIDsTests(unittest.TestCase):
                     self.assertEqual(label.read_bytes(), (source/'labels'/split/'same_name.txt').read_bytes())
             self.assertEqual(report['class_image_counts']['train'][82], 1)
             self.assertEqual(report['class_box_counts']['test'][27], 1)
+
+    def test_rejects_duplicate_yaml_keys_before_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = dataset(root/'a', {0:'green_left'}, '0 0.5 0.5 0.2 0.3\n')
+            output = root/'out'
+            for names in ('{0: green_left, 0: green_straight}',
+                          '{<<: {0: green_left, 0: green_straight}}'):
+                with self.subTest(names=names):
+                    (source/'data.yaml').write_text(f'names: {names}\n')
+                    with self.assertRaisesRegex(yaml.YAMLError, 'duplicate YAML key 0'):
+                        self.call_merge([source], output)
+                    self.assertFalse(output.exists())
+            config = root/'merge.yaml'
+            config.write_text('id_map: ["0:1"]\nid_map: ["0:2"]\n')
+            with self.assertRaisesRegex(yaml.YAMLError, "duplicate YAML key 'id_map'"):
+                read_merge_config(config)
+
+    def test_reports_same_name_at_multiple_ids_without_relabeling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = dataset(root/'a', {0:'red_left'}, '0 0.5 0.5 0.2 0.3\n')
+            b = dataset(root/'b', {1:'red_left'}, '1 0.5 0.5 0.2 0.3\n')
+            output = root/'out'
+            report = self.call_merge([a,b], output)
+            self.assertEqual(report['same_name_different_ids'], {'red_left':[0, 1]})
+            self.assertEqual(report['class_box_counts']['val'], {0:1, 1:1})
+            self.assertIn('"red_left": [0, 1]', (output/'MERGE_REPORT.md').read_text(encoding='utf-8'))
 
     def test_general_three_sources_sparse_names_lists_and_negative_labels(self):
         with tempfile.TemporaryDirectory() as tmp:
