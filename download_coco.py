@@ -15,6 +15,7 @@ from threading import Event
 import zipfile
 
 from tqdm import tqdm
+import yaml
 
 from coco_hf_zip import RangeZip
 from download_openimages import download
@@ -265,8 +266,12 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror', local_o
             temp.write_text(contents, encoding='utf-8')
             temp.replace(manifest)
             split_paths[split] = manifest.name
-    write_json(output/'data.yaml', {'path': output.as_posix(), **split_paths,
-                                    'nc': len(names), 'names': names})
+    config = {'path': output.as_posix(), **split_paths, 'nc': len(names),
+              'names': dict(enumerate(names))}
+    config_path = output/'data.yaml'
+    temp = config_path.with_suffix('.yaml.part')
+    temp.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding='utf-8')
+    temp.replace(config_path)
     for split, stat in stats.items():
         print(f'{split}: {stat["images"]:,} images; {stat["images_by_class"]}')
     print(f'YOLO dataset: {output / "data.yaml"}')

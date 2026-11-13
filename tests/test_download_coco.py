@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 import zipfile
+import yaml
 
 from coco_hf_zip import RangeZip
 from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run
@@ -42,7 +43,9 @@ class DownloadCOCOTests(unittest.TestCase):
                 run(output, ['cow', 'elephant'], archive, 2, 0, local_only=True)
                 download.assert_not_called()
                 remote.assert_not_called()
-                config = json.loads((output/'data.yaml').read_text())
+                config_text = (output/'data.yaml').read_text(encoding='utf-8')
+                self.assertIn('\nnames:\n  0: cow\n  1: elephant\n', config_text)
+                config = yaml.safe_load(config_text)
                 self.assertEqual((config['train'], config['val']), ('train.txt', 'val.txt'))
                 self.assertEqual((output/'train.txt').read_text(), './images/train/000000000001.jpg\n')
                 self.assertEqual((output/'labels/train/000000000001.txt').read_text(), '0 0.05 0.05 0.1 0.1\n')
@@ -61,7 +64,7 @@ class DownloadCOCOTests(unittest.TestCase):
                 remote.return_value.image.return_value = b'mirror image'
                 run(output, ['cow', 'elephant'], archive, 2, 0)
                 remote.return_value.image.assert_called_once_with('train', '000000000002.jpg')
-                config = json.loads((output/'data.yaml').read_text())
+                config = yaml.safe_load((output/'data.yaml').read_text(encoding='utf-8'))
                 self.assertEqual(config['train'], 'images/train')
                 self.assertFalse((output/'_metadata/failures.json').exists())
 
