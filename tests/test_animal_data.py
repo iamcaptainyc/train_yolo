@@ -392,11 +392,15 @@ class AnimalDataTests(unittest.TestCase):
         for excluded in ('camel','pig','squirrel','turtle','panda','galago','mouse','mole',
                          'tree_shrew','hedgehog','western_spotted_skunk','weasel','back_striped_weasel',
                          'unidentified_weasel','yellow_bellied_weasel','weasel_family','bamboo_rat',
-                         'mongoose','marten'):
+                         'mongoose','marten','hog_badger','muntjac','large_antlered_muntjac',
+                         'red_muntjac','roosevelt_muntjac'):
             self.assertNotIn(excluded,result)
         self.assertEqual(result['eagle'][0],'eagle')
         self.assertEqual(result['owl'][0],'bird')
         self.assertEqual(result['fox'][0],'small_mammal')
+        self.assertEqual(result['badger'][0],'small_mammal')
+        self.assertEqual(result['white_tailed_deer'][0],'deer')
+        self.assertEqual(result['eurasian_wild_pig'][0],'wild_boar')
         for name in ('crab_eating_mongoose','yellow_throated_marten','civet','large_indian_civet',
                      'spotted_linsang','beaver','mink','opossum','porcupine','rabbit','striped_skunk'):
             self.assertEqual(result[name][0],'small_mammal',name)

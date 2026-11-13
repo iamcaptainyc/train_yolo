@@ -151,6 +151,8 @@ python animal_data.py sample \
 
 使用 `--policy configs/camping21.yaml` 可切换到 21 类方案。狐狸 `fox`、兔 `rabbit` 分别独立，细长兽类和矮壮兽类合成 `small_mammal`，豪猪及其下级类别排除。两套配置可复用同一索引，导出时分别指定新的输出目录。
 
+两套方案都排除猪獾 `hog_badger` 和麂 `muntjac` 及其下级类别。按原始标签判断，一张图只要有其中任一标注框就整图跳过。
+
 复制 policy 即可定义新方案：
 
 ```yaml

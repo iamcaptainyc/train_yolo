@@ -65,6 +65,8 @@ groups:
   deer:
     members:
     - deer
+    exclude:
+    - muntjac
   bird:
     members:
     - bird
@@ -79,6 +81,7 @@ groups:
   small_mammal:
     member_tag: small_mammal
     exclude:
+    - hog_badger
     - squirrel
     - bat
     - pangolin
