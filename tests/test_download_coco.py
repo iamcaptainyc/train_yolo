@@ -14,6 +14,57 @@ from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_ima
 
 
 class DownloadCOCOTests(unittest.TestCase):
+    def test_local_only_finalizes_partial_dataset_and_resume_completes_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'yolo'
+            archive = Path(tmp)/'annotations.zip'
+            categories = [{'id': 21, 'name': 'cow'}, {'id': 22, 'name': 'elephant'}]
+            with zipfile.ZipFile(archive, 'w') as source:
+                for split, ids in (('train', (1, 2)), ('val', (3,))):
+                    images = [{'id': i, 'file_name': f'{i:012}.jpg', 'width': 100, 'height': 100}
+                              for i in ids]
+                    annotations = [{'image_id': i, 'category_id': 21 if i != 2 else 22,
+                                    'bbox': [0, 0, 10, 10]} for i in ids]
+                    source.writestr(f'annotations/instances_{split}2017.json',
+                                    json.dumps(dict(images=images, categories=categories, annotations=annotations)))
+            for split, image_id in (('train', 1), ('val', 3)):
+                target = output/'images'/split/f'{image_id:012}.jpg'
+                target.parent.mkdir(parents=True)
+                target.write_bytes(b'already downloaded')
+            meta = output/'_metadata'
+            meta.mkdir()
+            (meta/'classes.json').write_text('["cow", "elephant"]')
+            (meta/'failures.json').write_text(json.dumps({
+                'train': [{'file': '000000000002.jpg', 'error': 'Remote end closed connection'}], 'val': [],
+            }))
+
+            with patch('download_coco.download') as download, patch('download_coco.RangeZip') as remote:
+                run(output, ['cow', 'elephant'], archive, 2, 0, local_only=True)
+                download.assert_not_called()
+                remote.assert_not_called()
+                config = json.loads((output/'data.yaml').read_text())
+                self.assertEqual((config['train'], config['val']), ('train.txt', 'val.txt'))
+                self.assertEqual((output/'train.txt').read_text(), './images/train/000000000001.jpg\n')
+                self.assertEqual((output/'labels/train/000000000001.txt').read_text(), '0 0.05 0.05 0.1 0.1\n')
+                subset = json.loads((output/'_metadata/instances_train2017_subset.json').read_text())
+                self.assertEqual([ann['image_id'] for ann in subset['annotations']], [1])
+                report = json.loads((output/'report.json').read_text())
+                self.assertEqual(report['train'], {
+                    'images': 1, 'requested_images': 2, 'missing_images': 1,
+                    'images_by_class': {'cow': 1}, 'boxes_by_class': {'cow': 1},
+                })
+                failures = json.loads((output/'_metadata/failures.json').read_text())
+                self.assertEqual(failures['train'], [
+                    {'file': '000000000002.jpg', 'error': 'Remote end closed connection'},
+                ])
+
+                remote.return_value.image.return_value = b'mirror image'
+                run(output, ['cow', 'elephant'], archive, 2, 0)
+                remote.return_value.image.assert_called_once_with('train', '000000000002.jpg')
+                config = json.loads((output/'data.yaml').read_text())
+                self.assertEqual(config['train'], 'images/train')
+                self.assertFalse((output/'_metadata/failures.json').exists())
+
     def test_remote_zip_fetches_only_requested_member_and_checks_crc(self):
         buffer = io.BytesIO()
         selected = 'train2017/000000000001.jpg'
@@ -119,7 +170,7 @@ class DownloadCOCOTests(unittest.TestCase):
                 path.write_bytes(b'local image')
 
             with patch('download_coco.download', side_effect=fetch):
-                with self.assertRaisesRegex(OSError, 'rerun the same command'):
+                with self.assertRaisesRegex(ValueError, 'at least one completed image'):
                     run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
                 self.assertFalse((output/'data.yaml').exists())
                 failure_report = json.loads((output/'_metadata/failures.json').read_text())

@@ -115,7 +115,7 @@ def select_boxes(data, names):
     return images, selected
 
 
-def export_split(output, split, data, names, workers, retries, prefer_gcs, source):
+def export_split(output, split, data, names, workers, retries, prefer_gcs, source, local_only):
     images, selected = select_boxes(data, names)
     image_dir = output/'images'/split
     label_dir = output/'labels'/split
@@ -133,19 +133,26 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
                not ((label := label_dir/Path(filenames[image_id]).with_suffix('.txt')).is_file()
                     and label.stat().st_size)]
     print(f'COCO {split}2017: {len(image_ids)-len(pending):,} complete, '
-          f'{len(pending):,} pending ({len(image_ids)-len(cached_images):,} images to download)',
+          f'{len(pending):,} pending ({len(image_ids)-len(cached_images):,} missing images)',
           flush=True)
     remote = None
-    if source == 'hf-mirror' and len(cached_images) != len(image_ids):
+    unavailable = 'Image not downloaded (--local-only)' if local_only else None
+    if not local_only and source == 'hf-mirror' and len(cached_images) != len(image_ids):
         url = f'{HF_MIRROR}/{split}2017.zip'
         print(f'COCO image archive (HTTP Range): {url}', file=sys.stderr, flush=True)
-        remote = RangeZip(url, retries)
+        try:
+            remote = RangeZip(url, retries)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            unavailable = f'Cannot open mirror ZIP: {exc}'
+            print(f'COCO {split}2017: {unavailable}', file=sys.stderr)
 
     def fetch(image_id):
         filename = filenames[image_id]
         target = image_dir/filename
         try:
             if not (target.is_file() and target.stat().st_size):
+                if unavailable is not None:
+                    return {'file': filename, 'error': unavailable}
                 if source == 'hf-mirror':
                     if remote is None:
                         raise OSError('A cached image was removed during export; rerun to retrieve it')
@@ -178,13 +185,17 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
                         progress.write(f'{split}/{failure["file"]}: {failure["error"]}', file=sys.stderr)
                     progress.set_postfix(failed=len(failures), refresh=False)
     failures.sort(key=lambda failure: failure['file'])
-    for boxes in selected.values():
+    missing = {failure['file'] for failure in failures}
+    ready_ids = [image_id for image_id in image_ids if filenames[image_id] not in missing]
+    for image_id in ready_ids:
+        boxes = selected[image_id]
         class_boxes.update(names[cid] for _, cid, _ in boxes)
         class_images.update({names[cid] for _, cid, _ in boxes})
-    subset = {**data, 'images': [images[i] for i in image_ids],
-              'annotations': [ann for boxes in selected.values() for ann, _, _ in boxes],
+    subset = {**data, 'images': [images[i] for i in ready_ids],
+              'annotations': [ann for image_id in ready_ids for ann, _, _ in selected[image_id]],
               'categories': [c for c in data['categories'] if c['name'] in names]}
-    stats = {'images': len(image_ids), 'images_by_class': dict(class_images),
+    stats = {'images': len(ready_ids), 'requested_images': len(image_ids), 'missing_images': len(missing),
+             'images_by_class': dict(class_images),
              'boxes_by_class': dict(class_boxes)}
     return subset, stats, failures
 
@@ -195,7 +206,7 @@ def write_json(path, data):
     temp.replace(path)
 
 
-def run(output, names, archive, workers, retries, *, source='hf-mirror'):
+def run(output, names, archive, workers, retries, *, source='hf-mirror', local_only=False):
     output = output.resolve()
     meta = output/'_metadata'
     state = meta/'classes.json'
@@ -209,9 +220,14 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror'):
         write_json(state, names)
     if archive is None:
         archive = meta/ARCHIVE
-        urls = (f'{HF_MIRROR}/{ARCHIVE}',) if source == 'hf-mirror' else ARCHIVE_URLS
-        fetch_archive(archive, retries, urls)
+        if local_only:
+            if not valid_archive(archive):
+                raise ValueError(f'No valid local annotation ZIP at {archive}; provide --annotations-zip')
+        else:
+            urls = (f'{HF_MIRROR}/{ARCHIVE}',) if source == 'hf-mirror' else ARCHIVE_URLS
+            fetch_archive(archive, retries, urls)
     stats, failures = {}, {}
+    image_lists = {}
     prefer_gcs = Event()
     with zipfile.ZipFile(archive) as archive_file:
         for split in SPLITS:
@@ -219,20 +235,37 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror'):
             with archive_file.open(member) as stream:
                 data = json.load(stream)
             subset, stats[split], failures[split] = export_split(
-                output, split, data, names, workers, retries, prefer_gcs, source)
+                output, split, data, names, workers, retries, prefer_gcs, source, local_only)
             write_json(meta/f'instances_{split}2017_subset.json', subset)
+            image_lists[split] = ''.join(f'./images/{split}/{im["file_name"]}\n' for im in subset['images'])
             del data, subset
     failure_path = meta/'failures.json'
-    if any(failures.values()):
+    partial = any(failures.values())
+    if partial:
+        if local_only and failure_path.is_file():
+            previous = json.loads(failure_path.read_text(encoding='utf-8'))
+            for split, errors in failures.items():
+                old_errors = {item['file']: item['error'] for item in previous.get(split, [])}
+                for item in errors:
+                    if item['error'] == 'Image not downloaded (--local-only)':
+                        item['error'] = old_errors.get(item['file'], item['error'])
         write_json(failure_path, failures)
-        counts = ', '.join(f'{split}: {len(errors)}/{stats[split]["images"]}'
-                           for split, errors in failures.items())
-        raise OSError(f'Image downloads incomplete ({counts}). See {failure_path} and rerun the same command.')
-    if any(not stat['images'] for stat in stats.values()):
-        raise ValueError('Both official splits need at least one image with a valid selected box')
-    failure_path.unlink(missing_ok=True)
+        counts = ', '.join(f'{split}: {len(errors)} missing' for split, errors in failures.items())
+        print(f'COCO partial dataset ({counts}). See {failure_path}.', file=sys.stderr)
+    else:
+        failure_path.unlink(missing_ok=True)
     write_json(output/'report.json', stats)
-    write_json(output/'data.yaml', {'path': output.as_posix(), 'train': 'images/train', 'val': 'images/val',
+    if any(not stat['images'] for stat in stats.values()):
+        raise ValueError('Both official splits need at least one completed image and label to export data.yaml')
+    split_paths = {split: f'images/{split}' for split in SPLITS}
+    if partial:
+        for split, contents in image_lists.items():
+            manifest = output/f'{split}.txt'
+            temp = manifest.with_suffix('.txt.part')
+            temp.write_text(contents, encoding='utf-8')
+            temp.replace(manifest)
+            split_paths[split] = manifest.name
+    write_json(output/'data.yaml', {'path': output.as_posix(), **split_paths,
                                     'nc': len(names), 'names': names})
     for split, stat in stats.items():
         print(f'{split}: {stat["images"]:,} images; {stat["images_by_class"]}')
@@ -245,6 +278,8 @@ def main():
     parser.add_argument('--classes', nargs='+', type=str.lower, choices=(*ANIMALS, 'cattle'),
                         default=['cow', 'elephant'])
     parser.add_argument('--annotations-zip', type=Path, help='Reuse the local official train/val annotation archive')
+    parser.add_argument('--local-only', action='store_true',
+                        help='Export existing local images and labels without downloading any files')
     parser.add_argument('--source', choices=['hf-mirror', 'official'], default='hf-mirror',
                         help='Download annotations and images from hf-mirror.com by default')
     parser.add_argument('--workers', type=int, default=16)
@@ -254,7 +289,8 @@ def main():
         parser.error('Require positive workers and nonnegative retries')
     names = sorted({'cow' if name == 'cattle' else name for name in args.classes})
     try:
-        run(args.output, names, args.annotations_zip, args.workers, args.retries, source=args.source)
+        run(args.output, names, args.annotations_zip, args.workers, args.retries,
+            source=args.source, local_only=args.local_only)
     except KeyboardInterrupt:
         parser.exit(130, '\nInterrupted. Rerun the same command to resume.\n')
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:

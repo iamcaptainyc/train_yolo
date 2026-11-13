@@ -13,4 +13,6 @@ python download_coco.py --classes cow elephant \
 
 重跑同一命令会复用完整文件，并对支持 HTTP Range 的服务器续传标注 ZIP 的 `.part`。开始时按划分显示已完成、待处理和待下载数量。进度条只统计待处理项，并单独显示失败数。镜像频繁断开连接时可降低 `--workers`，继续使用同一个输出目录。每张图片保留图中所选类的有效单体框。跳过 `iscrowd` 群体框，超出图像的有效框裁到图像边界。图片保留原 `train2017` 和 `val2017` 划分。
 
-输出含 `images/{train,val}`、`labels/{train,val}`、`data.yaml` 和各类图片数及框数 `report.json`。筛选后的官方 COCO 记录保存在 `_metadata/instances_train2017_subset.json` 和 `_metadata/instances_val2017_subset.json`，保留原始类别 ID 和坐标。下载齐全后才写出 `data.yaml`。改选类别时请指定新输出目录。
+输出含 `images/{train,val}`、`labels/{train,val}`、`data.yaml` 和各类图片数及框数 `report.json`。筛选后的官方 COCO 记录保存在 `_metadata/instances_train2017_subset.json` 和 `_metadata/instances_val2017_subset.json`，保留原始类别 ID 和坐标。
+
+只要训练集和验证集各有一张已完成的图片和标签，下载结束后就会生成 `data.yaml`。部分下载失败时，YAML 指向只包含已完成样本的 `train.txt` 和 `val.txt`，报告记录实际数量和缺失数量。加 `--local-only` 可直接整理现有文件，无需联网。补齐时去掉 `--local-only` 并重跑，继续使用原输出目录。改选类别时请指定新输出目录。
