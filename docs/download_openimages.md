@@ -1,5 +1,20 @@
 # 下载 Open Images V7 动物图片和官方检测框
 
+## 按官方检测框下载全部匹配图片
+
+```bash
+python download_openimages.py \
+  --output datasets/openimages_animals \
+  --boxed \
+  --classes Elephant Tiger Cattle Cat Crocodile Lion \
+  --yolo-output yolo_datasets/openimages_animals6_bbox \
+  --workers 16 --retries 5
+```
+
+`--boxed` 默认选择这六类，按 train、validation、test 的官方 bbox CSV 选取全部匹配图片，不应用 `--max-per-class`。只使用所选类别的官方框，跳过插图框和群体框。包含多个所选类别的图片只保存一次，并保留各类别的框。
+
+`--output` 指向之前的下载目录。已下载图片按原分集和 ImageID 复用，缺失图片保存到 `_metadata/boxed_images`；旧目录和缓存使用同一套官方 bbox CSV。该模式无需 `train_human_labels.csv` 或其他图像级标签。中断或遇到下载错误时重跑同一命令即可；完成后把图片硬链接到新 YOLO 目录，保留官方分集，报告包括各类各分集图片数及框数。导出目录和缓存须位于同一文件系统。
+
 ## 给已下载的图片补官方检测框
 
 ```bash

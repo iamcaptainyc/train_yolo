@@ -8,10 +8,70 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from download_openimages import BOX_CLASSES, BOX_URLS, download, export_annotations, select_images
+from download_openimages import BOX_CLASSES, BOX_URLS, DEFAULT_BOX_CLASSES, IMAGE_BASE, download, download_boxed, export_annotations, select_images
 
 
 class DownloadOpenImagesTests(unittest.TestCase):
+    def test_download_all_boxed_classes_reuses_local_images_and_resumes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'openimages'
+            meta = root/'_metadata'
+            meta.mkdir(parents=True)
+            (meta/'download_config.json').write_text('{"classes": ["Wolf", "Cat"]}')
+            (meta/'train_human_labels.csv').write_text('unused')
+            (root/'cat').mkdir()
+            local = root/'cat'/'train_0000000000000001.jpg'
+            local.write_bytes(b'local image')
+            class_ids = dict(enumerate(DEFAULT_BOX_CLASSES, 1))
+            header = 'ImageID,LabelName,XMin,XMax,YMin,YMax,IsGroupOf,IsDepiction\n'
+            metadata = {
+                BOX_CLASSES: ''.join(f'/m/{i},{name}\n' for i, name in class_ids.items()),
+                BOX_URLS['train']: header + ''.join(
+                    f'{i:016x},/m/{cid},0.1,0.5,0.2,0.6,0,0\n'
+                    for i, cid in [(1, 4), (1, 1), (2, 1), (3, 2), (4, 3), (5, 5), (6, 6), (7, 1)]
+                ),
+                BOX_URLS['validation']: header + '0000000000000008,/m/1,0.1,0.5,0.2,0.6,0,0\n',
+                BOX_URLS['test']: header + '0000000000000009,/m/2,0.1,0.5,0.2,0.6,0,0\n',
+            }
+            dest = Path(tmp)/'yolo'
+            args = SimpleNamespace(output=root, yolo_output=dest, classes=None,
+                                   splits=['train', 'validation', 'test'], retries=0, workers=2)
+            fail_url = f'{IMAGE_BASE}/train/0000000000000007.jpg'
+            failures = {fail_url}
+
+            def fetch_fixture(url, path, retries, progress=False):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if url in metadata:
+                    path.write_text(metadata[url])
+                elif url in failures:
+                    raise OSError('simulated network failure')
+                else:
+                    self.assertTrue(url.startswith(IMAGE_BASE))
+                    path.write_bytes(b'downloaded image')
+
+            with patch('download_openimages.download', side_effect=fetch_fixture) as fetch:
+                with self.assertRaisesRegex(OSError, 'Rerun the same command'):
+                    download_boxed(args)
+                self.assertFalse(dest.exists())
+                self.assertTrue((meta/'boxed_download_failures.json').is_file())
+                fetch.reset_mock()
+                failures.clear()
+                self.assertEqual(download_boxed(args), 0)
+                calls = [call.args[0] for call in fetch.call_args_list if call.args[0].startswith(IMAGE_BASE)]
+                self.assertEqual(calls, [fail_url])
+
+            report = json.loads((dest/'bbox_report.json').read_text())
+            self.assertEqual(set(report['class_ids']), {name.lower() for name in DEFAULT_BOX_CLASSES})
+            self.assertEqual(report['images_by_split'], {'train':7, 'val':1, 'test':1})
+            self.assertEqual(report['images_by_split_and_class']['train']['elephant'], 3)
+            self.assertEqual((report['reused_images'], report['downloaded_images']), (8, 1))
+            self.assertTrue(os.path.samefile(local, dest/'images/train'/local.name))
+            label = dest/'labels/train'/local.with_suffix('.txt').name
+            self.assertEqual({int(row.split()[0]) for row in label.read_text().splitlines()},
+                             {report['class_ids'][name] for name in ('cat', 'elephant')})
+            self.assertFalse((meta/'boxed_download_failures.json').exists())
+            self.assertEqual((meta/'train_human_labels.csv').read_text(), 'unused')
+
     def test_export_only_official_boxes_for_downloaded_images(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)/'openimages'

@@ -26,6 +26,8 @@ BOX_URLS = {
     'test': 'https://storage.googleapis.com/openimages/v5/test-annotations-bbox.csv',
 }
 YOLO_SPLITS = {'train': 'train', 'validation': 'val', 'test': 'test'}
+DEFAULT_BOX_CLASSES = ['Elephant', 'Tiger', 'Cattle', 'Cat', 'Crocodile', 'Lion']
+IMAGE_BASE = 'https://open-images-dataset.s3.amazonaws.com'
 
 
 def output_class(name):
@@ -149,11 +151,13 @@ def match_boxes(path, image_ids, groups_by_mid):
             raise ValueError(f'Expected an official bounding-box CSV, with coordinates: {path}')
         for row in tqdm(reader, desc=f'Scan {path.name}', unit='rows'):
             image_id = row['ImageID']
-            if image_id not in image_ids:
+            if image_ids is not None and image_id not in image_ids:
                 continue
             group = groups_by_mid.get(row['LabelName'])
             if group is None or row.get('IsGroupOf') == '1' or row.get('IsDepiction') == '1':
                 continue
+            if not re.fullmatch(r'[0-9a-f]{16}', image_id):
+                raise ValueError(f'Invalid Open Images image ID: {path}:{reader.line_num}')
             x1, y1, x2, y2 = (float(row[key]) for key in coordinates)
             if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
                 raise ValueError(f'Invalid box coordinates: {path}:{reader.line_num}')
@@ -161,11 +165,25 @@ def match_boxes(path, image_ids, groups_by_mid):
     return matched
 
 
-def export_annotations(args):
+def detection_paths(args):
     root = args.output.resolve()
     destination = (args.yolo_output or root/'yolo_bbox').resolve()
     if destination.exists() or destination in root.parents:
         raise ValueError(f'Use a new YOLO output directory: {destination}')
+    return root, destination
+
+
+def detection_classes(root, requested, retries):
+    path = root/'_metadata'/'boxable_classes.csv'
+    download(BOX_CLASSES, path, retries, True)
+    with path.open(newline='', encoding='utf-8-sig') as stream:
+        boxable = {name: mid for mid, name in csv.reader(stream)}
+    groups = {boxable[name]: output_class(name) for name in requested if name in boxable}
+    return groups, sorted(set(requested)-boxable.keys())
+
+
+def export_annotations(args):
+    root, destination = detection_paths(args)
     meta = root/'_metadata'
     selection = meta/'download_config.json'
     original_classes = json.loads(selection.read_text(encoding='utf-8'))['classes'] if selection.is_file() else None
@@ -181,12 +199,7 @@ def export_annotations(args):
     if not images:
         raise ValueError(f'No previously downloaded images found under {root}; check --output and --classes')
 
-    classes_path = meta/'boxable_classes.csv'
-    download(BOX_CLASSES, classes_path, args.retries, True)
-    with classes_path.open(newline='', encoding='utf-8-sig') as stream:
-        boxable = {name: mid for mid, name in csv.reader(stream)}
-    groups_by_mid = {boxable[name]: output_class(name) for name in requested if name in boxable}
-    unboxable = sorted(set(requested)-boxable.keys())
+    groups_by_mid, unboxable = detection_classes(root, requested, args.retries)
     covered_groups = set(groups_by_mid.values())
     counts, exported, skipped = Counter(), Counter(), Counter()
     splits, rows = Counter(), []
@@ -218,8 +231,21 @@ def export_annotations(args):
                 used_groups.update(box_groups)
                 rows.append((yolo_split, kept, sorted(boxes)))
 
+    report = {'source': str(root), 'classes_without_official_boxes': unboxable,
+              'images_found_by_folder': dict(counts), 'images_exported_by_folder': dict(exported),
+              'images_skipped_by_folder': dict(skipped)}
+    write_detection_dataset(destination, rows, splits, used_groups, report)
+    for group, count in sorted(counts.items()):
+        print(f'{group}: exported {exported[group]}/{count}, skipped {skipped[group]}')
+    if unboxable:
+        print(f'No official detection class: {", ".join(unboxable)}')
+    return 0
+
+
+def write_detection_dataset(destination, rows, splits, used_groups, report):
     ids = {name: cid for cid, name in enumerate(sorted(used_groups))}
     box_counts = {split: Counter() for split in YOLO_SPLITS.values()}
+    image_counts = {split: Counter() for split in YOLO_SPLITS.values()}
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.openimages-bbox-', dir=destination.parent) as temp:
         staging = Path(temp)/'dataset'
@@ -235,25 +261,84 @@ def export_annotations(args):
                              for group, *box in boxes)
             (staging/'labels'/split/image.with_suffix('.txt').name).write_text(labels, encoding='utf-8')
             box_counts[split].update(box[0] for box in boxes)
+            image_counts[split].update({box[0] for box in boxes})
         staging.mkdir(exist_ok=True)
         if rows:
             # JSON is valid YAML and avoids adding a dependency to the downloader.
             config = {'path': destination.as_posix(), **{split: f'images/{split}' for split in splits},
                       'nc': len(ids), 'names': list(ids)}
             (staging/'data.yaml').write_text(json.dumps(config, indent=2)+'\n', encoding='utf-8')
-        report = {'source': str(root), 'classes_without_official_boxes': unboxable,
-                  'images_found_by_folder': dict(counts), 'images_exported_by_folder': dict(exported),
-                  'images_skipped_by_folder': dict(skipped), 'images_by_split': dict(splits),
-                  'boxes_by_split_and_class': box_counts, 'class_ids': ids}
+        report.update(images_by_split=dict(splits), images_by_split_and_class=image_counts,
+                      boxes_by_split_and_class=box_counts, class_ids=ids)
         (staging/'bbox_report.json').write_text(json.dumps(report, indent=2)+'\n', encoding='utf-8')
         staging.rename(destination)
-    for group, count in sorted(counts.items()):
-        print(f'{group}: exported {exported[group]}/{count}, skipped {skipped[group]}')
-    if unboxable:
-        print(f'No official detection class: {", ".join(unboxable)}')
     if not (splits['train'] and splits['val']):
         print('Source splits were preserved. A nonempty train and val are needed for training.')
     print(f'YOLO output: {destination}\nReport: {destination / "bbox_report.json"}')
+
+
+def download_boxed(args):
+    root, destination = detection_paths(args)
+    requested = args.classes or DEFAULT_BOX_CLASSES
+    groups_by_mid, unboxable = detection_classes(root, requested, args.retries)
+    if unboxable:
+        raise ValueError(f'Classes absent from the official detection table: {", ".join(unboxable)}')
+    meta = root/'_metadata'
+    cache = meta/'boxed_images'
+    existing = {}
+    # Previous downloads used class folders; new downloads use a split-specific cache.
+    for directory in sorted(path for path in root.iterdir() if path.is_dir() and path != meta):
+        for image in sorted(directory.glob('*.jpg')):
+            if re.fullmatch(r'(train|validation|test)_[0-9a-f]{16}', image.stem, re.IGNORECASE):
+                if image.is_file() and image.stat().st_size:
+                    existing.setdefault(image.stem.lower(), image)
+    rows, splits, used_groups = [], Counter(), set()
+    reused, fetched, failed = 0, 0, []
+    for split in args.splits:
+        path = meta/f'{split}_boxes.csv'
+        download(BOX_URLS[split], path, args.retries, True)
+        matched = match_boxes(path, None, groups_by_mid)
+
+        def fetch_image(image_id):
+            stem = f'{split}_{image_id}'
+            image = existing.get(stem, cache/split/f'{stem}.jpg')
+            try:
+                already_present = image.is_file() and image.stat().st_size > 0
+                if not already_present:
+                    download(f'{IMAGE_BASE}/{split}/{image_id}.jpg', image, args.retries)
+                return image, already_present, None
+            except (OSError, ValueError) as exc:
+                return image, False, str(exc)
+
+        image_ids = list(matched)
+        with ThreadPoolExecutor(max_workers=args.workers) as pool, tqdm(
+                total=len(image_ids), desc=f'Fetch boxed {split} images', unit='img') as bar:
+            batch_size = 2 * args.workers
+            for offset in range(0, len(image_ids), batch_size):
+                batch = image_ids[offset:offset+batch_size]
+                for image_id, (image, already_present, error) in zip(batch, pool.map(fetch_image, batch)):
+                    bar.update()
+                    if error:
+                        failed.append({'split': split, 'id': image_id, 'error': error})
+                        continue
+                    reused += already_present
+                    fetched += not already_present
+                    boxes = sorted(matched[image_id])
+                    yolo_split = YOLO_SPLITS[split]
+                    splits[yolo_split] += 1
+                    used_groups.update(box[0] for box in boxes)
+                    rows.append((yolo_split, image, boxes))
+    failure_path = meta/'boxed_download_failures.json'
+    if failed:
+        failure_path.write_text(json.dumps(failed, indent=2)+'\n', encoding='utf-8')
+        raise OSError(f'{len(failed)} image downloads failed; see {failure_path}. Rerun the same command to resume.')
+    if not rows:
+        raise ValueError('No eligible boxes found for the requested classes and splits')
+    report = {'source': str(root), 'requested_classes': requested,
+              'reused_images': reused, 'downloaded_images': fetched}
+    write_detection_dataset(destination, rows, splits, used_groups, report)
+    failure_path.unlink(missing_ok=True)
+    print(f'Reused {reused:,} images; downloaded {fetched:,}.')
     return 0
 
 
@@ -287,7 +372,7 @@ def run(args):
     counts, original, failures = Counter(), Counter(), []
     def fetch(record):
         target = output/record['group']/(record['split']+'_'+record['id']+'.jpg')
-        url = f'https://open-images-dataset.s3.amazonaws.com/{record["split"]}/{record["id"]}.jpg'
+        url = f'{IMAGE_BASE}/{record["split"]}/{record["id"]}.jpg'
         try:
             download(url, target, args.retries)
             return record, None
@@ -328,8 +413,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--classes',nargs='+')
-    p.add_argument('--annotations-only', action='store_true',
-                   help='Download official boxes for existing local images and export YOLO')
+    modes = p.add_mutually_exclusive_group()
+    modes.add_argument('--annotations-only', action='store_true',
+                       help='Download official boxes for existing local images and export YOLO')
+    modes.add_argument('--boxed', action='store_true',
+                       help='Download all images with eligible official boxes for the requested classes and export YOLO')
     p.add_argument('--yolo-output', type=Path, help='New export directory; defaults to OUTPUT/yolo_bbox')
     p.add_argument('--splits',nargs='+',choices=['train','validation','test'],default=['train','validation','test'])
     p.add_argument('--max-per-class',type=int,default=5000,help='Cap each MERGED OUTPUT class across all requested splits')
@@ -340,13 +428,15 @@ def main():
     if args.max_per_class<1 or args.workers<1 or args.retries<0:
         p.error('Require positive max-per-class/workers and nonnegative retries')
     args.splits = list(dict.fromkeys(args.splits))
-    if args.yolo_output and not args.annotations_only:
-        p.error('--yolo-output requires --annotations-only')
+    if args.yolo_output and not (args.annotations_only or args.boxed):
+        p.error('--yolo-output requires --annotations-only or --boxed')
     if args.classes:
         args.classes = list(dict.fromkeys(args.classes))
     try:
         if args.annotations_only:
             return export_annotations(args)
+        if args.boxed:
+            return download_boxed(args)
         args.classes = args.classes or DEFAULT_CLASSES
         return run(args)
     except KeyboardInterrupt:
