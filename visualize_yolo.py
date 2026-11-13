@@ -254,8 +254,8 @@ def visualize_dataset(source, classes=None):
     selected = parse_classes(classes, names)
     splits = ('train', 'val', 'test')
     output = root/'preview'
-    if output.exists() or output.is_symlink():
-        raise ValueError(f'Move the existing preview directory before generating a new preview: {output}')
+    if output.is_symlink() or (output.exists() and not output.is_dir()):
+        raise ValueError(f'Expected a regular preview directory: {output}')
     images_by_split = {split: images_for(dataset, split) for split in splits}
     if not any(dataset['config'].get(split) for split in splits):
         images, _ = collect_images(dataset)
@@ -270,11 +270,25 @@ def visualize_dataset(source, classes=None):
     collisions = Counter(name.casefold() for name in folder_names.values())
     for cid, name in folder_names.items():
         reserved = re.fullmatch(r'(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])', name.split('.')[0], re.I)
-        if not name or reserved or name.isdecimal() or collisions[name.casefold()] > 1:
+        if not name or reserved or name.casefold() == 'report.json' or name.isdecimal() or collisions[name.casefold()] > 1:
             folder_names[cid] = str(cid)
+    output.mkdir(exist_ok=True)
+    report_path = output/'report.json'
+    if report_path.is_symlink() or (report_path.exists() and not report_path.is_file()):
+        raise ValueError(f'Expected a regular preview report file: {report_path}')
+    folders = set(folder_names.values()) if names else {
+        p.name for p in output.iterdir() if p.name.isdecimal()
+    }
+    for folder in folders:
+        class_dir = output/folder
+        if class_dir.is_symlink() or (class_dir.exists() and not class_dir.is_dir()):
+            raise ValueError(f'Expected a regular class directory: {class_dir}')
+        for split in splits:
+            split_dir = class_dir/split
+            if split_dir.is_symlink() or (split_dir.exists() and not split_dir.is_dir()):
+                raise ValueError(f'Expected a regular split directory: {split_dir}')
     font = load_font()
-    counts, issues = defaultdict(Counter), []
-    output.mkdir()
+    written, issues = 0, []
     for split, images in images_by_split.items():
         unique_images = list(dict.fromkeys(images))
         for index, image in enumerate(tqdm(unique_images, desc=f'Preview {split}', unit='img'), 1):
@@ -291,15 +305,24 @@ def visualize_dataset(source, classes=None):
                 jpeg = encoded.getvalue()
                 for cid in sorted(class_ids):
                     folder = folder_names.get(cid, str(cid))
+                    folders.add(folder)
                     target = output/folder/split/f'{index:06d}_{image.stem[:100]}.jpg'
                     target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.is_symlink():
+                        raise ValueError(f'Expected a regular preview image: {target}')
                     target.write_bytes(jpeg)
-                    counts[folder][split] += 1
+                    written += 1
             except (OSError, ValueError, SyntaxError) as exc:
                 issues.append({'image': str(image), 'split': split, 'error': str(exc)})
+    counts = defaultdict(dict)
+    for folder in sorted(folders):
+        for split in splits:
+            count = sum(p.is_file() for p in (output/folder/split).glob('*.jpg'))
+            if count:
+                counts[folder][split] = count
     report = {'counts': counts, 'issues': issues, 'class_folders': folder_names}
-    (output/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
-    print(f'Exported {sum(sum(v.values()) for v in counts.values())} previews to {output}; issues: {len(issues)}')
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+    print(f'Exported {written} previews to {output}; issues: {len(issues)}')
     return int(bool(issues))
 
 

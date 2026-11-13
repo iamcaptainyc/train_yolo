@@ -7,7 +7,7 @@ python visualize_yolo.py datasets/animals_yolo
 python visualize_yolo.py datasets/animals_yolo --classes fox rabbit
 ```
 
-直接传数据集目录时，脚本按原划分输出到 `preview/类别/train`、`preview/类别/val`、`preview/类别/test`。默认导出所有有标注框的类别。`--classes` 可传类别名或 ID，控制生成哪些类别目录。多类别图片在各匹配目录各保存一份，每份保留全部框和图例。图像区域最长边为 960 像素，JPEG 质量为 78。无框图片跳过，缺失或损坏的标签及图片错误记入 `preview/report.json`。重新生成前请移走已有的 `preview` 目录。
+直接传数据集目录时，脚本按原划分输出到 `preview/类别/train`、`preview/类别/val`、`preview/类别/test`。默认导出所有有标注框的类别。`--classes` 可传类别名或 ID，控制生成哪些类别目录。可以先导出野猪，再运行一次追加熊，两个类别的预览共用一个 `preview`。重复导出同名预览文件时会覆盖该文件。多类别图片在各匹配目录各保存一份，每份保留全部框和图例。图像区域最长边为 960 像素，JPEG 质量为 78。无框图片跳过，`preview/report.json` 汇总目录中已有的预览数量及本次运行发现的错误。
 
 使用 `--source` 可访问自定义输出、抽样和单图预览模式。
 

@@ -276,6 +276,14 @@ class VisualizeTests(unittest.TestCase):
                         self.assertLess(min(preview.getpixel((576, body_top+240))), 235)
                     if classes:
                         self.assertFalse((output/'dog').exists())
+                        original_cat_preview = cat_preview.read_bytes()
+                        second = subprocess.run(command[:-1] + ['dog'], capture_output=True, encoding='utf-8')
+                        self.assertEqual(second.returncode, 0, second.stderr)
+                        self.assertEqual(cat_preview.read_bytes(), original_cat_preview)
+                        self.assertEqual(len(list((output/'dog/test').glob('*.jpg'))), 1)
+                        report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+                        self.assertEqual(report['counts'], {'cat': {'train': 1, 'val': 1},
+                                                           'dog': {'train': 1, 'test': 1}})
                     else:
                         dog_preview = next((output/'dog/train').glob('*.jpg'))
                         self.assertEqual(cat_preview.read_bytes(), dog_preview.read_bytes())
