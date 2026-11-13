@@ -122,8 +122,14 @@ class DownloadCOCOTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, 'rerun the same command'):
                     run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
                 self.assertFalse((output/'data.yaml').exists())
-                failed = False
-                run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
+                failure_report = json.loads((output/'_metadata/failures.json').read_text())
+                self.assertEqual(failure_report['train'], [])
+                self.assertEqual(failure_report['val'][0]['file'], '000000000004.jpg')
+                label = output/'labels/train/000000000001.txt'
+                with patch('download_coco.Path.replace', autospec=True, side_effect=Path.replace) as replace:
+                    failed = False
+                    run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
+                    self.assertNotIn(label, [call.args[1] for call in replace.call_args_list])
                 with self.assertRaisesRegex(ValueError, 'Class selection changed'):
                     run(output, ['cow'], archive, 2, 0)
 
@@ -139,6 +145,7 @@ class DownloadCOCOTests(unittest.TestCase):
             self.assertEqual(report['train']['images'], 1)
             self.assertEqual(report['train']['images_by_class'], {'cow': 1, 'elephant': 1})
             self.assertEqual(report['val']['boxes_by_class'], {'elephant': 1})
+            self.assertFalse((output/'_metadata/failures.json').exists())
 
             mirror_output = root/'mirror'
             with patch('download_coco.fetch_archive') as annotation, patch('download_coco.RangeZip') as remote, \

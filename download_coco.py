@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from http.client import IncompleteRead
 import json
@@ -126,10 +126,17 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
     filenames = {image_id: images[image_id]['file_name'] for image_id in selected}
     if any(not re.fullmatch(r'[0-9]{12}\.jpg', name) for name in filenames.values()):
         raise ValueError(f'Unexpected file name in COCO {split}2017 annotations')
+    image_ids = sorted(selected)
+    cached_images = {image_id for image_id, filename in filenames.items()
+                     if (path := image_dir/filename).is_file() and path.stat().st_size}
+    pending = [image_id for image_id in image_ids if image_id not in cached_images or
+               not ((label := label_dir/Path(filenames[image_id]).with_suffix('.txt')).is_file()
+                    and label.stat().st_size)]
+    print(f'COCO {split}2017: {len(image_ids)-len(pending):,} complete, '
+          f'{len(pending):,} pending ({len(image_ids)-len(cached_images):,} images to download)',
+          flush=True)
     remote = None
-    if source == 'hf-mirror' and any(
-            not (path.is_file() and path.stat().st_size)
-            for path in (image_dir/name for name in filenames.values())):
+    if source == 'hf-mirror' and len(cached_images) != len(image_ids):
         url = f'{HF_MIRROR}/{split}2017.zip'
         print(f'COCO image archive (HTTP Range): {url}', file=sys.stderr, flush=True)
         remote = RangeZip(url, retries)
@@ -147,26 +154,30 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
                     partial.replace(target)
                 else:
                     fetch_image(f'{split}2017/{filename}', target, retries, prefer_gcs)
-        except (OSError, ValueError) as exc:
+            boxes = selected[image_id]
+            label = label_dir/Path(filename).with_suffix('.txt')
+            temp = label.with_suffix('.txt.part')
+            temp.write_text(''.join(f'{cid} ' + ' '.join(format(v, '.12g') for v in box) + '\n'
+                                    for _, cid, box in boxes), encoding='utf-8')
+            temp.replace(label)
+        except (OSError, ValueError, IncompleteRead) as exc:
             return {'file': filename, 'error': str(exc)}
-        boxes = selected[image_id]
-        label = label_dir/Path(filename).with_suffix('.txt')
-        temp = label.with_suffix('.txt.part')
-        temp.write_text(''.join(f'{cid} ' + ' '.join(format(v, '.12g') for v in box) + '\n'
-                                for _, cid, box in boxes), encoding='utf-8')
-        temp.replace(label)
         return None
 
-    image_ids = sorted(selected)
     batch_size = workers * 2
     with ThreadPoolExecutor(max_workers=workers) as pool, tqdm(
-            total=len(image_ids), desc=f'COCO {split}2017', unit='img') as progress:
-        for offset in range(0, len(image_ids), batch_size):
-            batch = image_ids[offset:offset+batch_size]
-            for failure in pool.map(fetch, batch):
+            total=len(pending), desc=f'COCO {split}2017 pending', unit='img', disable=not pending) as progress:
+        for offset in range(0, len(pending), batch_size):
+            batch = pending[offset:offset+batch_size]
+            for future in as_completed([pool.submit(fetch, image_id) for image_id in batch]):
+                failure = future.result()
                 progress.update()
                 if failure:
                     failures.append(failure)
+                    if len(failures) <= 3:
+                        progress.write(f'{split}/{failure["file"]}: {failure["error"]}', file=sys.stderr)
+                    progress.set_postfix(failed=len(failures), refresh=False)
+    failures.sort(key=lambda failure: failure['file'])
     for boxes in selected.values():
         class_boxes.update(names[cid] for _, cid, _ in boxes)
         class_images.update({names[cid] for _, cid, _ in boxes})
@@ -214,7 +225,9 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror'):
     failure_path = meta/'failures.json'
     if any(failures.values()):
         write_json(failure_path, failures)
-        raise OSError(f'Image downloads incomplete. See {failure_path} and rerun the same command.')
+        counts = ', '.join(f'{split}: {len(errors)}/{stats[split]["images"]}'
+                           for split, errors in failures.items())
+        raise OSError(f'Image downloads incomplete ({counts}). See {failure_path} and rerun the same command.')
     if any(not stat['images'] for stat in stats.values()):
         raise ValueError('Both official splits need at least one image with a valid selected box')
     failure_path.unlink(missing_ok=True)
