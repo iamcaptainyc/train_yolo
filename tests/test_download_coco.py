@@ -1,14 +1,56 @@
+import hashlib
 import json
 from pathlib import Path
 import tempfile
+from threading import Event
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 import zipfile
 
-from download_coco import BASE, run
+from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run
 
 
 class DownloadCOCOTests(unittest.TestCase):
+    def test_image_download_prefers_working_fallback_after_503(self):
+        first = 'train2017/000000000001.jpg'
+        second = 'val2017/000000000002.jpg'
+        prefer_gcs = Event()
+        with patch('download_coco.download', side_effect=[
+            HTTPError(f'{BASE}/{first}', 503, 'Service Unavailable', {}, None), None, None,
+        ]) as download:
+            fetch_image(first, Path('first.jpg'), 5, prefer_gcs)
+            fetch_image(second, Path('second.jpg'), 5, prefer_gcs)
+        self.assertEqual([call.args[0] for call in download.call_args_list],
+                         [f'{BASE}/{first}', f'{GCS_BASE}/{first}', f'{GCS_BASE}/{second}'])
+
+    def test_annotation_503_falls_back_and_validates_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'annotations.zip'
+            partial = path.with_name(path.name+'.part')
+            partial.write_bytes(b'official ')
+            content = b'official archive'
+
+            def fetch(url, destination, retries, progress):
+                if url == ARCHIVE_URLS[0]:
+                    raise HTTPError(url, 503, 'Service Unavailable', {}, None)
+                if url == ARCHIVE_URLS[1]:
+                    self.assertEqual(partial.read_bytes(), b'official ')
+                    destination.write_bytes(b'corrupt archive!')
+                else:
+                    self.assertFalse(destination.exists())
+                    destination.write_bytes(content)
+
+            with patch('download_coco.download', side_effect=fetch) as download, \
+                    patch('download_coco.ARCHIVE_SIZE', len(content)), \
+                    patch('download_coco.ARCHIVE_SHA256', hashlib.sha256(content).hexdigest()):
+                fetch_archive(path, 5)
+                self.assertEqual([call.args[0] for call in download.call_args_list], list(ARCHIVE_URLS))
+                self.assertEqual(path.read_bytes(), content)
+                download.reset_mock()
+                fetch_archive(path, 5)
+                download.assert_not_called()
+
     def test_selects_only_boxed_animals_and_resumes_without_changing_splits(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -52,6 +94,7 @@ class DownloadCOCOTests(unittest.TestCase):
 
             self.assertEqual(fetched, [f'{BASE}/train2017/000000000001.jpg',
                                        f'{BASE}/val2017/000000000004.jpg',
+                                       f'{GCS_BASE}/val2017/000000000004.jpg',
                                        f'{BASE}/val2017/000000000004.jpg'])
             label = output/'labels/train/000000000001.txt'
             self.assertEqual(label.read_text().splitlines(), ['0 0.15 0.2 0.3 0.2', '1 0.25 0.25 0.1 0.1'])

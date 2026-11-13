@@ -4,10 +4,13 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import math
 from pathlib import Path
 import re
+import sys
+from threading import Event
 import zipfile
 
 from tqdm import tqdm
@@ -15,9 +18,71 @@ from tqdm import tqdm
 from download_openimages import download
 
 BASE = 'https://images.cocodataset.org'
+GCS_BASE = 'https://storage.googleapis.com/images.cocodataset.org'
 ARCHIVE = 'annotations_trainval2017.zip'
+ARCHIVE_SHA256 = '113a836d90195ee1f884e704da6304dfaaecff1f023f49b6ca93c4aaae470268'
+ARCHIVE_SIZE = 252_907_541
+ARCHIVE_URLS = (
+    f'{BASE}/annotations/{ARCHIVE}',
+    f'{GCS_BASE}/annotations/{ARCHIVE}',
+    'https://huggingface.co/datasets/pcuenq/coco-2017-mirror/resolve/'
+    f'5200d2cffae8121713bec767b4693bdafc0eeb0b/{ARCHIVE}',
+)
 ANIMALS = ('bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe')
 SPLITS = ('train', 'val')
+
+
+def valid_archive(path):
+    if not path.is_file() or path.stat().st_size != ARCHIVE_SIZE:
+        return False
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest() == ARCHIVE_SHA256
+
+
+def fetch_archive(path, retries):
+    if valid_archive(path):
+        return
+    path.unlink(missing_ok=True)
+    partial = path.with_name(path.name+'.part')
+    if valid_archive(partial):
+        partial.replace(path)
+        return
+    if partial.is_file() and partial.stat().st_size >= ARCHIVE_SIZE:
+        partial.unlink()
+    errors = []
+    for index, url in enumerate(ARCHIVE_URLS):
+        print(f'COCO annotation archive: {url}', file=sys.stderr, flush=True)
+        try:
+            # The endpoints serve the same archive. Verify bytes before using it.
+            download(url, path, retries if index == len(ARCHIVE_URLS)-1 else min(retries, 1), True)
+            if not valid_archive(path):
+                path.unlink(missing_ok=True)
+                raise ValueError('Archive size or SHA-256 does not match COCO 2017')
+            return
+        except (OSError, ValueError) as exc:
+            errors.append(f'{url}: {exc}')
+            if partial.is_file() and partial.stat().st_size >= ARCHIVE_SIZE:
+                if valid_archive(partial):
+                    partial.replace(path)
+                    return
+                partial.unlink()
+    raise OSError('COCO annotation download failed. Rerun to resume or use --annotations-zip.\n'
+                  + '\n'.join(errors))
+
+
+def fetch_image(relative, path, retries, prefer_gcs):
+    first, second = (GCS_BASE, BASE) if prefer_gcs.is_set() else (BASE, GCS_BASE)
+    try:
+        download(f'{first}/{relative}', path, min(retries, 1))
+    except (OSError, ValueError) as primary:
+        try:
+            download(f'{second}/{relative}', path, retries)
+        except (OSError, ValueError) as fallback:
+            raise OSError(f'{first}: {primary}; {second}: {fallback}') from fallback
+        if second == GCS_BASE:
+            prefer_gcs.set()
+        else:
+            prefer_gcs.clear()
 
 
 def select_boxes(data, names):
@@ -47,7 +112,7 @@ def select_boxes(data, names):
     return images, selected
 
 
-def export_split(output, split, data, names, workers, retries):
+def export_split(output, split, data, names, workers, retries, prefer_gcs):
     images, selected = select_boxes(data, names)
     image_dir = output/'images'/split
     label_dir = output/'labels'/split
@@ -61,7 +126,7 @@ def export_split(output, split, data, names, workers, retries):
         if not re.fullmatch(r'[0-9]{12}\.jpg', filename):
             raise ValueError(f'Unexpected COCO 2017 file name: {filename}')
         try:
-            download(f'{BASE}/{split}2017/{filename}', image_dir/filename, retries)
+            fetch_image(f'{split}2017/{filename}', image_dir/filename, retries, prefer_gcs)
         except (OSError, ValueError) as exc:
             return {'file': filename, 'error': str(exc)}
         boxes = selected[image_id]
@@ -113,14 +178,15 @@ def run(output, names, archive, workers, retries):
         write_json(state, names)
     if archive is None:
         archive = meta/ARCHIVE
-        download(f'{BASE}/annotations/{ARCHIVE}', archive, retries, True)
+        fetch_archive(archive, retries)
     stats, failures = {}, {}
+    prefer_gcs = Event()
     with zipfile.ZipFile(archive) as source:
         for split in SPLITS:
             member = f'annotations/instances_{split}2017.json'
             with source.open(member) as stream:
                 data = json.load(stream)
-            subset, stats[split], failures[split] = export_split(output, split, data, names, workers, retries)
+            subset, stats[split], failures[split] = export_split(output, split, data, names, workers, retries, prefer_gcs)
             write_json(meta/f'instances_{split}2017_subset.json', subset)
             del data, subset
     failure_path = meta/'failures.json'

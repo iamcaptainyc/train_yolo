@@ -9,6 +9,8 @@ python download_coco.py --classes cow elephant \
 
 可选类别为 `bird cat dog horse sheep cow elephant bear zebra giraffe`，`cattle` 也可作为 `cow` 的输入别名。脚本从 COCO 下载官方训练和验证标注 ZIP（约 241 MiB），再根据实例框逐张下载匹配的 JPEG。如果已有 ZIP，用 `--annotations-zip /path/to/annotations_trainval2017.zip` 复用。
 
+遇到 503 或连接失败时，标注包会依次尝试 COCO 主地址、Google Cloud 存储和固定版本的 Hugging Face 镜像，并校验 ZIP 的 SHA-256。图片下载支持 COCO 主地址和 Google Cloud 存储。若某张图在两个地址都下载失败，`_metadata/failures.json` 会记录文件名和错误。
+
 重跑同一命令会复用完整文件，并对支持 HTTP Range 的服务器续传 `.part`。每张图片只下载一次，保留图中所选类的有效单体框。跳过 `iscrowd` 群体框，超出图像的有效框裁到图像边界。图片保留原 `train2017` 和 `val2017` 划分。
 
 输出含 `images/{train,val}`、`labels/{train,val}`、`data.yaml` 和各类图片数及框数 `report.json`。筛选后的官方 COCO 记录保存在 `_metadata/instances_train2017_subset.json` 和 `_metadata/instances_val2017_subset.json`，保留原始类别 ID 和坐标。下载齐全后才写出 `data.yaml`。改选类别时请指定新输出目录。
