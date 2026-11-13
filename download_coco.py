@@ -5,6 +5,7 @@ import argparse
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from http.client import IncompleteRead
 import json
 import math
 from pathlib import Path
@@ -15,6 +16,7 @@ import zipfile
 
 from tqdm import tqdm
 
+from coco_hf_zip import RangeZip
 from download_openimages import download
 
 BASE = 'https://images.cocodataset.org'
@@ -22,11 +24,12 @@ GCS_BASE = 'https://storage.googleapis.com/images.cocodataset.org'
 ARCHIVE = 'annotations_trainval2017.zip'
 ARCHIVE_SHA256 = '113a836d90195ee1f884e704da6304dfaaecff1f023f49b6ca93c4aaae470268'
 ARCHIVE_SIZE = 252_907_541
+HF_REPO_PATH = '/datasets/pcuenq/coco-2017-mirror/resolve/5200d2cffae8121713bec767b4693bdafc0eeb0b'
+HF_MIRROR = 'https://hf-mirror.com' + HF_REPO_PATH
 ARCHIVE_URLS = (
     f'{BASE}/annotations/{ARCHIVE}',
     f'{GCS_BASE}/annotations/{ARCHIVE}',
-    'https://huggingface.co/datasets/pcuenq/coco-2017-mirror/resolve/'
-    f'5200d2cffae8121713bec767b4693bdafc0eeb0b/{ARCHIVE}',
+    f'https://huggingface.co{HF_REPO_PATH}/{ARCHIVE}',
 )
 ANIMALS = ('bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe')
 SPLITS = ('train', 'val')
@@ -39,7 +42,7 @@ def valid_archive(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest() == ARCHIVE_SHA256
 
 
-def fetch_archive(path, retries):
+def fetch_archive(path, retries, urls=ARCHIVE_URLS):
     if valid_archive(path):
         return
     path.unlink(missing_ok=True)
@@ -50,16 +53,16 @@ def fetch_archive(path, retries):
     if partial.is_file() and partial.stat().st_size >= ARCHIVE_SIZE:
         partial.unlink()
     errors = []
-    for index, url in enumerate(ARCHIVE_URLS):
+    for index, url in enumerate(urls):
         print(f'COCO annotation archive: {url}', file=sys.stderr, flush=True)
         try:
             # The endpoints serve the same archive. Verify bytes before using it.
-            download(url, path, retries if index == len(ARCHIVE_URLS)-1 else min(retries, 1), True)
+            download(url, path, retries if index == len(urls)-1 else min(retries, 1), True)
             if not valid_archive(path):
                 path.unlink(missing_ok=True)
                 raise ValueError('Archive size or SHA-256 does not match COCO 2017')
             return
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, IncompleteRead) as exc:
             errors.append(f'{url}: {exc}')
             if partial.is_file() and partial.stat().st_size >= ARCHIVE_SIZE:
                 if valid_archive(partial):
@@ -112,7 +115,7 @@ def select_boxes(data, names):
     return images, selected
 
 
-def export_split(output, split, data, names, workers, retries, prefer_gcs):
+def export_split(output, split, data, names, workers, retries, prefer_gcs, source):
     images, selected = select_boxes(data, names)
     image_dir = output/'images'/split
     label_dir = output/'labels'/split
@@ -120,13 +123,30 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs):
     label_dir.mkdir(parents=True, exist_ok=True)
     class_images, class_boxes = Counter(), Counter()
     failures = []
+    filenames = {image_id: images[image_id]['file_name'] for image_id in selected}
+    if any(not re.fullmatch(r'[0-9]{12}\.jpg', name) for name in filenames.values()):
+        raise ValueError(f'Unexpected file name in COCO {split}2017 annotations')
+    remote = None
+    if source == 'hf-mirror' and any(
+            not (path.is_file() and path.stat().st_size)
+            for path in (image_dir/name for name in filenames.values())):
+        url = f'{HF_MIRROR}/{split}2017.zip'
+        print(f'COCO image archive (HTTP Range): {url}', file=sys.stderr, flush=True)
+        remote = RangeZip(url, retries)
 
     def fetch(image_id):
-        filename = images[image_id]['file_name']
-        if not re.fullmatch(r'[0-9]{12}\.jpg', filename):
-            raise ValueError(f'Unexpected COCO 2017 file name: {filename}')
+        filename = filenames[image_id]
+        target = image_dir/filename
         try:
-            fetch_image(f'{split}2017/{filename}', image_dir/filename, retries, prefer_gcs)
+            if not (target.is_file() and target.stat().st_size):
+                if source == 'hf-mirror':
+                    if remote is None:
+                        raise OSError('A cached image was removed during export; rerun to retrieve it')
+                    partial = target.with_suffix('.jpg.part')
+                    partial.write_bytes(remote.image(split, filename))
+                    partial.replace(target)
+                else:
+                    fetch_image(f'{split}2017/{filename}', target, retries, prefer_gcs)
         except (OSError, ValueError) as exc:
             return {'file': filename, 'error': str(exc)}
         boxes = selected[image_id]
@@ -164,7 +184,7 @@ def write_json(path, data):
     temp.replace(path)
 
 
-def run(output, names, archive, workers, retries):
+def run(output, names, archive, workers, retries, *, source='hf-mirror'):
     output = output.resolve()
     meta = output/'_metadata'
     state = meta/'classes.json'
@@ -178,15 +198,17 @@ def run(output, names, archive, workers, retries):
         write_json(state, names)
     if archive is None:
         archive = meta/ARCHIVE
-        fetch_archive(archive, retries)
+        urls = (f'{HF_MIRROR}/{ARCHIVE}',) if source == 'hf-mirror' else ARCHIVE_URLS
+        fetch_archive(archive, retries, urls)
     stats, failures = {}, {}
     prefer_gcs = Event()
-    with zipfile.ZipFile(archive) as source:
+    with zipfile.ZipFile(archive) as archive_file:
         for split in SPLITS:
             member = f'annotations/instances_{split}2017.json'
-            with source.open(member) as stream:
+            with archive_file.open(member) as stream:
                 data = json.load(stream)
-            subset, stats[split], failures[split] = export_split(output, split, data, names, workers, retries, prefer_gcs)
+            subset, stats[split], failures[split] = export_split(
+                output, split, data, names, workers, retries, prefer_gcs, source)
             write_json(meta/f'instances_{split}2017_subset.json', subset)
             del data, subset
     failure_path = meta/'failures.json'
@@ -210,6 +232,8 @@ def main():
     parser.add_argument('--classes', nargs='+', type=str.lower, choices=(*ANIMALS, 'cattle'),
                         default=['cow', 'elephant'])
     parser.add_argument('--annotations-zip', type=Path, help='Reuse the local official train/val annotation archive')
+    parser.add_argument('--source', choices=['hf-mirror', 'official'], default='hf-mirror',
+                        help='Download annotations and images from hf-mirror.com by default')
     parser.add_argument('--workers', type=int, default=16)
     parser.add_argument('--retries', type=int, default=5)
     args = parser.parse_args()
@@ -217,7 +241,7 @@ def main():
         parser.error('Require positive workers and nonnegative retries')
     names = sorted({'cow' if name == 'cattle' else name for name in args.classes})
     try:
-        run(args.output, names, args.annotations_zip, args.workers, args.retries)
+        run(args.output, names, args.annotations_zip, args.workers, args.retries, source=args.source)
     except KeyboardInterrupt:
         parser.exit(130, '\nInterrupted. Rerun the same command to resume.\n')
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:

@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -8,10 +9,44 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 import zipfile
 
+from coco_hf_zip import RangeZip
 from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run
 
 
 class DownloadCOCOTests(unittest.TestCase):
+    def test_remote_zip_fetches_only_requested_member_and_checks_crc(self):
+        buffer = io.BytesIO()
+        selected = 'train2017/000000000001.jpg'
+        unrelated = 'train2017/000000000002.jpg'
+        # Force ZIP64 metadata like the multi-GB COCO training archive.
+        with patch('zipfile.ZIP64_LIMIT', 100_000), zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr(selected, b'selected image', compress_type=zipfile.ZIP_DEFLATED)
+            archive.writestr(unrelated, b'x' * 200_000)
+        content = buffer.getvalue()
+        ranges = []
+
+        def respond(request, timeout):
+            start, end = map(int, request.get_header('Range').removeprefix('bytes=').split('-'))
+            ranges.append((start, end))
+            response = io.BytesIO(content[start:end+1])
+            response.status = 206
+            response.headers = {'Content-Range': f'bytes {start}-{end}/{len(content)}'}
+            return response
+
+        with patch('coco_hf_zip.urlopen', side_effect=respond):
+            remote = RangeZip('https://example.com/train2017.zip', retries=0)
+            self.assertEqual(remote.image('train', selected.split('/')[1]), b'selected image')
+            self.assertLess(sum(end-start+1 for start, end in ranges), 1000)
+            info, end = remote.members[selected]
+            with patch.object(remote, 'read_range', return_value=content[info.header_offset:end-1]+b'\xff'):
+                with self.assertRaisesRegex(ValueError, 'ZIP'):
+                    remote.image('train', selected.split('/')[1])
+        response = io.BytesIO(content)
+        response.status = 200
+        with patch('coco_hf_zip.urlopen', return_value=response):
+            with self.assertRaisesRegex(ValueError, 'ignored HTTP Range'):
+                RangeZip('https://example.com/train2017.zip', retries=0)
+
     def test_image_download_prefers_working_fallback_after_503(self):
         first = 'train2017/000000000001.jpg'
         second = 'val2017/000000000002.jpg'
@@ -85,10 +120,10 @@ class DownloadCOCOTests(unittest.TestCase):
 
             with patch('download_coco.download', side_effect=fetch):
                 with self.assertRaisesRegex(OSError, 'rerun the same command'):
-                    run(output, ['cow', 'elephant'], archive, 2, 0)
+                    run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
                 self.assertFalse((output/'data.yaml').exists())
                 failed = False
-                run(output, ['cow', 'elephant'], archive, 2, 0)
+                run(output, ['cow', 'elephant'], archive, 2, 0, source='official')
                 with self.assertRaisesRegex(ValueError, 'Class selection changed'):
                     run(output, ['cow'], archive, 2, 0)
 
@@ -104,3 +139,20 @@ class DownloadCOCOTests(unittest.TestCase):
             self.assertEqual(report['train']['images'], 1)
             self.assertEqual(report['train']['images_by_class'], {'cow': 1, 'elephant': 1})
             self.assertEqual(report['val']['boxes_by_class'], {'elephant': 1})
+
+            mirror_output = root/'mirror'
+            with patch('download_coco.fetch_archive') as annotation, patch('download_coco.RangeZip') as remote, \
+                    patch('download_coco.fetch_image') as official:
+                annotation.side_effect = lambda path, *_: path.write_bytes(archive.read_bytes())
+                remote.return_value.image.return_value = b'mirror image'
+                run(mirror_output, ['cow', 'elephant'], None, 2, 0)
+                self.assertTrue(annotation.call_args.args[2][0].startswith('https://hf-mirror.com/'))
+                self.assertEqual([call.args[0].rsplit('/', 1)[-1] for call in remote.call_args_list],
+                                 ['train2017.zip', 'val2017.zip'])
+                self.assertTrue(all(call.args[0].startswith('https://hf-mirror.com/')
+                                    for call in remote.call_args_list))
+                official.assert_not_called()
+                self.assertEqual((mirror_output/'images/train/000000000001.jpg').read_bytes(), b'mirror image')
+                remote.reset_mock()
+                run(mirror_output, ['cow', 'elephant'], archive, 2, 0)
+                remote.assert_not_called()
