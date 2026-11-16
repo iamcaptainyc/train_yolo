@@ -170,6 +170,13 @@ def draw_legend(image, entries, font):
     return canvas
 
 
+def box_pixels(box, width, height):
+    x, y, w, h = box
+    x1, y1 = max(0, round((x-w/2)*width)), max(0, round((y-h/2)*height))
+    x2, y2 = min(width-1, round((x+w/2)*width)), min(height-1, round((y+h/2)*height))
+    return min(x1, x2), min(y1, y2), x2, y2
+
+
 def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='ok'):
     with Image.open(path) as original:
         # Coordinates refer to stored pixels. Do not rotate using EXIF alone.
@@ -178,11 +185,8 @@ def render_image(path, boxes, names, font, max_size=1600, line_width=3, status='
     width, height = image.size
     draw = ImageDraw.Draw(image, 'RGBA')
     for cid, x, y, w, h in boxes:
-        x1, y1 = max(0, round((x-w/2)*width)), max(0, round((y-h/2)*height))
-        x2, y2 = min(width-1, round((x+w/2)*width)), min(height-1, round((y+h/2)*height))
-        x1, y1 = min(x1, x2), min(y1, y2)
         color = class_color(cid)
-        draw.rectangle((x1, y1, x2, y2), outline=(*color, 128), width=line_width)
+        draw.rectangle(box_pixels((x, y, w, h), width, height), outline=(*color, 128), width=line_width)
     entries = [(class_color(cid), f'{cid}: {names[cid]}' if cid in names else str(cid))
                for cid in sorted({box[0] for box in boxes})]
     if not entries:

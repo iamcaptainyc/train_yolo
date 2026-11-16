@@ -2,6 +2,19 @@
 
 `visualize_yolo.py` 将真实标签画到图片上，输出 JPEG 预览和 `report.json`，无需模型或 GPU。使用项目已有的 Pillow、PyYAML、tqdm 依赖。
 
+## 实验远、中、近景阈值
+
+```bash
+python preview_scene.py yolo_datasets/animals_all \
+  --class bear --far-below 1/100 --near-from 1/16
+```
+
+脚本只根据指定类别的框进行分组。面积占比取 YOLO 归一化框宽乘以框高。小于 `--far-below` 是远景，介于两阈值之间是中景，达到 `--near-from` 是近景。目标类有多个框且跨景别时，图像归入 `mixed`。预览为目标框标出面积占比，并用灰色保留同图其他类别的框。
+
+默认输出到数据集下的 `scene_preview/<ID_类别>/<阈值>/<景别>/<train|val|test>/`，每组每个划分最多画 100 张。图片按该类最大框面积从小到大排序，再从整个排序范围等间隔选图。`--limit 0` 可画全部，`--split val` 可只看验证集。换一组阈值会得到另一个目录，也可传 `--output` 指定新目录。`REPORT.md` 统计抽样前匹配数、预览数和读取异常。源图片和标签以只读方式打开。
+
+## 常规标注可视化
+
 ```bash
 python visualize_yolo.py datasets/animals_yolo
 python visualize_yolo.py datasets/animals_yolo --classes fox rabbit
