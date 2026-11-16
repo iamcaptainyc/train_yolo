@@ -90,16 +90,16 @@ def main():
         parser.add_argument('--only-sources',nargs='+',help='Allowed source families or exact source names; overrides source config/policy')
         budget = parser.add_mutually_exclusive_group()
         budget.add_argument('--max-images',type=int,
-                            help='Image limit (default: 30000 without --all-images or --min-box-area)')
-        budget.add_argument('--all-images',action='store_true',
-                            help='Export all eligible images, including indexed negatives, without sampling quotas')
+                            help='Limit and sample images (default: no limit)')
+        budget.add_argument('--all-images',dest='max_images',action='store_const',const=None,
+                            help='Explicitly use the default of all eligible images')
         parser.add_argument('--source-first',action=argparse.BooleanOptionalAction,default=None,
-                            help='Prioritize sources within each output class; --no-source-first prioritizes fine-class balance; default: policy')
+                            help='With --max-images, prioritize sources within each class or use --no-source-first for fine-class balance')
         parser.add_argument('--lila-min-area', '--lila-ratio', '--lila_ratio',
                             dest='lila_min_area', type=area_ratio, default=None,
                             help='LILA bbox/image area threshold, e.g. 1/16; overrides policy, not a source quota')
         parser.add_argument('--min-box-area',type=parse_area_ratio,
-                            help='Keep images with any target box strictly above this area ratio (all sources, uncapped by default)')
+                            help='Keep images with any target box strictly above this area ratio across all sources')
         parser.add_argument('--output',type=Path,required=True,help='New output directory (preview: reports only)')
         if command=='sample':
             parser.add_argument('--class-id-start',type=int,default=0)
@@ -137,18 +137,15 @@ def main():
             policy['lila_min_area'] = 0
         if args.lila_min_area is not None:
             policy['lila_min_area'] = args.lila_min_area
-        maximum = args.max_images
-        if maximum is None and not args.all_images and policy.get('min_box_area') is None:
-            maximum = 30000
         v,t = policy.get('val_fraction',.1),policy.get('test_fraction',.1)
         if not (0<=v<1 and 0<=t<1 and v+t<1):
             raise ValueError('Invalid val/test fractions')
         with FileLock(str(args.index)+'.lock',timeout=0):
             if args.command=='sample':
-                report = export(args.index,catalog,policy,maximum,args.output,args.class_id_start,
+                report = export(args.index,catalog,policy,args.max_images,args.output,args.class_id_start,
                                 repair_images=args.repair_images,repair_workers=args.repair_workers)
             else:
-                _,report,_ = plan(args.index,catalog,policy,maximum)
+                _,report,_ = plan(args.index,catalog,policy,args.max_images)
                 args.output.mkdir(parents=True)
                 write_preview(report,args.output/'REPORT.md')
                 (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')

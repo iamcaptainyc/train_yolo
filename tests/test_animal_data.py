@@ -173,7 +173,7 @@ class AnimalDataTests(unittest.TestCase):
                 output=root/f'preview{n}'
                 result=subprocess.run([sys.executable,str(Path(__file__).resolve().parents[1]/'animal_data.py'),
                     'preview','--index',str(index),'--catalog',str(root/'catalog.yaml'),
-                    '--policy',str(root/'policy.yaml'),'--output',str(output),flag,'0','--no-source-first'],
+                    '--policy',str(root/'policy.yaml'),'--output',str(output),flag,'0','--max-images','10','--no-source-first'],
                     capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 cli_report=json.loads((output/'report.json').read_text(encoding='utf-8'))
@@ -333,7 +333,7 @@ class AnimalDataTests(unittest.TestCase):
             report=json.loads((root/'sample/report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['image_repair']['counts'],{'healthy':10})
 
-    def test_all_images_cli_keeps_all_eligible_positives_and_negatives(self):
+    def test_uncapped_cli_keeps_all_eligible_positives_and_negatives(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             spec = fixture(root / 'source', ['rabbit', 'bear', 'fox'], [6, 2, 1], empty_images_are_negative=True)
@@ -351,10 +351,11 @@ class AnimalDataTests(unittest.TestCase):
             (root / 'catalog.yaml').write_text(yaml.safe_dump(catalog()))
             (root / 'policy.yaml').write_text(yaml.safe_dump(policy))
             script = Path(__file__).resolve().parents[1] / 'animal_data.py'
-            flags = ['--all-images', '--index', str(index), '--catalog', str(root / 'catalog.yaml'),
+            flags = ['--index', str(index), '--catalog', str(root / 'catalog.yaml'),
                      '--policy', str(root / 'policy.yaml')]
-            for command, extra in (('preview', []), ('sample', ['--no-repair-images'])):
-                output = root / command
+            for command, name, extra in (('preview', 'preview', []), ('preview', 'explicit_all', ['--all-images']),
+                                         ('sample', 'sample', ['--no-repair-images'])):
+                output = root / name
                 result = subprocess.run(
                     [sys.executable, '-X', 'utf8', str(script), command, *flags, '--output', str(output), *extra],
                     capture_output=True, encoding='utf-8',
@@ -404,7 +405,9 @@ class AnimalDataTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads((output / 'report.json').read_text(encoding='utf-8'))
 
-            self.assertEqual(run('preview', 'default')['maximum_images'], 30000)
+            capped = run('preview', 'capped', '--min-box-area', '1/100', '--max-images', '1')
+            self.assertEqual(capped['maximum_images'], 1)
+            self.assertEqual(capped['selected_images'], 1)
             for command, extra in (('preview', []), ('sample', ['--no-repair-images'])):
                 report = run(command, command, '--min-box-area', '1/100', *extra)
                 self.assertIsNone(report['maximum_images'])

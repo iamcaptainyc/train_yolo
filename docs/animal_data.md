@@ -121,20 +121,20 @@ python animal_data.py sample \
   --max-images 30000 --output yolo_datasets/animals_30k_19
 ```
 
-输出必须为新目录。图片硬链接并平铺到 images/train、images/val、images/test；标签对应平铺，默认ID从0开始，`--class-id-start 27` 可预留0～26。负样本默认目标5%，也计入30K硬上限；缺少足够可用样本不会重复图片凑数。无实际样本的输出类不伪造训练ID，报告显示实际结果。
+输出必须为新目录。图片硬链接并平铺到 `images/train`、`images/val`、`images/test`，标签对应平铺。默认 ID 从 0 开始，`--class-id-start 27` 可预留 0～26。显式使用 `--max-images` 时，负样本默认目标为额度的 5%，并计入总上限。报告显示实际入选数量和类别。
 
 ### 按类别全量合并
 
-用 `--all-images` 导出所有符合条件的图片，包括已确认的负样本。该模式跳过数量上限、类别和来源配额及负样本比例。类别映射、来源筛选、LILA 框面积门槛和已知重复图处理仍适用。图片按同一规则划分 train/val/test，默认约 8:1:1。
+`sample` 和 `preview` 默认使用全部符合条件的图片，包括已确认的负样本。只有显式传入 `--max-images` 才启用数量上限和配额抽样。类别映射、来源筛选、LILA 框面积门槛和已知重复图处理仍适用。图片分为 `train/val/test`，默认约 8:1:1。
 
 ```bash
 python animal_data.py sample \
   --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
   --only-sources ap10k animals openimages coco donanet \
-  --all-images --output yolo_datasets/animals_all
+  --output yolo_datasets/animals_all
 ```
 
-省略 `--only-sources` 时，来源由已有配置决定，未配置来源筛选时使用索引中的全部来源。`preview` 也支持 `--all-images`。如果加入 LILA，并希望纳入所有合法正面积框，可加 `--lila-ratio 0`。
+省略 `--only-sources` 时，来源由已有配置决定，未配置来源筛选时使用索引中的全部来源。`--all-images` 也可显式指定默认的全量模式。如果加入 LILA，并希望纳入所有合法正面积框，可加 `--lila-ratio 0`。
 
 ### 按框面积全量筛选
 
@@ -146,7 +146,7 @@ python animal_data.py sample \
 
 `--min-box-area` 接受分数或小数。至少一个目标框的归一化宽乘以高严格大于阈值时，保留整张图和全部标注框。空图和恰好等于阈值的框无法使图片入选。设为 `0` 可保留所有符合类别规则的正样本。
 
-给出该参数时默认全量导出。显式使用 `--max-images` 可另外设置上限。所有选定来源使用同一个阈值。LILA 默认沿用这个全局阈值，显式提供 `--lila-ratio` 可对 LILA 再加一道门槛。`preview` 支持相同参数，复用现有索引即可统计入选图片。
+所有选定来源使用同一个阈值。LILA 默认沿用这个全局阈值，显式提供 `--lila-ratio` 可对 LILA 再加一道门槛。`preview` 支持相同参数，复用现有索引即可统计入选图片。
 
 `REPORT.md` 按类列出大于、等于和小于阈值的图片数。同一张图对每个类别只按该类最大的框计一次。统计覆盖通过来源和类别规则的索引记录，早于面积筛选、去重和图片修复，未达到阈值的图片也纳入统计。`preview` 在零张入选时仍会生成报告。
 
@@ -173,11 +173,11 @@ python repair_images.py yolo_datasets/animals_30k_19 \
 
 独立修复删除图片后自动更新数据集统计，支持本脚本的精简报告和 selection.jsonl，原统计另存备份；若独立修复改动了索引所指的原图，下次抽样前用原 index 命令加 `--refresh` 更新索引。
 
-`camping19` 默认使用 `sampling_priority: source_first`。先保持最终大类尽量均衡，每个大类内部依次使用 AP-10K、Animals Detection、Open Images、COCO、DoñaNet、LILA，再在当前来源内部按成员和细类逐层均衡。例如 AP-10K 的狐狸足够填满小型兽类配额时，小型兽类配额会由该来源填满。只有 LILA 有样本的最终大类仍可使用 LILA，以保持大类覆盖。
+显式指定 `--max-images` 后，`camping19` 默认使用 `sampling_priority: source_first`。先保持最终大类尽量均衡，每个大类内部依次使用 AP-10K、Animals Detection、Open Images、COCO、DoñaNet、LILA，再在当前来源内部按成员和细类逐层均衡。例如 AP-10K 的狐狸足够填满小型兽类配额时，小型兽类配额会由该来源填满。只有 LILA 有样本的最终大类仍可使用 LILA，以保持大类覆盖。
 
 同一来源内，成员有更多细类不会获得更多父级配额。粗标注占独立桶；多类别同图只存一次，计数可重叠，均衡为软目标，总图片数为硬上限。负样本也按来源优先抽取。若需恢复旧的细类覆盖优先策略，可将 policy 的 `sampling_priority` 改为 `hierarchy_first`。
 
-`preview` 和 `sample` 均可直接开关模式：`--source-first` 开启来源优先；`--no-source-first` 恢复细类均衡优先（同一细类内仍优先 AP-10K/Animals）。命令行开关覆盖 policy；不传时使用 policy，当前 camping19 默认开启来源优先。两种模式都保持最终大类尽量均衡，均不改变 LILA 面积阈值。预览与正式抽样使用相同开关，实际模式记录在 report.json 和报告附录中。
+启用 `--max-images` 时，`preview` 和 `sample` 都可用 `--source-first` 开启来源优先，或用 `--no-source-first` 开启细类均衡优先。同一细类内按策略的来源顺序选图。命令行开关覆盖 policy，实际模式记录在 `report.json` 和报告附录中。
 
 来源顺序由 `source_priority` 配置，并轮转已知相机/序列组；来源优先不是逐图清晰度评分。LILA 任一框面积比例严格大于1/16即可，全部框保留；负样本不受此限制。调整抽样策略不需要重建索引，但必须使用新输出目录重新抽取。
 
