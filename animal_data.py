@@ -84,7 +84,10 @@ def main():
         parser.add_argument('--policy',type=Path,default=ROOT/'configs/camping19.yaml')
         parser.add_argument('--source-config',type=Path,help='Source selection YAML with allowed_sources and/or source_members')
         parser.add_argument('--only-sources',nargs='+',help='Allowed source families or exact source names; overrides source config/policy')
-        parser.add_argument('--max-images',type=int,default=30000)
+        budget = parser.add_mutually_exclusive_group()
+        budget.add_argument('--max-images',type=int,default=30000)
+        budget.add_argument('--all-images',action='store_true',
+                            help='Export all eligible images, including indexed negatives, without sampling quotas')
         parser.add_argument('--source-first',action=argparse.BooleanOptionalAction,default=None,
                             help='Prioritize sources within each output class; --no-source-first prioritizes fine-class balance; default: policy')
         parser.add_argument('--lila-min-area', '--lila-ratio', '--lila_ratio',
@@ -110,7 +113,8 @@ def main():
             return
         if not args.index.is_file():
             raise ValueError('Index does not exist; run index first')
-        if args.output.exists() or args.max_images<1:
+        maximum = None if args.all_images else args.max_images
+        if args.output.exists() or (maximum is not None and maximum<1):
             raise ValueError('Use a new output directory and positive max-images')
         catalog,policy = read(args.catalog),read(args.policy)
         if args.source_config:
@@ -129,10 +133,10 @@ def main():
             raise ValueError('Invalid val/test fractions')
         with FileLock(str(args.index)+'.lock',timeout=0):
             if args.command=='sample':
-                report = export(args.index,catalog,policy,args.max_images,args.output,args.class_id_start,
+                report = export(args.index,catalog,policy,maximum,args.output,args.class_id_start,
                                 repair_images=args.repair_images,repair_workers=args.repair_workers)
             else:
-                _,report,_ = plan(args.index,catalog,policy,args.max_images)
+                _,report,_ = plan(args.index,catalog,policy,maximum)
                 args.output.mkdir(parents=True)
                 write_preview(report,args.output/'REPORT.md')
                 (args.output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')

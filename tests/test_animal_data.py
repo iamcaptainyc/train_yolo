@@ -333,6 +333,45 @@ class AnimalDataTests(unittest.TestCase):
             report=json.loads((root/'sample/report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['image_repair']['counts'],{'healthy':10})
 
+    def test_all_images_cli_keeps_all_eligible_positives_and_negatives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            spec = fixture(root / 'source', ['rabbit', 'bear', 'fox'], [6, 2, 1], empty_images_are_negative=True)
+            duplicate = root / 'source' / '5.jpg'
+            duplicate.unlink()
+            os.link(root / 'source' / '1.jpg', duplicate)
+            annotation = Path(spec['annotations'][0])
+            data = json.loads(annotation.read_text())
+            data['annotations'] = [box for box in data['annotations'] if box['image_id'] != 0]
+            annotation.write_text(json.dumps(data))
+            index = root / 'index.sqlite'
+            build(index, [spec])
+            policy = {'groups': {'rabbit': {'members': ['rabbit']}, 'bear': {'members': ['bear']}},
+                      'negative_fraction': 0}
+            (root / 'catalog.yaml').write_text(yaml.safe_dump(catalog()))
+            (root / 'policy.yaml').write_text(yaml.safe_dump(policy))
+            script = Path(__file__).resolve().parents[1] / 'animal_data.py'
+            flags = ['--all-images', '--index', str(index), '--catalog', str(root / 'catalog.yaml'),
+                     '--policy', str(root / 'policy.yaml')]
+            for command, extra in (('preview', []), ('sample', ['--no-repair-images'])):
+                output = root / command
+                result = subprocess.run(
+                    [sys.executable, '-X', 'utf8', str(script), command, *flags, '--output', str(output), *extra],
+                    capture_output=True, encoding='utf-8',
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads((output / 'report.json').read_text(encoding='utf-8'))
+                self.assertEqual(report['selected_images'], 7)
+                self.assertIsNone(report['maximum_images'])
+                self.assertEqual(report['sampling_priority'], 'all')
+                self.assertEqual(report['excluded'], {'animals/fox': 1, 'duplicate_images': 1})
+                self.assertEqual({tuple(row['path']): row['selected_images'] for row in report['hierarchy_sampling']
+                                  if len(row['path']) == 1}, {('rabbit',): 4, ('bear',): 2})
+            self.assertEqual(report['negative_images'], 1)
+            self.assertEqual(report['split']['group_overlap'], 0)
+            self.assertEqual(len(list((output / 'images').rglob('*.jpg'))), 7)
+            self.assertEqual(sum(not p.read_text() for p in (output / 'labels').rglob('*.txt')), 1)
+
     def test_new_sources_use_original_yolo_ids_and_camping19_mapping(self):
         configs = Path(__file__).resolve().parents[1] / 'configs'
         with tempfile.TemporaryDirectory() as tmp:

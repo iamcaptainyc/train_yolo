@@ -123,6 +123,21 @@ python animal_data.py sample \
 
 输出必须为新目录。图片硬链接并平铺到 images/train、images/val、images/test；标签对应平铺，默认ID从0开始，`--class-id-start 27` 可预留0～26。负样本默认目标5%，也计入30K硬上限；缺少足够可用样本不会重复图片凑数。无实际样本的输出类不伪造训练ID，报告显示实际结果。
 
+### 按类别全量合并
+
+用 `--all-images` 导出所有符合条件的图片，包括已确认的负样本。该模式跳过数量上限、类别和来源配额及负样本比例。类别映射、来源筛选、LILA 框面积门槛和已知重复图处理仍适用。图片按同一规则划分 train/val/test，默认约 8:1:1。
+
+```bash
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
+  --only-sources ap10k animals openimages coco donanet \
+  --all-images --output yolo_datasets/animals_all
+```
+
+省略 `--only-sources` 时，来源由已有配置决定，未配置来源筛选时使用索引中的全部来源。`preview` 也支持 `--all-images`。如果加入 LILA，并希望纳入所有合法正面积框，可加 `--lila-ratio 0`。
+
+### 图片检查和修复
+
 `sample` 默认在写出每张选中图片时立即检查并修复（`--repair-images`），不在导出后再扫描一次目录。先建立硬链接，再调用 `repair_images` 的逐图检查：正常图不改写；可恢复 JPEG 原位重新编码，其他硬链接同步修复；完全无法解码则删除本次输出链接、不生成标签，原始来源文件保留。修复后的索引文件时间/大小同步更新，不保存正常图检查记录。`--no-repair-images` 可显式关闭，`index` 和 `preview` 不解码图片。
 
 若原位修复导致文件大小/时间与旧索引不一致，而设备和 inode 未变，默认继续在写出循环内验证：解码正常且尺寸符合已保存的 COCO 标注尺寸后，仅更新相关索引记录，不重建全库。尺寸不一致的图片从本次输出剔除，并更新数量；问题原图保留。文件被替换（设备/inode 变化）或关闭修复时仍要求刷新索引。此检查不能识别同尺寸画面被人为替换；不会据此宣称原始标注语义得到验证。

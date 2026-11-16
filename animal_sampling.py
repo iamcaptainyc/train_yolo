@@ -175,6 +175,13 @@ def pool(index, catalog, policy):
         db.close()
 
 
+def hierarchy_counts(records):
+    counts = Counter()
+    for record in records:
+        counts.update({path[:length] for path in record['paths'] for length in range(1, len(path)+1)})
+    return counts
+
+
 def choose(records, maximum, negative_fraction, seed, source_first=True):
     if maximum<1 or not 0<=negative_fraction<1:
         raise ValueError('Invalid image budget/negative fraction')
@@ -242,10 +249,7 @@ def choose(records, maximum, negative_fraction, seed, source_first=True):
         counts.update(prefixes)
     selected.update(negatives[:negative_budget])
     picked = [r for i,r in enumerate(records) if i in selected]
-    original_counts = Counter()
-    for r in picked:
-        original_counts.update({p[:n] for p in r['paths'] for n in range(1,len(p)+1)})
-    return picked,available,original_counts
+    return picked,available,hierarchy_counts(picked)
 
 
 def plan(index,catalog,policy,maximum):
@@ -253,7 +257,12 @@ def plan(index,catalog,policy,maximum):
     if strategy not in ('source_first','hierarchy_first'):
         raise ValueError('sampling_priority must be source_first or hierarchy_first')
     records,excluded,errors,sources = pool(index,catalog,policy)
-    chosen,available,counts = choose(records,maximum,policy.get('negative_fraction',.05),policy.get('seed',42),strategy=='source_first')
+    if maximum is None:
+        strategy = 'all'
+        chosen = records
+        available = counts = hierarchy_counts(chosen)
+    else:
+        chosen,available,counts = choose(records,maximum,policy.get('negative_fraction',.05),policy.get('seed',42),strategy=='source_first')
     details = [{'path':list(p[:-1] if p[-1]=='@self' else p),
                 'source_bucket':p[-1]=='@self','available_images':n,'selected_images':counts[p]}
                for p,n in sorted(available.items())]
@@ -498,7 +507,8 @@ def write_preview(report,path):
     names = report.get('names',{})
     selected = {r['path'][0]:r['selected_images'] for r in report['hierarchy_sampling']
                 if len(r['path'])==1 and not r['source_bucket'] and r['selected_images']}
-    lines = ['# 动物数据集统计' if final else '# 动物数据集抽样预览', '',
+    preview_title = '# 动物数据集全量合并预览' if report.get('sampling_priority')=='all' else '# 动物数据集抽样预览'
+    lines = ['# 动物数据集统计' if final else preview_title, '',
              f'类别数：**{sum(any(v.values()) for v in report["split"]["class_image_counts"].values()) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
     if final:
         totals = report.get('split_image_counts',{})
@@ -563,12 +573,19 @@ def refresh_report(directory):
 
 
 def write_appendix(report,path):
-    lines = ['# 通用动物数据集采样报告','',f'实际选择 {report["selected_images"]} 张，上限 {report["maximum_images"]} 张。','',
+    strategy = report.get('sampling_priority')
+    maximum = report['maximum_images']
+    summary = f'实际选择 {report["selected_images"]} 张。'
+    if maximum is not None:
+        summary = f'实际选择 {report["selected_images"]} 张，上限 {maximum} 张。'
+    mode = {
+        'all': '全量合并，保留符合条件的正样本及已确认的负样本。',
+        'source_first': '按最终类别均衡、来源优先、来源内细类均衡。仅低优先来源拥有的细类可能缺少样本。',
+    }.get(strategy, '按最终类别、成员和更细类别递归均衡。')
+    lines = ['# 通用动物数据集报告','',summary,'',
         f'请求类别数：{len(report["requested_groups"])}；没有抽到样本的类别：{report["unselected_groups"]}。','',
         f'LILA 框面积占比必须严格大于 {report["lila_min_area"]:.6f}；任意一个框达标就保留整图及全部框，负样本不受此门槛限制。这不是 LILA 来源占比。','',
-        ('按最终类别均衡→来源优先→来源内细类均衡；允许缺少仅低优先来源拥有的细类。'
-         if report.get('sampling_priority')=='source_first' else '按最终类别→成员→更细类别递归均衡。')+
-        '多类别同图只保存一次，图片计数可重叠。','',
+        mode+'多类别同图只保存一次，图片计数可重叠。','',
         '| 层级路径 | 原始标签采样桶 | 可用图片 | 选择图片 |','| --- | --- | ---: | ---: |']
     for r in report['hierarchy_sampling']:
         lines.append(f'| {" / ".join(r["path"])} | {r["source_bucket"]} | {r["available_images"]} | {r["selected_images"]} |')
