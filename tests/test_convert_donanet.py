@@ -61,9 +61,9 @@ class DonanetTests(unittest.TestCase):
                              ''.join(f'{cid} {coords}\n' for cid in (1, 2, 3, 6, 14, 14, 9, 14, 14)))
             self.assertIn(f'15 {coords}', original_label.read_text(encoding='utf-8'))
             report = (output / 'REPORT.md').read_text(encoding='utf-8')
-            self.assertIn('| 合计 | 7 | 3 | 1 | 1 | 1 | 1 |', report)
-            self.assertIn('| 14 | small_mammal | 1 | 0 | 1 | 2 | 6 |', report)
-            self.assertIn('| 0 | bear | 0 | 0 | 0 | 0 | 0 |', report)
+            self.assertIn('| 合计 | 7 | 3 | 14 | 1 | 1 | 1 | 1 |', report)
+            self.assertIn('| 14 | small_mammal | 1 / 2 | 0 / 0 | 1 / 4 | 2 | 6 |', report)
+            self.assertIn('| 0 | bear | 0 / 0 | 0 / 0 | 0 / 0 | 0 | 0 |', report)
 
 
 if __name__ == '__main__':

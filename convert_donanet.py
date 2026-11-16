@@ -40,24 +40,24 @@ def write_report(stage, names, groups, mapping, outside, images, boxes, splits, 
     lines = [
         '# DoñaNet 转 camping19', '',
         f'类别定义 {len(groups)} 个，实际有标注 {covered} 个。图片保留来源的 train/val/test 划分。', '',
-        '| 划分 | 原图片 | 保留 | 无目标框 | 含范围外动物 | 缺少标签 | 标注无效 |',
-        '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+        '| 划分 | 原图片 | 保留图片 | 保留框 | 无目标框 | 含范围外动物 | 缺少标签 | 标注无效 |',
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
     ]
     totals = sum(splits.values(), Counter())
     for split, counts in [*splits.items(), ('合计', totals)]:
-        values = [counts[key] for key in ('input', 'kept', 'no_target', 'outside', 'missing', 'invalid')]
+        values = [counts[key] for key in ('input', 'kept', 'boxes', 'no_target', 'outside', 'missing', 'invalid')]
         lines.append(f'| {split} | ' + ' | '.join(map(str, values)) + ' |')
     lines += [
         '', '## 输出类别', '',
         '每张含该类框的图片在该类下计一次。多类别图片可计入多行。', '',
-        '| ID | 类别 | Train 图片 | Val 图片 | Test 图片 | 图片合计 | 框合计 |',
+        '| ID | 类别 | Train 图片 / 框 | Val 图片 / 框 | Test 图片 / 框 | 图片合计 | 框合计 |',
         '| ---: | --- | ---: | ---: | ---: | ---: | ---: |',
     ]
     for cid, name in groups.items():
-        counts = [images[split][cid] for split in SPLITS]
-        train, val, test = counts
-        lines.append(f'| {cid} | {name} | {train} | {val} | {test} | {sum(counts)} | '
-                     f'{sum(boxes[split][cid] for split in SPLITS)} |')
+        image_totals = [images[split][cid] for split in SPLITS]
+        box_totals = [boxes[split][cid] for split in SPLITS]
+        cells = ' | '.join(f'{n_images} / {n_boxes}' for n_images, n_boxes in zip(image_totals, box_totals))
+        lines.append(f'| {cid} | {name} | {cells} | {sum(image_totals)} | {sum(box_totals)} |')
     lines += [
         '', '## 原类别映射', '',
         '| 原 ID | 原类别 | 处理 |', '| ---: | --- | --- |',
@@ -140,6 +140,7 @@ def convert(source, output, copy_images=False):
                         raise OSError(f'Cannot hardlink {image}: {exc}. Use --copy-images if needed.') from exc
                 dest_label.write_bytes(rewritten)
                 stats['kept'] += 1
+                stats['boxes'] += sum(counts.values())
                 image_counts[split].update(counts.keys())
                 box_counts[split].update(counts)
 
