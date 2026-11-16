@@ -375,7 +375,7 @@ class AnimalDataTests(unittest.TestCase):
     def test_global_box_area_filters_exact_boundary_and_exports_whole_images_without_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            animals = fixture(root / 'animals', ['rabbit'], [4], empty_images_are_negative=True)
+            animals = fixture(root / 'animals', ['rabbit', 'bear'], [4, 0], empty_images_are_negative=True)
             lila = fixture(root / 'lila', ['rabbit'], [1], name='lila')
             for spec, boxes in ((animals, [[10, 10, 10, 10], [10, 10, 9, 10], [10, 10, 11, 10]]),
                                 (lila, [[10, 10, 20, 10]])):
@@ -386,10 +386,11 @@ class AnimalDataTests(unittest.TestCase):
                     item['bbox'] = box
                 if spec == animals:
                     data['annotations'].append({'id': 4, 'image_id': 2, 'category_id': 0, 'bbox': [50, 50, 2, 4]})
+                    data['annotations'].append({'id': 5, 'image_id': 2, 'category_id': 1, 'bbox': [60, 60, 3, 4]})
                 annotation.write_text(json.dumps(data))
             index = root / 'index.sqlite'
             build(index, [animals, lila])
-            policy = {'groups': {'rabbit': {'members': ['rabbit']}}, 'lila_min_area': 0.0625}
+            policy = {'groups': {'rabbit': {'members': ['rabbit']}, 'bear': {'members': ['bear']}}, 'lila_min_area': 0.0625}
             (root / 'catalog.yaml').write_text(yaml.safe_dump(catalog()))
             (root / 'policy.yaml').write_text(yaml.safe_dump(policy))
             script = Path(__file__).resolve().parents[1] / 'animal_data.py'
@@ -410,13 +411,21 @@ class AnimalDataTests(unittest.TestCase):
                 self.assertEqual(report['min_box_area'], '1/100')
                 self.assertEqual(report['selected_images'], 2)
                 self.assertEqual(report['excluded']['min_box_area_filter'], 3)
+                self.assertEqual(report['box_area_by_class'], {
+                    'rabbit': {'above': 2, 'equal': 1, 'below': 1},
+                    'bear': {'above': 0, 'equal': 0, 'below': 1},
+                })
+                self.assertIn('| rabbit | 2 | 1 | 1 |', (root / command / 'REPORT.md').read_text(encoding='utf-8'))
             self.assertEqual(report['negative_images'], 0)
             labels = [p.read_text().splitlines() for p in (root / 'sample' / 'labels').rglob('*.txt')]
-            self.assertEqual(sorted(map(len, labels)), [1, 2])
+            self.assertEqual(sorted(map(len, labels)), [1, 3])
             self.assertTrue(any(line.endswith('0.020000000000 0.040000000000') for rows in labels for line in rows))
             stricter = run('preview', 'strict_lila', '--min-box-area', '0.01', '--lila-ratio', '1/16')
             self.assertEqual(stricter['selected_images'], 1)
             self.assertEqual(stricter['excluded']['lila_area_filter'], 1)
+            no_matches = run('preview', 'no_matches', '--min-box-area', '0.9')
+            self.assertEqual(no_matches['selected_images'], 0)
+            self.assertEqual(no_matches['box_area_by_class']['rabbit']['below'], 4)
 
     def test_new_sources_use_original_yolo_ids_and_camping19_mapping(self):
         configs = Path(__file__).resolve().parents[1] / 'configs'

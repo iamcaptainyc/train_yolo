@@ -121,6 +121,7 @@ def pool(index, catalog, policy):
         for r in db.execute('SELECT * FROM boxes ORDER BY image,rowid'):
             annotations[r['image']].append((r['cid'],tuple(json.loads(r['coords']))))
         records, excluded = [],Counter()
+        area_counts = {name: {'above': 0, 'equal': 0, 'below': 0} for name in sorted(policy['groups'])} if min_box_area is not None else {}
         priority = policy.get('source_priority',['ap10k','animals','lila'])
         for image in db.execute('SELECT images.* FROM images JOIN sources ON sources.id=images.source ORDER BY sources.name,images.original_id'):
             if image['source'] not in sources:
@@ -148,10 +149,17 @@ def pool(index, catalog, policy):
                 projected.append((group,box))
             if bad:  # Keep the established whole-image exclusion rule.
                 continue
-            if min_box_area is not None and not any(
-                    Fraction(b[2]) * Fraction(b[3]) > min_box_area for _, b in projected):
-                excluded['min_box_area_filter'] += 1
-                continue
+            if min_box_area is not None:
+                largest_areas = {}
+                for group, box in projected:
+                    area = Fraction(box[2]) * Fraction(box[3])
+                    largest_areas[group] = max(area, largest_areas.get(group, 0))
+                for group, area in largest_areas.items():
+                    relation = 'above' if area > min_box_area else 'below' if area < min_box_area else 'equal'
+                    area_counts[group][relation] += 1
+                if not any(area > min_box_area for area in largest_areas.values()):
+                    excluded['min_box_area_filter'] += 1
+                    continue
             if projected and spec.get('family')=='lila' and not any(
                     float(b[2])*float(b[3])>lila_min_area for _,b in projected):
                 excluded['lila_area_filter'] += 1
@@ -166,7 +174,7 @@ def pool(index, catalog, policy):
                 'paths':paths,'origins':origins,'group_keys':[(source['name'],*g) for g in json.loads(image['groups_json'])],
                 'train_only':bool(image['train_only']), 'image_rel':Path('images/train')/(token+Path(image['path']).suffix.lower()),
                 'label_rel':Path('labels/train')/(token+'.txt')})
-        if not records:
+        if not records and min_box_area is None:
             raise ValueError('No eligible images; inspect source-name mappings and policy')
         resplit(records,.1,.1,policy.get('seed',42),groups_only=True)
         # Resolve known duplicate files before allocating sampling slots. Conflicting
@@ -184,7 +192,7 @@ def pool(index, catalog, policy):
             unique.append(winner)
             excluded['duplicate_images'] += len(group)-1
         errors = [dict(r) for r in db.execute('SELECT sources.name AS source,errors.path,errors.error FROM errors JOIN sources ON sources.id=errors.source')]
-        return unique,dict(excluded),errors,sources
+        return unique,dict(excluded),errors,sources,area_counts
     finally:
         db.close()
 
@@ -270,7 +278,7 @@ def plan(index,catalog,policy,maximum):
     strategy = policy.get('sampling_priority','source_first')
     if strategy not in ('source_first','hierarchy_first'):
         raise ValueError('sampling_priority must be source_first or hierarchy_first')
-    records,excluded,errors,sources = pool(index,catalog,policy)
+    records,excluded,errors,sources,area_counts = pool(index,catalog,policy)
     if maximum is None:
         strategy = 'all'
         chosen = records
@@ -311,6 +319,7 @@ def plan(index,catalog,policy,maximum):
         'excluded':excluded,'index_errors':errors,'source_priority':policy.get('source_priority',[]),
         'lila_min_area':policy.get('lila_min_area',1/16),
         'min_box_area':policy.get('min_box_area'),
+        'box_area_by_class':area_counts,
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
 
@@ -559,6 +568,12 @@ def write_preview(report,path):
         lines += ['尚未划分 train/val/test；实际分集数量在生成数据集后统计。','',
                   '| 类别 | 图片数 |','| --- | ---: |']
         lines += [f'| {name} | {count} |' for name,count in sorted(selected.items())]
+    if area_counts := report.get('box_area_by_class'):
+        lines += ['', '## 各类别的框面积分布', '',
+                  f'阈值为 `{ratio}`。每张图按该类别最大的框计一次。这里统计通过来源和类别规则的索引记录，面积筛选、去重和图片修复均在统计之后。', '',
+                  '| 类别 | 大于阈值 | 等于阈值 | 小于阈值 |', '| --- | ---: | ---: | ---: |']
+        for name, counts in sorted(area_counts.items()):
+            lines.append(f'| {name} | {counts["above"]:,} | {counts["equal"]:,} | {counts["below"]:,} |')
     lines += ['', '按图片数统计，同一图片包含多个类别时分别计入各类，因此各类别合计可能超过图片总数。', '',
               '[附录：原始类别、采样与校验明细](REPORT_APPENDIX.md)']
     path.write_text('\n'.join(lines)+'\n',encoding='utf-8')
