@@ -372,6 +372,52 @@ class AnimalDataTests(unittest.TestCase):
             self.assertEqual(len(list((output / 'images').rglob('*.jpg'))), 7)
             self.assertEqual(sum(not p.read_text() for p in (output / 'labels').rglob('*.txt')), 1)
 
+    def test_global_box_area_filters_exact_boundary_and_exports_whole_images_without_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            animals = fixture(root / 'animals', ['rabbit'], [4], empty_images_are_negative=True)
+            lila = fixture(root / 'lila', ['rabbit'], [1], name='lila')
+            for spec, boxes in ((animals, [[10, 10, 10, 10], [10, 10, 9, 10], [10, 10, 11, 10]]),
+                                (lila, [[10, 10, 20, 10]])):
+                annotation = Path(spec['annotations'][0])
+                data = json.loads(annotation.read_text())
+                data['annotations'] = data['annotations'][:len(boxes)]
+                for item, box in zip(data['annotations'], boxes):
+                    item['bbox'] = box
+                if spec == animals:
+                    data['annotations'].append({'id': 4, 'image_id': 2, 'category_id': 0, 'bbox': [50, 50, 2, 4]})
+                annotation.write_text(json.dumps(data))
+            index = root / 'index.sqlite'
+            build(index, [animals, lila])
+            policy = {'groups': {'rabbit': {'members': ['rabbit']}}, 'lila_min_area': 0.0625}
+            (root / 'catalog.yaml').write_text(yaml.safe_dump(catalog()))
+            (root / 'policy.yaml').write_text(yaml.safe_dump(policy))
+            script = Path(__file__).resolve().parents[1] / 'animal_data.py'
+
+            def run(command, name, *flags):
+                output = root / name
+                args = [command, '--index', str(index), '--catalog', str(root / 'catalog.yaml'),
+                        '--policy', str(root / 'policy.yaml'), '--output', str(output), *flags]
+                result = subprocess.run([sys.executable, '-X', 'utf8', str(script), *args],
+                                        capture_output=True, encoding='utf-8')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads((output / 'report.json').read_text(encoding='utf-8'))
+
+            self.assertEqual(run('preview', 'default')['maximum_images'], 30000)
+            for command, extra in (('preview', []), ('sample', ['--no-repair-images'])):
+                report = run(command, command, '--min-box-area', '1/100', *extra)
+                self.assertIsNone(report['maximum_images'])
+                self.assertEqual(report['min_box_area'], '1/100')
+                self.assertEqual(report['selected_images'], 2)
+                self.assertEqual(report['excluded']['min_box_area_filter'], 3)
+            self.assertEqual(report['negative_images'], 0)
+            labels = [p.read_text().splitlines() for p in (root / 'sample' / 'labels').rglob('*.txt')]
+            self.assertEqual(sorted(map(len, labels)), [1, 2])
+            self.assertTrue(any(line.endswith('0.020000000000 0.040000000000') for rows in labels for line in rows))
+            stricter = run('preview', 'strict_lila', '--min-box-area', '0.01', '--lila-ratio', '1/16')
+            self.assertEqual(stricter['selected_images'], 1)
+            self.assertEqual(stricter['excluded']['lila_area_filter'], 1)
+
     def test_new_sources_use_original_yolo_ids_and_camping19_mapping(self):
         configs = Path(__file__).resolve().parents[1] / 'configs'
         with tempfile.TemporaryDirectory() as tmp:

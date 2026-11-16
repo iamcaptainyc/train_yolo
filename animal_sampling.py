@@ -2,6 +2,7 @@
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import closing
+from fractions import Fraction
 import hashlib
 import json
 import multiprocessing
@@ -87,8 +88,17 @@ def compile_source_members(rules, sources, nodes, mapping):
 
 
 def pool(index, catalog, policy):
-    if not 0 <= policy.get('lila_min_area', 1/16) < 1:
+    lila_min_area = policy.get('lila_min_area', 1/16)
+    if not 0 <= lila_min_area < 1:
         raise ValueError('LILA bbox area ratio must be >= 0 and < 1')
+    min_box_area = policy.get('min_box_area')
+    if min_box_area is not None:
+        try:
+            min_box_area = Fraction(str(min_box_area))
+        except (ValueError, ZeroDivisionError) as exc:
+            raise ValueError('Invalid min_box_area; use a decimal or fraction') from exc
+        if not 0 <= min_box_area < 1:
+            raise ValueError('Box area ratio must be >= 0 and < 1')
     mapping = compile_policy(catalog,policy)
     db = connect(index)
     try:
@@ -138,8 +148,12 @@ def pool(index, catalog, policy):
                 projected.append((group,box))
             if bad:  # Keep the established whole-image exclusion rule.
                 continue
+            if min_box_area is not None and not any(
+                    Fraction(b[2]) * Fraction(b[3]) > min_box_area for _, b in projected):
+                excluded['min_box_area_filter'] += 1
+                continue
             if projected and spec.get('family')=='lila' and not any(
-                    float(b[2])*float(b[3])>policy.get('lila_min_area',1/16) for _,b in projected):
+                    float(b[2])*float(b[3])>lila_min_area for _,b in projected):
                 excluded['lila_area_filter'] += 1
                 continue
             s = json.loads(image['stamp'])
@@ -296,6 +310,7 @@ def plan(index,catalog,policy,maximum):
         'provenance':[dict(group=k[0],concept=k[1],source=k[2],original_name=k[3],**v) for k,v in sorted(provenance.items())],
         'excluded':excluded,'index_errors':errors,'source_priority':policy.get('source_priority',[]),
         'lila_min_area':policy.get('lila_min_area',1/16),
+        'min_box_area':policy.get('min_box_area'),
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
 
@@ -510,6 +525,8 @@ def write_preview(report,path):
     preview_title = '# 动物数据集全量合并预览' if report.get('sampling_priority')=='all' else '# 动物数据集抽样预览'
     lines = ['# 动物数据集统计' if final else preview_title, '',
              f'类别数：**{sum(any(v.values()) for v in report["split"]["class_image_counts"].values()) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
+    if (ratio := report.get('min_box_area')) is not None:
+        lines += [f'每张图至少有一个目标框的面积占比严格大于 `{ratio}`。', '']
     if final:
         totals = report.get('split_image_counts',{})
         lines += ['| 集合 | 图片数 |', '| --- | ---: |']

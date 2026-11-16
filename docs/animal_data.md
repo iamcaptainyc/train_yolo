@@ -136,6 +136,18 @@ python animal_data.py sample \
 
 省略 `--only-sources` 时，来源由已有配置决定，未配置来源筛选时使用索引中的全部来源。`preview` 也支持 `--all-images`。如果加入 LILA，并希望纳入所有合法正面积框，可加 `--lila-ratio 0`。
 
+### 按框面积全量筛选
+
+```bash
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
+  --min-box-area 1/16 --output yolo_datasets/animals_area_1of16
+```
+
+`--min-box-area` 接受分数或小数。至少一个目标框的归一化宽乘以高严格大于阈值时，保留整张图和全部标注框。空图和恰好等于阈值的框无法使图片入选。设为 `0` 可保留所有符合类别规则的正样本。
+
+给出该参数时默认全量导出。显式使用 `--max-images` 可另外设置上限。所有选定来源使用同一个阈值。LILA 默认沿用这个全局阈值，显式提供 `--lila-ratio` 可对 LILA 再加一道门槛。`preview` 支持相同参数，复用现有索引即可统计入选图片。
+
 ### 图片检查和修复
 
 `sample` 默认在写出每张选中图片时立即检查并修复（`--repair-images`），不在导出后再扫描一次目录。先建立硬链接，再调用 `repair_images` 的逐图检查：正常图不改写；可恢复 JPEG 原位重新编码，其他硬链接同步修复；完全无法解码则删除本次输出链接、不生成标签，原始来源文件保留。修复后的索引文件时间/大小同步更新，不保存正常图检查记录。`--no-repair-images` 可显式关闭，`index` 和 `preview` 不解码图片。

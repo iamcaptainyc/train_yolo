@@ -13,14 +13,18 @@ from animal_sampling import export, plan, write_preview, refresh_report
 ROOT = Path(__file__).parent
 
 
-def area_ratio(value):
+def parse_area_ratio(value):
     try:
-        ratio = float(Fraction(value))
+        ratio = Fraction(value)
     except (ValueError, ZeroDivisionError, OverflowError) as exc:
         raise argparse.ArgumentTypeError('Use a decimal or fraction, e.g. 0.0625 or 1/16') from exc
     if not 0 <= ratio < 1:
-        raise argparse.ArgumentTypeError('LILA bbox area ratio must be >= 0 and < 1')
+        raise argparse.ArgumentTypeError('Box area ratio must be >= 0 and < 1')
     return ratio
+
+
+def area_ratio(value):
+    return float(parse_area_ratio(value))
 
 
 def read(path):
@@ -85,7 +89,8 @@ def main():
         parser.add_argument('--source-config',type=Path,help='Source selection YAML with allowed_sources and/or source_members')
         parser.add_argument('--only-sources',nargs='+',help='Allowed source families or exact source names; overrides source config/policy')
         budget = parser.add_mutually_exclusive_group()
-        budget.add_argument('--max-images',type=int,default=30000)
+        budget.add_argument('--max-images',type=int,
+                            help='Image limit (default: 30000 without --all-images or --min-box-area)')
         budget.add_argument('--all-images',action='store_true',
                             help='Export all eligible images, including indexed negatives, without sampling quotas')
         parser.add_argument('--source-first',action=argparse.BooleanOptionalAction,default=None,
@@ -93,6 +98,8 @@ def main():
         parser.add_argument('--lila-min-area', '--lila-ratio', '--lila_ratio',
                             dest='lila_min_area', type=area_ratio, default=None,
                             help='LILA bbox/image area threshold, e.g. 1/16; overrides policy, not a source quota')
+        parser.add_argument('--min-box-area',type=parse_area_ratio,
+                            help='Keep images with any target box strictly above this area ratio (all sources, uncapped by default)')
         parser.add_argument('--output',type=Path,required=True,help='New output directory (preview: reports only)')
         if command=='sample':
             parser.add_argument('--class-id-start',type=int,default=0)
@@ -113,8 +120,7 @@ def main():
             return
         if not args.index.is_file():
             raise ValueError('Index does not exist; run index first')
-        maximum = None if args.all_images else args.max_images
-        if args.output.exists() or (maximum is not None and maximum<1):
+        if args.output.exists() or (args.max_images is not None and args.max_images<1):
             raise ValueError('Use a new output directory and positive max-images')
         catalog,policy = read(args.catalog),read(args.policy)
         if args.source_config:
@@ -126,8 +132,14 @@ def main():
             policy['allowed_sources'] = args.only_sources
         if args.source_first is not None:
             policy['sampling_priority'] = 'source_first' if args.source_first else 'hierarchy_first'
+        if args.min_box_area is not None:
+            policy['min_box_area'] = str(args.min_box_area)
+            policy['lila_min_area'] = 0
         if args.lila_min_area is not None:
             policy['lila_min_area'] = args.lila_min_area
+        maximum = args.max_images
+        if maximum is None and not args.all_images and policy.get('min_box_area') is None:
+            maximum = 30000
         v,t = policy.get('val_fraction',.1),policy.get('test_fraction',.1)
         if not (0<=v<1 and 0<=t<1 and v+t<1):
             raise ValueError('Invalid val/test fractions')
