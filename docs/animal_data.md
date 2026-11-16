@@ -30,6 +30,27 @@ AP-10K 只读一套 split 方案（默认1），汇总该方案的 train/val/tes
 
 索引包含路径、原类别、原图ID、归一化框与原像素框/尺寸或原YOLO行证据、来源分组、文件元数据，以及问题记录。不会复制图片或解码检查损坏JPEG。格式错误、缺失图片、框非法等记录写入 errors，不作为训练样本；未映射类别仍完整留在索引。索引本身是有意保存的可复用标注数据，不是逐图片解码校验缓存。
 
+### 加入 Open Images、COCO 和 DoñaNet
+
+`configs/sources_openimages_coco_donanet.yaml` 登记了这三份 YOLO 数据。目录名不同可修改清单里的 `yaml` 路径，路径相对清单文件。Open Images 和 COCO 使用各自导出的 `data.yaml` 与对应的标签文件。DoñaNet 使用 `convert_donanet.py` 的输出。
+
+```bash
+python animal_data.py index \
+  --index datasets/animal_index.sqlite \
+  --sources configs/sources_openimages_coco_donanet.yaml
+```
+
+如果索引中已登记 AP-10K 和 Animals Detection，可以一起抽取：
+
+```bash
+python animal_data.py sample \
+  --index datasets/animal_index.sqlite --policy configs/camping19.yaml \
+  --only-sources ap10k animals openimages coco donanet \
+  --max-images 30000 --output yolo_datasets/animals_30k_expanded
+```
+
+抽取时按每份数据的 `names` 解释原 ID，再统一写出目标 ID。COCO 的 `cow` 归入 `cattle`，Open Images 保留原类别粒度供分组。DoñaNet 的 `small_mammal` 是已归并标签，在 `camping19` 中整体纳入，无法用于需要从中单独抽出狐狸和兔子的配置。
+
 ## 2. 先预览
 
 ### 通用来源筛选（共用一份19类配置）
@@ -123,7 +144,7 @@ python repair_images.py yolo_datasets/animals_30k_19 \
 
 独立修复删除图片后自动更新数据集统计，支持本脚本的精简报告和 selection.jsonl，原统计另存备份；若独立修复改动了索引所指的原图，下次抽样前用原 index 命令加 `--refresh` 更新索引。
 
-默认 `sampling_priority: source_first`：先保持最终大类尽量均衡，每个大类内部先取 AP-10K，再取 Animals Detection，最后用 LILA 补足；在当前来源内部再按成员和细类逐层均衡。不会为了补齐某个细类，跳过仍有可用图片的优先来源。例如 AP-10K 的狐狸足够填满小型兽类配额时，不会为加入 LILA 独有的獴或鼬而选入 LILA。只有 LILA 有样本的最终大类仍可使用 LILA，以保持大类覆盖。
+`camping19` 默认使用 `sampling_priority: source_first`。先保持最终大类尽量均衡，每个大类内部依次使用 AP-10K、Animals Detection、Open Images、COCO、DoñaNet、LILA，再在当前来源内部按成员和细类逐层均衡。例如 AP-10K 的狐狸足够填满小型兽类配额时，小型兽类配额会由该来源填满。只有 LILA 有样本的最终大类仍可使用 LILA，以保持大类覆盖。
 
 同一来源内，成员有更多细类不会获得更多父级配额。粗标注占独立桶；多类别同图只存一次，计数可重叠，均衡为软目标，总图片数为硬上限。负样本也按来源优先抽取。若需恢复旧的细类覆盖优先策略，可将 policy 的 `sampling_priority` 改为 `hierarchy_first`。
 

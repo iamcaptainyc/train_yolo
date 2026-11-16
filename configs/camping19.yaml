@@ -73,6 +73,8 @@ groups:
     exclude:
     - eagle
   small_mammal:
+    members:
+    - donanet_small_mammal
     member_tag: small_mammal
     exclude:
     - hog_badger
@@ -96,6 +98,9 @@ sampling_priority: source_first
 source_priority:
 - ap10k
 - animals
+- openimages
+- coco
+- donanet
 - lila
 negative_fraction: 0.05
 lila_min_area: 0.0625

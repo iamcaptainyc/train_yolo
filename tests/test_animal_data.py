@@ -6,10 +6,12 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import yaml
 
+from animal_data import specs_from_args
 from animal_index import build,connect
 from animal_sampling import compile_policy,export,plan
 
@@ -331,6 +333,60 @@ class AnimalDataTests(unittest.TestCase):
             report=json.loads((root/'sample/report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['image_repair']['counts'],{'healthy':10})
 
+    def test_new_sources_use_original_yolo_ids_and_camping19_mapping(self):
+        configs = Path(__file__).resolve().parents[1] / 'configs'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / 'configs' / 'sources_openimages_coco_donanet.yaml'
+            manifest.parent.mkdir()
+            manifest.write_bytes((configs / manifest.name).read_bytes())
+            specs = specs_from_args(SimpleNamespace(sources=manifest, ap10k=None, animals=None, lila_source=None))
+            self.assertEqual([spec['name'] for spec in specs], ['openimages', 'coco', 'donanet'])
+            datasets = {
+                'openimages': (['tiger', 'cattle'], (0, 1)),
+                'coco': ({0: 'cow', 1: 'cat'}, (0, 1)),
+                'donanet': ({cid: name for cid, name in enumerate(sorted(
+                    yaml.safe_load((configs / 'camping19.yaml').read_text())['groups']))}, (14, 17)),
+            }
+            originals = {}
+            for spec in specs:
+                source = spec['name']
+                yaml_path = Path(spec['yaml'])
+                self.assertTrue(yaml_path.is_relative_to(root / 'yolo_datasets'))
+                dataset = yaml_path.parent
+                (dataset / 'images/train').mkdir(parents=True)
+                (dataset / 'labels/train').mkdir(parents=True)
+                names, class_ids = datasets[source]
+                train = './train.txt' if source == 'coco' else 'images/train'
+                config = {'path': '.', 'train': train, 'names': names}
+                original = json.dumps(config) if source == 'coco' else yaml.safe_dump(config)
+                yaml_path.write_text(original, encoding='utf-8')
+                originals[yaml_path] = original
+                images = []
+                for cid in class_ids:
+                    image = f'images/train/{cid}.jpg'
+                    (dataset / image).write_bytes(f'{source} {cid}'.encode())
+                    (dataset / f'labels/train/{cid}.txt').write_text(f'{cid} 0.4 0.5 0.2 0.3\n')
+                    images.append(image)
+                if source == 'coco':
+                    (dataset / 'train.txt').write_text('\n'.join(images))
+
+            index = root / 'index.sqlite'
+            self.assertEqual([entry['images'] for entry in build(index, specs)], [2, 2, 2])
+            catalog_data = json.loads((configs / 'animal_catalog.json').read_text(encoding='utf-8'))
+            policy = yaml.safe_load((configs / 'camping19.yaml').read_text())
+            picked, _, _ = plan(index, catalog_data, policy, 10)
+            self.assertEqual(Counter((record['dataset'], name) for record in picked for name, _ in record['rows']), {
+                ('openimages', 'tiger'): 1, ('openimages', 'cattle'): 1,
+                ('coco', 'cattle'): 1, ('coco', 'cat'): 1,
+                ('donanet', 'small_mammal'): 1, ('donanet', 'wild_boar'): 1,
+            })
+            output = root / 'output'
+            export(index, catalog_data, policy, 10, output)
+            labels = Counter(path.read_text().split()[0] for path in (output / 'labels').rglob('*.txt'))
+            self.assertEqual(labels, {'0': 1, '1': 2, '2': 1, '3': 1, '4': 1})
+            self.assertEqual({path: path.read_text(encoding='utf-8') for path in originals}, originals)
+
     def test_inline_repair_hardlinks_deletion_and_final_counts(self):
         from PIL import Image
         from unittest.mock import patch
@@ -410,10 +466,11 @@ class AnimalDataTests(unittest.TestCase):
         expected={}
         for name,(group,path) in result.items():
             branch = path[1]
-            if group=='small_mammal' and branch=='porcupine':
+            if group=='small_mammal' and branch in ('porcupine', 'donanet_small_mammal'):
                 continue
             expected[name] = branch if group=='small_mammal' and branch in ('fox','rabbit') else group
         self.assertEqual({name:group for name,(group,_) in mapped.items()},expected)
+        self.assertNotIn('donanet_small_mammal', mapped)
 
     def test_size_tag_balances_member_families_despite_different_leaf_counts(self):
         with tempfile.TemporaryDirectory() as tmp:

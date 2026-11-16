@@ -1431,9 +1431,16 @@
     "puma": {
       "parent": null,
       "chinese": ""
+    },
+    "donanet_small_mammal": {
+      "parent": null,
+      "chinese": "DoñaNet 已归并的小型兽类"
     }
   },
   "source_names": {
+    "donanet": {
+      "small_mammal": "donanet_small_mammal"
+    },
     "swg-camera-traps": {
       "empty": null,
       "ignore": null,

@@ -1,0 +1,10 @@
+sources:
+  - name: openimages
+    kind: yolo
+    yaml: ../yolo_datasets/openimages_animals6_bbox/data.yaml
+  - name: coco
+    kind: yolo
+    yaml: ../yolo_datasets/coco_animals8/data.yaml
+  - name: donanet
+    kind: yolo
+    yaml: ../yolo_datasets/donanet_camping19/data.yaml
