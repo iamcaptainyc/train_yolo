@@ -16,6 +16,7 @@ train_yolo/
   download_weights.py      # 官方 YOLO11 / YOLO26 检测权重下载
   prepare_dataset.py       # Animals Detection 原始标注 → YOLO
   prepare_stanford_dogs.py # Stanford Dogs XML 边界框 → YOLO
+  convert_donanet.py        # DoñaNet YOLO → camping19 类别及统计报告
   animal_data.py            # 通用原始标注索引、分组预览与逐层均衡采样
   split_yolo.py             # 批量重分 YOLO，默认 8:1:1，--in-place 直接更新原目录
   visualize_yolo.py         # YOLO 检测标注抽样可视化，导出带框图片和检查报告
@@ -234,6 +235,16 @@ python visualize_yolo.py --source datasets/stanford_dogs_yolo --split val --clas
 默认将所有框标为 `dog`（ID `0`）。`--class-mode breed` 按犬种目录分配类别，`--class-mode xml` 读取每个 `<object>` 的 `<name>`，可在同一张图中保留不同类别。XML 模式也支持平铺的 VOC `JPEGImages/` 和 `Annotations/`。默认按固定种子重新划分为 `train/val/test`（8:1:1），相同内容的图片留在同一划分。输出包含 `images/`、`labels/`、`data.yaml` 和 `report.json`。
 
 默认将 XML 的 `xmin/ymin/xmax/ymax` 作为像素边界。明确采用从 1 开始计数且包含两端像素的标注时，可加 `--coordinates voc`。需要校正 EXIF 方向的图片会生成新文件，并同步变换对应的框。XML 尺寸与原始像素相符时，框按原始方向解释。仅与校正后尺寸相符时，框按校正后的方向解释。越界框裁到图像边缘，无法安全转换的图片默认跳过并记入 `report.json`，可加 `--strict` 遇错即停。其余图片默认优先硬链接，失败时复制，或使用 `--copy-mode copy` 创建独立副本。
+
+### DoñaNet 转 camping19
+
+```bash
+python convert_donanet.py --source datasets/donanet --output yolo_datasets/donanet_camping19
+```
+
+`--source` 指向 DoñaNet 解压目录或其 `data.yaml`。输出的类别名取自 `configs/camping19.yaml`，按名称排序分配 ID 0–18。`REPORT.md` 列出原类别映射、各划分图片数和每类框数，零样本类别也会列出。
+
+保留原 `train/val/test` 划分和框坐标，图片默认使用硬链接。跨文件系统时可加 `--copy-images`。人物、车辆和空图标签会被去除，仅保留有目标框的图片。伊比利亚猞猁没有对应类别，含此标注的图片整张跳过。无效标注会在报告中列出。
 
 ## 3. 训练 YOLO11 和 YOLO26
 
