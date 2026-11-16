@@ -596,12 +596,12 @@ def write_appendix(report,path):
     if maximum is not None:
         summary = f'实际选择 {report["selected_images"]} 张，上限 {maximum} 张。'
     mode = {
-        'all': '全量合并，保留符合条件的正样本及已确认的负样本。',
+        'all': '全量合并，保留全部符合筛选条件的图片。',
         'source_first': '按最终类别均衡、来源优先、来源内细类均衡。仅低优先来源拥有的细类可能缺少样本。',
     }.get(strategy, '按最终类别、成员和更细类别递归均衡。')
     lines = ['# 通用动物数据集报告','',summary,'',
         f'请求类别数：{len(report["requested_groups"])}；没有抽到样本的类别：{report["unselected_groups"]}。','',
-        f'LILA 框面积占比必须严格大于 {report["lila_min_area"]:.6f}；任意一个框达标就保留整图及全部框，负样本不受此门槛限制。这不是 LILA 来源占比。','',
+        f'LILA 专用框面积门槛为 {report["lila_min_area"]:.6f}。LILA 正样本至少有一框严格超过该门槛，入选图片保留全部框。','',
         mode+'多类别同图只保存一次，图片计数可重叠。','',
         '| 层级路径 | 原始标签采样桶 | 可用图片 | 选择图片 |','| --- | --- | ---: | ---: |']
     for r in report['hierarchy_sampling']:
