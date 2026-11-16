@@ -197,7 +197,7 @@ datasets/animals_yolo/
 python visualize_yolo.py datasets/animals_yolo
 ```
 
-直接传数据集目录会把所有有框图片导出到 `preview/类别/划分`。需要指定 YAML、单张图片或抽样数量时，使用 `--source` 模式。详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
+直接传数据集目录会把有框图片导出到 `preview/类别/划分`，可用 `--split val` 只看验证集。需要指定 YAML、单张图片或抽样数量时，使用 `--source` 模式。详细参数和标签异常处理见 [YOLO 标注可视化说明](docs/visualize_yolo.md)。
 
 检查某一类的全部标注图片，可用 `python visualize_yolo.py yolo_datasets/sentrymode_data_v2 --classes left_green`。`--classes` 支持类别名称或 ID，导出的图片保留全部类别框。
 

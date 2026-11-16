@@ -249,6 +249,23 @@ class VisualizeTests(unittest.TestCase):
             self.assertEqual(report['matched_images'], 0)
             self.assertEqual(report['counts'], {'missing_label': 1})
 
+    def test_cli_dataset_selects_validation_without_scanning_other_split_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp)
+            self.make_image(dataset, 'images/val/dog.png')
+            self.make_image(dataset, 'images/test/dog.png')
+            config = {'names': ['dog'], 'train': 'images/unavailable', 'val': 'images/val', 'test': 'images/test'}
+            (dataset/'data.yaml').write_text(yaml.safe_dump(config), encoding='utf-8')
+            script = Path(__file__).resolve().parents[1] / 'visualize_yolo.py'
+            command = [sys.executable, '-X', 'utf8', str(script), str(dataset), '--split', 'val', '--classes', 'dog']
+            result = subprocess.run(command, capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = dataset / 'preview'
+            self.assertEqual(len(list((output/'dog/val').glob('*.jpg'))), 1)
+            self.assertFalse((output/'dog/test').exists())
+            report = json.loads((output/'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['counts'], {'dog': {'val': 1}})
+
     def test_cli_dataset_groups_by_class_and_split_and_preserves_all_boxes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

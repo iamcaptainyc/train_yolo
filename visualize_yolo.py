@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 import yaml
 
-from merge_yolo_ids import SUFFIXES, images_for, label_for, load_dataset, validate_label
+from merge_yolo_ids import SPLITS, SUFFIXES, images_for, label_for, load_dataset, validate_label
 from split_yolo import collect_images, dataset_file, load_split_source, original_split
 
 
@@ -249,24 +249,26 @@ def visualize(source, output, *, split='all', data=None, labels=None, limit=None
     return report
 
 
-def visualize_dataset(source, classes=None):
+def visualize_dataset(source, classes=None, *, split='all'):
     root = Path(source).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f'Expected a YOLO dataset directory: {root}')
     dataset = load_split_source(dataset_file(root))
     names = dataset['names']
     selected = parse_classes(classes, names)
-    splits = ('train', 'val', 'test')
+    selected_splits = SPLITS if split == 'all' else (split,)
     output = root/'preview'
     if output.is_symlink() or (output.exists() and not output.is_dir()):
         raise ValueError(f'Expected a regular preview directory: {output}')
-    images_by_split = {split: images_for(dataset, split) for split in splits}
-    if not any(dataset['config'].get(split) for split in splits):
+    images_by_split = {name: images_for(dataset, name) for name in selected_splits}
+    if not any(dataset['config'].get(name) for name in SPLITS):
         images, _ = collect_images(dataset)
         for image in images:
-            images_by_split[original_split(image, dataset)].append(image)
+            name = original_split(image, dataset)
+            if name in images_by_split:
+                images_by_split[name].append(image)
     if not any(images_by_split.values()):
-        raise ValueError(f'No images found in train, val or test: {root}')
+        raise ValueError(f'No images found for requested split {split!r}: {root}')
 
     # Keep directory names portable and distinguish names that collide on Windows.
     folder_names = {cid: re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .')[:100].rstrip(' .')
@@ -287,7 +289,7 @@ def visualize_dataset(source, classes=None):
         class_dir = output/folder
         if class_dir.is_symlink() or (class_dir.exists() and not class_dir.is_dir()):
             raise ValueError(f'Expected a regular class directory: {class_dir}')
-        for split in splits:
+        for split in SPLITS:
             split_dir = class_dir/split
             if split_dir.is_symlink() or (split_dir.exists() and not split_dir.is_dir()):
                 raise ValueError(f'Expected a regular split directory: {split_dir}')
@@ -320,7 +322,7 @@ def visualize_dataset(source, classes=None):
                 issues.append({'image': str(image), 'split': split, 'error': str(exc)})
     counts = defaultdict(dict)
     for folder in sorted(folders):
-        for split in splits:
+        for split in SPLITS:
             count = sum(p.is_file() for p in (output/folder/split).glob('*.jpg'))
             if count:
                 counts[folder][split] = count
@@ -349,11 +351,11 @@ def main(argv=None):
     if bool(args.dataset) == bool(args.source):
         parser.error('Provide a dataset directory or --source')
     if args.dataset and any(value != parser.get_default(name) for name, value in vars(args).items()
-                            if name not in ('dataset', 'classes')):
-        parser.error('Dataset mode accepts a directory and optional --classes; use --source for other options')
+                            if name not in ('dataset', 'classes', 'split')):
+        parser.error('Dataset mode accepts a directory and optional --classes and --split; use --source for other options')
     try:
         if args.dataset:
-            return visualize_dataset(args.dataset, args.classes)
+            return visualize_dataset(args.dataset, args.classes, split=args.split)
         del args.dataset
         report = visualize(**vars(args))
     except (OSError, ValueError, yaml.YAMLError) as exc:
