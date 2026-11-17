@@ -100,6 +100,15 @@ def pool(index, catalog, policy):
         if not 0 <= min_box_area < 1:
             raise ValueError('Box area ratio must be >= 0 and < 1')
     mapping = compile_policy(catalog,policy)
+    area_classes = policy.get('min_box_area_classes')
+    if area_classes is not None:
+        if min_box_area is None:
+            raise ValueError('--min-box-area-classes requires --min-box-area')
+        if not isinstance(area_classes, list) or not area_classes or any(not isinstance(name, str) for name in area_classes):
+            raise ValueError('min_box_area_classes must be a nonempty list of output class names')
+        unknown = sorted(set(area_classes) - policy['groups'].keys())
+        if unknown:
+            raise ValueError(f'Unknown output classes for --min-box-area-classes: {", ".join(unknown)}')
     db = connect(index)
     try:
         sources = {r['id']:dict(r) for r in db.execute('SELECT * FROM sources ORDER BY name')}
@@ -121,7 +130,8 @@ def pool(index, catalog, policy):
         for r in db.execute('SELECT * FROM boxes ORDER BY image,rowid'):
             annotations[r['image']].append((r['cid'],tuple(json.loads(r['coords']))))
         records, excluded = [],Counter()
-        area_counts = {name: {'above': 0, 'equal': 0, 'below': 0} for name in sorted(policy['groups'])} if min_box_area is not None else {}
+        area_groups = sorted(set(area_classes or policy['groups']))
+        area_counts = {name: {'above': 0, 'equal': 0, 'below': 0} for name in area_groups} if min_box_area is not None else {}
         priority = policy.get('source_priority',['ap10k','animals','lila'])
         for image in db.execute('SELECT images.* FROM images JOIN sources ON sources.id=images.source ORDER BY sources.name,images.original_id'):
             if image['source'] not in sources:
@@ -152,12 +162,16 @@ def pool(index, catalog, policy):
             if min_box_area is not None:
                 largest_areas = {}
                 for group, box in projected:
+                    if group not in area_counts:
+                        continue
                     area = Fraction(box[2]) * Fraction(box[3])
                     largest_areas[group] = max(area, largest_areas.get(group, 0))
                 for group, area in largest_areas.items():
                     relation = 'above' if area > min_box_area else 'below' if area < min_box_area else 'equal'
                     area_counts[group][relation] += 1
-                if not any(area > min_box_area for area in largest_areas.values()):
+                above_threshold = (area > min_box_area for area in largest_areas.values())
+                passes = any(above_threshold) if area_classes is None else all(above_threshold)
+                if not passes:
                     excluded['min_box_area_filter'] += 1
                     continue
             if projected and spec.get('family')=='lila' and not any(
@@ -319,6 +333,7 @@ def plan(index,catalog,policy,maximum):
         'excluded':excluded,'index_errors':errors,'source_priority':policy.get('source_priority',[]),
         'lila_min_area':policy.get('lila_min_area',1/16),
         'min_box_area':policy.get('min_box_area'),
+        'min_box_area_classes':policy.get('min_box_area_classes'),
         'box_area_by_class':area_counts,
         'scope':'Counts are image memberships; sums may exceed unique images. No image decoding/content hash.'},sources
 
@@ -535,7 +550,11 @@ def write_preview(report,path):
     lines = ['# 动物数据集统计' if final else preview_title, '',
              f'类别数：**{sum(any(v.values()) for v in report["split"]["class_image_counts"].values()) if final else len(selected)}**；图片总数：**{report["selected_images"]:,}** 张。', '']
     if (ratio := report.get('min_box_area')) is not None:
-        lines += [f'每张图至少有一个目标框的面积占比严格大于 `{ratio}`。', '']
+        if area_classes := report.get('min_box_area_classes'):
+            labels = '、'.join(f'`{name}`' for name in area_classes)
+            lines += [f'框面积门槛适用于 {labels}。图中每个受限类别都至少有一个框严格大于 `{ratio}`。', '']
+        else:
+            lines += [f'每张图至少有一个目标框的面积占比严格大于 `{ratio}`。', '']
     if final:
         totals = report.get('split_image_counts',{})
         lines += ['| 集合 | 图片数 |', '| --- | ---: |']

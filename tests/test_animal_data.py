@@ -429,6 +429,16 @@ class AnimalDataTests(unittest.TestCase):
             no_matches = run('preview', 'no_matches', '--min-box-area', '0.9')
             self.assertEqual(no_matches['selected_images'], 0)
             self.assertEqual(no_matches['box_area_by_class']['rabbit']['below'], 4)
+            scoped = run('sample', 'scoped', '--min-box-area', '1/100', '--min-box-area-classes', 'bear',
+                         '--no-repair-images')
+            self.assertEqual(scoped['selected_images'], 3)
+            self.assertEqual(scoped['negative_images'], 1)
+            self.assertEqual(scoped['excluded']['lila_area_filter'], 1)
+            self.assertEqual(scoped['excluded']['min_box_area_filter'], 1)
+            self.assertEqual(scoped['box_area_by_class'], {'bear': {'above': 0, 'equal': 0, 'below': 1}})
+            self.assertEqual(scoped['min_box_area_classes'], ['bear'])
+            kept = [json.loads(line)['original_id'] for line in (root / 'scoped/selection.jsonl').read_text().splitlines()]
+            self.assertCountEqual(kept, ['0', '1', '3'])
 
     def test_new_sources_use_original_yolo_ids_and_camping19_mapping(self):
         configs = Path(__file__).resolve().parents[1] / 'configs'

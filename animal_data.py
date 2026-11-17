@@ -100,6 +100,8 @@ def main():
                             help='LILA bbox/image area threshold, e.g. 1/16; overrides policy, not a source quota')
         parser.add_argument('--min-box-area',type=parse_area_ratio,
                             help='Keep images with any target box strictly above this area ratio across all sources')
+        parser.add_argument('--min-box-area-classes',nargs='+',metavar='CLASS',
+                            help='Apply --min-box-area only to the named output classes present in each image')
         parser.add_argument('--output',type=Path,required=True,help='New output directory (preview: reports only)')
         if command=='sample':
             parser.add_argument('--class-id-start',type=int,default=0)
@@ -132,9 +134,12 @@ def main():
             policy['allowed_sources'] = args.only_sources
         if args.source_first is not None:
             policy['sampling_priority'] = 'source_first' if args.source_first else 'hierarchy_first'
+        if args.min_box_area_classes is not None:
+            policy['min_box_area_classes'] = args.min_box_area_classes
         if args.min_box_area is not None:
             policy['min_box_area'] = str(args.min_box_area)
-            policy['lila_min_area'] = 0
+            if policy.get('min_box_area_classes') is None:
+                policy['lila_min_area'] = 0
         if args.lila_min_area is not None:
             policy['lila_min_area'] = args.lila_min_area
         v,t = policy.get('val_fraction',.1),policy.get('test_fraction',.1)
