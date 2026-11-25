@@ -11,10 +11,72 @@ import zipfile
 import yaml
 
 from coco_hf_zip import RangeZip
-from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run
+from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run, write_json
 
 
 class DownloadCOCOTests(unittest.TestCase):
+    def test_add_people_and_cars_updates_cached_animal_labels_and_resumes_interruption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root/'yolo'
+            archive = root/'annotations.zip'
+            categories = [{'id': cid, 'name': name} for cid, name in
+                          ((1, 'person'), (3, 'car'), (18, 'dog'), (17, 'cat'), (23, 'bear'), (62, 'chair'))]
+            contents = {1: (18, 1, 3), 2: (1, 23), 3: (3, 17), 4: (3,), 5: (1,), 6: (1,), 7: (62,), 8: (18,)}
+            with zipfile.ZipFile(archive, 'w') as source:
+                for split in ('train', 'val'):
+                    images = [{'id': i, 'file_name': f'{i:012}.jpg', 'width': 100, 'height': 100} for i in contents]
+                    annotations = [{'id': i*10+j, 'image_id': i, 'category_id': cid, 'bbox': [10, 20, 30, 40]}
+                                   for i, cids in contents.items() for j, cid in enumerate(cids)]
+                    annotations.append({'id': 81, 'image_id': 8, 'category_id': 1,
+                                        'bbox': [0, 0, 90, 90], 'iscrowd': 1})
+                    source.writestr(f'annotations/instances_{split}2017.json',
+                                    json.dumps(dict(images=images, categories=categories, annotations=annotations)))
+
+            def write_image(relative, path, *_):
+                path.write_bytes(relative.encode())
+
+            with patch('download_coco.fetch_image', side_effect=write_image):
+                run(output, ['bear', 'cat', 'dog'], archive, 2, 0, source='official')
+            originals = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (output/'images').rglob('*.jpg')}
+            self.assertEqual(len(originals), 8)
+            self.assertEqual((output/'labels/train/000000000001.txt').read_text().split()[0], '2')
+
+            def interrupt_after_train(path, data):
+                if path.name == 'instances_train2017_subset.json':
+                    raise KeyboardInterrupt
+                write_json(path, data)
+
+            with patch('download_coco.write_json', side_effect=interrupt_after_train), \
+                    patch('download_coco.fetch_image') as unchanged_images, self.assertRaises(KeyboardInterrupt):
+                run(output, None, archive, 2, 0, source='official', local_only=True, add_classes=['person', 'car'])
+            unchanged_images.assert_not_called()
+            self.assertTrue((output/'INCOMPLETE.txt').is_file())
+            self.assertEqual(json.loads((output/'_metadata/classes.json').read_text()), ['bear', 'cat', 'dog', 'car', 'person'])
+
+            with patch('download_coco.fetch_image', side_effect=write_image) as downloader:
+                run(output, None, archive, 2, 0, source='official', add_classes=['person', 'car'])
+            self.assertEqual(sorted(call.args[0] for call in downloader.call_args_list),
+                             [f'{split}2017/{i:012}.jpg' for split in ('train', 'val') for i in (4, 5, 6)])
+            config = yaml.safe_load((output/'data.yaml').read_text(encoding='utf-8'))
+            self.assertEqual(config['names'], {0: 'bear', 1: 'cat', 2: 'dog', 3: 'car', 4: 'person'})
+            self.assertFalse((output/'INCOMPLETE.txt').exists())
+            self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in originals}, originals)
+            for split in ('train', 'val'):
+                label_dir = output/'labels'/split
+                self.assertEqual([int(line.split()[0]) for line in (label_dir/'000000000001.txt').read_text().splitlines()], [2, 4, 3])
+                self.assertEqual([int(line.split()[0]) for line in (label_dir/'000000000002.txt').read_text().splitlines()], [4, 0])
+                self.assertEqual([int(line.split()[0]) for line in (label_dir/'000000000003.txt').read_text().splitlines()], [3, 1])
+                self.assertEqual((label_dir/'000000000008.txt').read_text().splitlines(), ['2 0.25 0.4 0.3 0.4'])
+                self.assertFalse((label_dir/'000000000007.txt').exists())
+                subset = json.loads((output/'_metadata'/f'instances_{split}2017_subset.json').read_text())
+                self.assertEqual(len(subset['images']), 7)
+                self.assertEqual(len(subset['annotations']), 11)
+            with patch('download_coco.fetch_image') as download_again, patch('download_coco.RangeZip') as remote:
+                run(output, None, archive, 2, 0)
+                download_again.assert_not_called()
+                remote.assert_not_called()
+
     def test_local_only_finalizes_partial_dataset_and_resume_completes_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)/'yolo'

@@ -1,4 +1,4 @@
-"""Download a COCO 2017 animal subset and export its official boxes as YOLO."""
+"""Download COCO 2017 animals, people and vehicles with official YOLO boxes."""
 from __future__ import annotations
 
 import argparse
@@ -33,6 +33,8 @@ ARCHIVE_URLS = (
     f'https://huggingface.co{HF_REPO_PATH}/{ARCHIVE}',
 )
 ANIMALS = ('bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe')
+VEHICLES = ('car', 'truck', 'bus', 'motorcycle', 'bicycle')
+CLASSES = (*ANIMALS, 'person', *VEHICLES)
 SPLITS = ('train', 'val')
 
 
@@ -130,9 +132,19 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
     image_ids = sorted(selected)
     cached_images = {image_id for image_id, filename in filenames.items()
                      if (path := image_dir/filename).is_file() and path.stat().st_size}
-    pending = [image_id for image_id in image_ids if image_id not in cached_images or
-               not ((label := label_dir/Path(filenames[image_id]).with_suffix('.txt')).is_file()
-                    and label.stat().st_size)]
+    def label_text(image_id):
+        return ''.join(f'{cid} ' + ' '.join(format(v, '.12g') for v in box) + '\n'
+                       for _, cid, box in selected[image_id])
+
+    pending = []
+    for image_id in image_ids:
+        label = label_dir/Path(filenames[image_id]).with_suffix('.txt')
+        try:
+            matches = label.read_text(encoding='utf-8') == label_text(image_id)
+        except (FileNotFoundError, UnicodeError):
+            matches = False
+        if image_id not in cached_images or not matches:
+            pending.append(image_id)
     print(f'COCO {split}2017: {len(image_ids)-len(pending):,} complete, '
           f'{len(pending):,} pending ({len(image_ids)-len(cached_images):,} missing images)',
           flush=True)
@@ -162,11 +174,9 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
                     partial.replace(target)
                 else:
                     fetch_image(f'{split}2017/{filename}', target, retries, prefer_gcs)
-            boxes = selected[image_id]
             label = label_dir/Path(filename).with_suffix('.txt')
             temp = label.with_suffix('.txt.part')
-            temp.write_text(''.join(f'{cid} ' + ' '.join(format(v, '.12g') for v in box) + '\n'
-                                    for _, cid, box in boxes), encoding='utf-8')
+            temp.write_text(label_text(image_id), encoding='utf-8')
             temp.replace(label)
         except (OSError, ValueError, IncompleteRead) as exc:
             return {'file': filename, 'error': str(exc)}
@@ -207,18 +217,26 @@ def write_json(path, data):
     temp.replace(path)
 
 
-def run(output, names, archive, workers, retries, *, source='hf-mirror', local_only=False):
+def run(output, names, archive, workers, retries, *, source='hf-mirror', local_only=False, add_classes=()):
     output = output.resolve()
     meta = output/'_metadata'
     state = meta/'classes.json'
     if state.is_file():
-        if json.loads(state.read_text(encoding='utf-8')) != names:
-            raise ValueError('Class selection changed; use a new output directory')
+        previous = json.loads(state.read_text(encoding='utf-8'))
+        requested = set(previous if names is None else names) | set(add_classes)
+        if set(previous) - requested:
+            raise ValueError('Class selection changed to remove existing classes; use a new output directory')
+        names = previous + sorted(requested - set(previous))
     else:
         if output.exists() and any(output.iterdir()):
             raise ValueError('Use an empty or previously initialized output directory')
+        names = sorted(set(['cow', 'elephant'] if names is None else names) | set(add_classes))
         meta.mkdir(parents=True, exist_ok=True)
-        write_json(state, names)
+    if not names or len(names) != len(set(names)) or set(names) - set(CLASSES):
+        raise ValueError('Expected unique supported COCO class names')
+    marker = output/'INCOMPLETE.txt'
+    marker.write_text('COCO labels are being updated. Rerun the command to finish before training.\n', encoding='utf-8')
+    write_json(state, names)
     if archive is None:
         archive = meta/ARCHIVE
         if local_only:
@@ -272,6 +290,7 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror', local_o
     temp = config_path.with_suffix('.yaml.part')
     temp.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding='utf-8')
     temp.replace(config_path)
+    marker.unlink()
     for split, stat in stats.items():
         print(f'{split}: {stat["images"]:,} images; {stat["images_by_class"]}')
     print(f'YOLO dataset: {output / "data.yaml"}')
@@ -280,8 +299,10 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror', local_o
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=Path('yolo_datasets/coco_cow_elephant'))
-    parser.add_argument('--classes', nargs='+', type=str.lower, choices=(*ANIMALS, 'cattle'),
-                        default=['cow', 'elephant'])
+    parser.add_argument('--classes', nargs='+', type=str.lower, choices=(*CLASSES, 'cattle'),
+                        help='Download and annotate the union of these classes (default: previous selection, or cow elephant)')
+    parser.add_argument('--add-classes', nargs='+', type=str.lower, choices=(*CLASSES, 'cattle'), default=[],
+                        help='Add classes to an existing dataset; reuse images and update co-occurring boxes')
     parser.add_argument('--annotations-zip', type=Path, help='Reuse the local official train/val annotation archive')
     parser.add_argument('--local-only', action='store_true',
                         help='Export existing local images and labels without downloading any files')
@@ -292,10 +313,11 @@ def main():
     args = parser.parse_args()
     if args.workers < 1 or args.retries < 0:
         parser.error('Require positive workers and nonnegative retries')
-    names = sorted({'cow' if name == 'cattle' else name for name in args.classes})
+    names = sorted({'cow' if name == 'cattle' else name for name in args.classes}) if args.classes else None
+    additions = {'cow' if name == 'cattle' else name for name in args.add_classes}
     try:
         run(args.output, names, args.annotations_zip, args.workers, args.retries,
-            source=args.source, local_only=args.local_only)
+            source=args.source, local_only=args.local_only, add_classes=additions)
     except KeyboardInterrupt:
         parser.exit(130, '\nInterrupted. Rerun the same command to resume.\n')
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
