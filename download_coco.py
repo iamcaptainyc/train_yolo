@@ -36,6 +36,63 @@ ANIMALS = ('bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'z
 VEHICLES = ('car', 'truck', 'bus', 'motorcycle', 'bicycle')
 CLASSES = (*ANIMALS, 'person', *VEHICLES)
 SPLITS = ('train', 'val')
+COOCCURRENCE_LABELS = {
+    'images': '统计图片', 'person': '有人', 'animal': '有动物', 'vehicle': '有车',
+    'person_vehicle': '人和车（含三者同框）', 'person_animal': '人和动物（含三者同框）',
+    'animal_vehicle': '动物和车（含三者同框）', 'all_three': '人、动物、车三者同框',
+    'any_two': '任意两组及以上同框（去重）',
+    'person_only': '只有人', 'animal_only': '只有动物', 'vehicle_only': '只有车',
+    'person_vehicle_only': '人和车（无动物）', 'person_animal_only': '人和动物（无车）',
+    'animal_vehicle_only': '动物和车（无人）', 'none': '三组均无标注',
+}
+
+
+def cooccurrence_counts(class_sets, vehicle_classes=('car',)):
+    counts = Counter(dict.fromkeys(COOCCURRENCE_LABELS, 0))
+    for names in class_sets:
+        groups = []
+        if 'person' in names:
+            groups.append('person')
+        if set(ANIMALS).intersection(names):
+            groups.append('animal')
+        if set(vehicle_classes).intersection(names):
+            groups.append('vehicle')
+        counts['images'] += 1
+        counts.update(groups)
+        counts['any_two'] += len(groups) >= 2
+        present = set(groups)
+        for name, pair in (('person_vehicle', {'person', 'vehicle'}),
+                           ('person_animal', {'person', 'animal'}),
+                           ('animal_vehicle', {'animal', 'vehicle'})):
+            counts[name] += pair <= present
+        if len(groups) == 3:
+            counts['all_three'] += 1
+        elif groups:
+            counts['_'.join(groups) + '_only'] += 1
+        else:
+            counts['none'] += 1
+    return dict(counts)
+
+
+def write_cooccurrence_report(output, by_split, vehicle_classes, scope):
+    totals = Counter()
+    for counts in by_split.values():
+        totals.update(counts)
+    result = {'scope': scope, 'vehicle_classes': list(vehicle_classes),
+              'by_split': by_split, 'total': dict(totals)}
+    write_json(output/'cooccurrence.json', result)
+    columns = [*by_split, '合计']
+    lines = ['# COCO 同框统计', '', scope, '',
+             '车包含 ' + '、'.join(f'`{name}`' for name in vehicle_classes) + '。',
+             '每张图在每项下计一次。三者同框同时计入三种两两同框，带“无”的两两项互斥。', '',
+             '| 项目 | ' + ' | '.join(columns) + ' |',
+             '| --- | ' + ' | '.join('---:' for _ in columns) + ' |']
+    for name, label in COOCCURRENCE_LABELS.items():
+        values = [counts[name] for counts in by_split.values()] + [totals[name]]
+        lines.append(f'| {label} | ' + ' | '.join(f'{value:,}' for value in values) + ' |')
+    (output/'COOCCURRENCE.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
+    print(f'Co-occurrence report: {output / "COOCCURRENCE.md"}')
+    return result
 
 
 def valid_archive(path):
@@ -207,7 +264,9 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
               'categories': [c for c in data['categories'] if c['name'] in names]}
     stats = {'images': len(ready_ids), 'requested_images': len(image_ids), 'missing_images': len(missing),
              'images_by_class': dict(class_images),
-             'boxes_by_class': dict(class_boxes)}
+             'boxes_by_class': dict(class_boxes),
+             'cooccurrence': cooccurrence_counts(
+                 ({names[cid] for _, cid, _ in selected[image_id]} for image_id in ready_ids))}
     return subset, stats, failures
 
 
@@ -274,6 +333,8 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror', local_o
     else:
         failure_path.unlink(missing_ok=True)
     write_json(output/'report.json', stats)
+    write_cooccurrence_report(output, {split: stat['cooccurrence'] for split, stat in stats.items()}, ['car'],
+                              '按本次实际导出的 YOLO 类别及有效单体框统计，未选入的类别无法计入。')
     if any(not stat['images'] for stat in stats.values()):
         raise ValueError('Both official splits need at least one completed image and label to export data.yaml')
     split_paths = {split: f'images/{split}' for split in SPLITS}

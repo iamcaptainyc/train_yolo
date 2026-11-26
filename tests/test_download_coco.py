@@ -11,10 +11,25 @@ import zipfile
 import yaml
 
 from coco_hf_zip import RangeZip
-from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, fetch_archive, fetch_image, run, write_json
+from download_coco import ARCHIVE_URLS, BASE, GCS_BASE, cooccurrence_counts, fetch_archive, fetch_image, run, write_json
+from stats_coco import analyze
 
 
 class DownloadCOCOTests(unittest.TestCase):
+    def test_cooccurrence_separates_pair_totals_from_exclusive_combinations(self):
+        counts = cooccurrence_counts([
+            set(), {'person'}, {'dog', 'cat'}, {'car'}, {'person', 'dog'},
+            {'person', 'car'}, {'bear', 'car'}, {'person', 'elephant', 'dog', 'car'},
+        ])
+        self.assertEqual(counts['images'], 8)
+        self.assertEqual([counts[key] for key in ('person', 'animal', 'vehicle')], [4, 4, 4])
+        self.assertEqual([counts[key] for key in ('person_animal', 'person_vehicle', 'animal_vehicle')], [2, 2, 2])
+        self.assertEqual(counts['all_three'], 1)
+        self.assertEqual(counts['any_two'], 4)
+        self.assertTrue(all(counts[key] == 1 for key in counts if key.endswith('_only')))
+        self.assertEqual(cooccurrence_counts([{'person', 'truck'}])['person_vehicle'], 0)
+        self.assertEqual(cooccurrence_counts([{'person', 'truck'}], ['car', 'truck'])['person_vehicle'], 1)
+
     def test_add_people_and_cars_updates_cached_animal_labels_and_resumes_interruption(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -41,6 +56,14 @@ class DownloadCOCOTests(unittest.TestCase):
             originals = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (output/'images').rglob('*.jpg')}
             self.assertEqual(len(originals), 8)
             self.assertEqual((output/'labels/train/000000000001.txt').read_text().split()[0], '2')
+            before = analyze(output, archive)
+            self.assertEqual(before['total']['images'], 8)
+            self.assertEqual(before['total']['person_vehicle'], 2)
+            self.assertEqual(before['total']['person_animal'], 4)
+            self.assertEqual(before['total']['animal_vehicle'], 4)
+            self.assertEqual(before['total']['all_three'], 2)
+            self.assertEqual(before['total']['any_two'], 6)
+            self.assertEqual(before['total']['animal_only'], 2)
 
             def interrupt_after_train(path, data):
                 if path.name == 'instances_train2017_subset.json':
@@ -60,6 +83,10 @@ class DownloadCOCOTests(unittest.TestCase):
                              [f'{split}2017/{i:012}.jpg' for split in ('train', 'val') for i in (4, 5, 6)])
             config = yaml.safe_load((output/'data.yaml').read_text(encoding='utf-8'))
             self.assertEqual(config['names'], {0: 'bear', 1: 'cat', 2: 'dog', 3: 'car', 4: 'person'})
+            cooccurrence = json.loads((output/'cooccurrence.json').read_text(encoding='utf-8'))
+            self.assertEqual(cooccurrence['total']['images'], 14)
+            self.assertEqual(cooccurrence['total']['all_three'], 2)
+            self.assertEqual(cooccurrence['total']['person_animal_only'], 2)
             self.assertFalse((output/'INCOMPLETE.txt').exists())
             self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in originals}, originals)
             for split in ('train', 'val'):
@@ -117,6 +144,7 @@ class DownloadCOCOTests(unittest.TestCase):
                 self.assertEqual(report['train'], {
                     'images': 1, 'requested_images': 2, 'missing_images': 1,
                     'images_by_class': {'cow': 1}, 'boxes_by_class': {'cow': 1},
+                    'cooccurrence': cooccurrence_counts([{'cow'}]),
                 })
                 failures = json.loads((output/'_metadata/failures.json').read_text())
                 self.assertEqual(failures['train'], [

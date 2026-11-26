@@ -1,5 +1,17 @@
 # 下载 COCO 2017 动物、人员和车辆检测数据
 
+## 统计已下载图片的同框数量
+
+```bash
+python stats_coco.py yolo_datasets/coco_animals8
+```
+
+读取本地 `_metadata/annotations_trainval2017.zip` 中的完整官方标注，统计 `images/train` 和 `images/val` 里的已有非空图片。输出 `COOCCURRENCE.md` 和 `cooccurrence.json`。每张图在每项中只计一次，分别给出人车、人与动物、动物与车、三者同框，以及互斥的单组和双组数量。三者同框也计入三种两两同框。
+
+默认车指 `car`。可加 `--vehicle-classes car truck bus motorcycle bicycle` 扩大车的范围。官方 ZIP 在其他位置时，传 `--annotations-zip /path/to/annotations_trainval2017.zip`。统计以有效非 crowd 单体标注为准，旧 YOLO 标签即使漏了人框，也能从完整官方标注计数。下载脚本完成后也会自动输出这两份报告，其口径为本次导出的类别和框。
+
+## 下载与追加类别
+
 在仓库根目录运行：
 
 ```bash
