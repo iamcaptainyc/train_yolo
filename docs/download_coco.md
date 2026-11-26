@@ -1,5 +1,32 @@
 # 下载 COCO 2017 动物、人员和车辆检测数据
 
+## 一步生成五类车辆及人员动物数据
+
+```bash
+python prepare_coco_vehicles.py \
+  --cache yolo_datasets/coco_animals8 \
+  --output yolo_datasets/coco_animals_vehicles \
+  --pose-weights weights/cfv/convnext-multi-weak.pth \
+  --download-pose-weights \
+  --device 0 --batch 32 --workers 16 --retries 5
+```
+
+`--cache` 复用原 COCO 下载目录，也可指定新目录。入口依次补齐官方图片和标注、对每个 `car` 框预测连续角度、写出最终 YOLO 数据和统计报告。`--download-pose-weights` 表示允许从 CFV 官方 Google Drive 获取缺失权重。已有本地权重时直接加载。运行环境使用 PyTorch、torchvision、OpenCV、Pillow 和本项目基础依赖。CPU 推理可指定 `--device cpu`。
+
+使用 [CFV 官方模型](https://github.com/fort-cyber/car-orientation)的 ConvNeXt-Small 连续角度回归输出。脚本将原 timm 参数逐层对应到 torchvision，并严格检查全部参数。输入按官方 224×224、RGB、0～1 处理，0° 对应车头，180° 对应车尾。权重下载后校验 SHA-256。
+
+| 绝对角度 | 最终类别 |
+| --- | --- |
+| 0°～45°，含 45° | car_head |
+| 大于 45°，小于 135° | car_side |
+| 135°～180°，含 135° | car_tail |
+
+最终类别为 10 类 COCO 动物、person、truck、bus、car_head、car_side、car_tail，共 16 类。类别在新输出中按名称排序统一编号，原 ID 对应关系以该输出的 `data.yaml` 为准。truck、bus、人和动物保留官方单体框，同图多个 car 框分别预测类别。car_head/car_side/car_tail 的框覆盖整辆车。
+
+`--output` 与 `--cache` 使用独立目录，且位于同一文件系统，最终图片为硬链接。COCO 原 train/val 划分沿用，YAML 引用本次成功导出的图片清单。`REPORT.md` 汇总每类图片及框数，`COOCCURRENCE.md` 按五类车辆合并统计人车动物同框。`car_angles.csv` 记录原图、原 annotation_id、连续角度和最终类别，可据此抽查伪标注。
+
+中断后重跑同一命令。SQLite 缓存已经完成的逐图车框角度；图片大小、mtime 或车框标注变化时重算。更换权重时使用新输出目录。`--local-only` 可只处理本地 COCO 图片，官方标注 ZIP 也须已在缓存中或通过 `--annotations-zip` 指定。损坏或尺寸不符的车图整张排除，错误记录在 `report.json`。完成前保留 `INCOMPLETE.txt`。
+
 ## 统计已下载图片的同框数量
 
 ```bash
@@ -8,7 +35,7 @@ python stats_coco.py yolo_datasets/coco_animals8
 
 读取本地 `_metadata/annotations_trainval2017.zip` 中的完整官方标注，统计 `images/train` 和 `images/val` 里的已有非空图片。输出 `COOCCURRENCE.md` 和 `cooccurrence.json`。每张图在每项中只计一次，分别给出人车、人与动物、动物与车、三者同框，以及互斥的单组和双组数量。三者同框也计入三种两两同框。
 
-默认车指 `car`。可加 `--vehicle-classes car truck bus motorcycle bicycle` 扩大车的范围。官方 ZIP 在其他位置时，传 `--annotations-zip /path/to/annotations_trainval2017.zip`。统计以有效非 crowd 单体标注为准，旧 YOLO 标签即使漏了人框，也能从完整官方标注计数。下载脚本完成后也会自动输出这两份报告，其口径为本次导出的类别和框。
+默认车包含 `car truck bus`。可加 `--vehicle-classes car` 只统计小汽车，或加 `--vehicle-classes car truck bus motorcycle bicycle` 扩大范围。官方 ZIP 在其他位置时，传 `--annotations-zip /path/to/annotations_trainval2017.zip`。统计以有效非 crowd 单体标注为准，旧 YOLO 标签即使漏了人框，也能从完整官方标注计数。下载脚本完成后也会自动输出这两份报告，其口径为本次导出的类别和框。
 
 ## 下载与追加类别
 

@@ -12,7 +12,7 @@ from tqdm import tqdm
 from download_coco import ANIMALS, ARCHIVE, SPLITS, VEHICLES, cooccurrence_counts, select_boxes, write_cooccurrence_report
 
 
-def analyze(dataset, archive=None, vehicle_classes=('car',)):
+def analyze(dataset, archive=None, vehicle_classes=('car', 'truck', 'bus')):
     dataset = Path(dataset).expanduser().resolve()
     if not dataset.is_dir():
         raise ValueError(f'Dataset directory does not exist: {dataset}')
@@ -43,16 +43,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('dataset', type=Path, help='Existing download_coco.py output directory')
     parser.add_argument('--annotations-zip', type=Path, help='Local full COCO 2017 annotation archive')
-    parser.add_argument('--vehicle-classes', nargs='+', choices=VEHICLES, default=['car'],
-                        help='COCO classes counted as vehicles (default: car)')
+    parser.add_argument('--vehicle-classes', nargs='+', choices=VEHICLES, default=['car', 'truck', 'bus'],
+                        help='COCO classes counted as vehicles (default: car truck bus)')
     args = parser.parse_args()
     try:
         result = analyze(args.dataset, args.annotations_zip, tuple(dict.fromkeys(args.vehicle_classes)))
     except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
         parser.exit(1, f'Error: {exc}\n')
     totals = result['total']
-    print(f'Images: {totals["images"]}; person/car: {totals["person_vehicle"]}; '
-          f'person/animal: {totals["person_animal"]}; animal/car: {totals["animal_vehicle"]}; '
+    print(f'Images: {totals["images"]}; person/vehicle: {totals["person_vehicle"]}; '
+          f'person/animal: {totals["person_animal"]}; animal/vehicle: {totals["animal_vehicle"]}; '
           f'all three: {totals["all_three"]}')
 
 

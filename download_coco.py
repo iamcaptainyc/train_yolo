@@ -266,7 +266,7 @@ def export_split(output, split, data, names, workers, retries, prefer_gcs, sourc
              'images_by_class': dict(class_images),
              'boxes_by_class': dict(class_boxes),
              'cooccurrence': cooccurrence_counts(
-                 ({names[cid] for _, cid, _ in selected[image_id]} for image_id in ready_ids))}
+                 ({names[cid] for _, cid, _ in selected[image_id]} for image_id in ready_ids), ('car', 'truck', 'bus'))}
     return subset, stats, failures
 
 
@@ -333,7 +333,7 @@ def run(output, names, archive, workers, retries, *, source='hf-mirror', local_o
     else:
         failure_path.unlink(missing_ok=True)
     write_json(output/'report.json', stats)
-    write_cooccurrence_report(output, {split: stat['cooccurrence'] for split, stat in stats.items()}, ['car'],
+    write_cooccurrence_report(output, {split: stat['cooccurrence'] for split, stat in stats.items()}, ['car', 'truck', 'bus'],
                               '按本次实际导出的 YOLO 类别及有效单体框统计，未选入的类别无法计入。')
     if any(not stat['images'] for stat in stats.values()):
         raise ValueError('Both official splits need at least one completed image and label to export data.yaml')

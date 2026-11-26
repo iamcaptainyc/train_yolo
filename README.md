@@ -10,6 +10,7 @@ train_yolo/
   download_lila.py          # LILA AWS / Azure / GCP 下载
   download_huggingface.py   # HF 数据集直接落盘、重试及 SnakeAid 本地 YAML
   download_coco.py          # 按类别下载 COCO 2017 带框图片和官方标注，导出 YOLO
+  prepare_coco_vehicles.py  # COCO 下载/复用 → PyTorch 连续角度 → 五类车辆与人、动物
   lila_selection.py        # 有效框筛选、明确空图抽样与图片续传
   requirements-lila.txt    # 仅下载 LILA 所需 Python 依赖
   kaggle_resume.py          # 整包 Range 续传与校验

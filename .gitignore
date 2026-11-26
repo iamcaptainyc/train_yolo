@@ -14,6 +14,7 @@ access_token
 datasets/
 runs/
 *.pt
+*.pth
 *.onnx
 *.engine
 *.torchscript
