@@ -1,0 +1,56 @@
+# Final IDs match the existing sentry dataset. Absent classes keep their real names.
+names:
+  0: person
+  1: car_head
+  2: car_tail
+  3: car_side
+  4: manhole
+  5: guard_rail
+  6: traffic_cone
+  7: fire_hydrant
+  8: traffic_barrel
+  9: pothole
+  10: straight_green
+  11: straight_red
+  12: straight_yellow
+  13: left_green
+  14: left_red
+  15: left_yellow
+  16: right_green
+  17: right_red
+  18: right_yellow
+  19: turnaround_green
+  20: turnaround_red
+  21: turnaround_yellow
+  22: number_green
+  23: number_red
+  24: number_yellow
+  25: bus
+  26: truck
+  27: bear
+  28: bird
+  29: cat
+  30: cattle
+  31: crocodile
+  32: deer
+  33: dog
+  34: eagle
+  35: elephant
+  36: horse
+  37: leopard
+  38: lion
+  39: monkey
+  40: sheep
+  41: small_mammal
+  42: snake
+  43: tiger
+  44: wild_boar
+  45: wolf
+
+# Project-specific grouping requested by the user; zebra labels become horse.
+aliases:
+  cow: cattle
+  zebra: horse
+
+# Keep no unlabelled giraffes: exclude the entire image when a valid giraffe box exists.
+exclude_classes: [giraffe]

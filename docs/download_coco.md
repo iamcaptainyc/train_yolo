@@ -27,6 +27,36 @@ python prepare_coco_vehicles.py \
 
 中断后重跑同一命令。SQLite 缓存已经完成的逐图车框角度；图片大小、mtime 或车框标注变化时重算。更换权重时使用新输出目录。`--local-only` 可只处理本地 COCO 图片，官方标注 ZIP 也须已在缓存中或通过 `--annotations-zip` 指定。损坏或尺寸不符的车图整张排除，错误记录在 `report.json`。完成前保留 `INCOMPLETE.txt`。
 
+## 按现有 46 类 ID 导出并合并
+
+在上面命令中添加 `--label-config configs/coco_sentry46.yaml`，标签 TXT 和 `data.yaml` 同时使用既有 46 类 ID。完整命令：
+
+```bash
+python prepare_coco_vehicles.py \
+  --cache yolo_datasets/coco_animals8 \
+  --output yolo_datasets/coco_animals_vehicles \
+  --pose-weights weights/cfv/convnext-multi-weak.pth \
+  --download-pose-weights \
+  --label-config configs/coco_sentry46.yaml \
+  --device 0 --batch 32 --workers 16 --retries 5
+```
+
+关键 ID：person=0，car_head=1，car_tail=2，car_side=3，bus=25，truck=26，cow→cattle=30，zebra→horse=36。斑马并入马是本项目约定。giraffe 没有对应类别，含有效 giraffe 框的整图排除，避免删除框后留下未标注动物；原缓存图片保留。其余框的坐标保持不变。报告列出完整 46 类（无样本类别数量为 0）、实际有框类别数、映射及按划分排除的图片数。
+
+已经生成 16 类输出时，也可对同一个输出目录添加此参数重跑。脚本复用已有车辆角度缓存，重写标签、YAML、图片清单和报告；被排除的图片仅移除输出端硬链接。此时可加 `--local-only`，仅处理已有 COCO 图片。修改权重仍需新输出目录。
+
+确认已有数据集的 ID/名称也完全匹配这份表后，执行：
+
+```bash
+python merge_yolo_ids.py \
+  --datasets yolo_datasets/你的现有数据集 yolo_datasets/coco_animals_vehicles \
+  --output yolo_datasets/sentry46_with_coco
+```
+
+不加 `--compact-ids`，保持 0～45 的 ID；合并使用硬链接并保留各来源划分。ID 名称冲突会报错。COCO 仅有 train/val，现有数据集的 test 原样保留；硬链接跨划分重复图按合并脚本规则排除。
+
+`--label-config` 是通用配置入口：`names` 声明完整连续 ID 表，`aliases` 将 COCO 类别映射到目标名，`exclude_classes` 明确指定需要整图排除的类别。未声明如何处理的类别会报错。
+
 ## 统计已下载图片的同框数量
 
 ```bash

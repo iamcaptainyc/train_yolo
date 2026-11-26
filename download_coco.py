@@ -47,13 +47,13 @@ COOCCURRENCE_LABELS = {
 }
 
 
-def cooccurrence_counts(class_sets, vehicle_classes=('car',)):
+def cooccurrence_counts(class_sets, vehicle_classes=('car',), animal_classes=ANIMALS):
     counts = Counter(dict.fromkeys(COOCCURRENCE_LABELS, 0))
     for names in class_sets:
         groups = []
         if 'person' in names:
             groups.append('person')
-        if set(ANIMALS).intersection(names):
+        if set(animal_classes).intersection(names):
             groups.append('animal')
         if set(vehicle_classes).intersection(names):
             groups.append('vehicle')

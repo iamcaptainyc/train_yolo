@@ -28,12 +28,57 @@ NAMES = sorted({*ANIMALS, 'person', *VEHICLE_CLASSES})
 POSE_VERSION = 'cfv-convnext-small-rgb-linear224-tensor01-v1'
 
 
-def export_state(cache, output, predictor):
+def load_label_schema(path=None):
+    if path is None:
+        return {'names': dict(enumerate(NAMES)), 'mapping': dict(zip(NAMES, NAMES))}
+    from merge_yolo_ids import UniqueKeyLoader
+
+    with Path(path).open(encoding='utf-8-sig') as stream:
+        config = yaml.load(stream, Loader=UniqueKeyLoader)
+    if not isinstance(config, dict) or config.keys() - {'names', 'aliases', 'exclude_classes'}:
+        raise ValueError('Label config accepts names, aliases and exclude_classes only')
+    names = config.get('names')
+    if isinstance(names, list):
+        names = dict(enumerate(names))
+    if (not isinstance(names, dict) or not names
+            or any(type(cid) is not int for cid in names)
+            or set(names) != set(range(len(names)))
+            or any(not isinstance(name, str) or not name.strip() for name in names.values())
+            or len(set(names.values())) != len(names)):
+        raise ValueError('Label names must have unique names and continuous integer IDs from 0')
+    aliases = config.get('aliases', {})
+    excluded = config.get('exclude_classes', [])
+    if (not isinstance(aliases, dict)
+            or any(key not in NAMES or value not in names.values() for key, value in aliases.items())):
+        raise ValueError('Aliases must map exported COCO names to declared target names')
+    if (not isinstance(excluded, list) or any(name not in NAMES for name in excluded)
+            or len(set(excluded)) != len(excluded) or set(excluded) & aliases.keys()):
+        raise ValueError('Excluded classes must be unique COCO names without aliases')
+    # Person and vehicle names retain their group semantics in the co-occurrence report.
+    if set(excluded) & {'person', *VEHICLE_CLASSES} or any(
+            aliases.get(name, name) != name for name in ('person', *VEHICLE_CLASSES)):
+        raise ValueError('Person and the five vehicle class names must be retained')
+    mapping = {name: None if name in excluded else aliases.get(name, name) for name in NAMES}
+    missing = [name for name, target in mapping.items() if target is not None and target not in names.values()]
+    if missing:
+        raise ValueError(f'Classes need a target name, alias or explicit exclusion: {missing}')
+    return {'names': dict(sorted(names.items())), 'mapping': mapping}
+
+
+def export_state(cache, output, predictor, schema=None):
+    schema = schema or load_label_schema()
     state = {'cache': str(cache), 'checkpoint_sha256': predictor.digest, 'pose_version': POSE_VERSION,
-             'class_names': NAMES, 'front_through': 45, 'rear_from': 135}
+             'class_names': list(schema['names'].values()), 'front_through': 45, 'rear_from': 135}
+    if schema != load_label_schema():
+        state['label_mapping'] = schema['mapping']
     path = output/'.vehicle-state.json'
     if path.is_file():
-        if json.loads(path.read_text(encoding='utf-8')) != state:
+        previous = json.loads(path.read_text(encoding='utf-8'))
+        # Label changes rewrite every label; cached angles depend only on the image,
+        # official car boxes and predictor, so remain valid across schema changes.
+        core = lambda settings: {key: value for key, value in settings.items()
+                                 if key not in {'class_names', 'label_mapping'}}
+        if core(previous) != core(state):
             raise ValueError('Vehicle export settings changed; use a new output directory')
     elif output.exists() and any(output.iterdir()):
         raise ValueError(f'Use an empty output directory or resume a vehicle export: {output}')
@@ -65,17 +110,19 @@ def car_crops(image, cars, expected_size):
     return crops
 
 
-def export_views(cache, output, predictor, batch=32):
+def export_views(cache, output, predictor, batch=32, label_schema=None):
     cache, output = Path(cache).resolve(), Path(output).resolve()
     if batch < 1 or cache == output or cache in output.parents or output in cache.parents:
         raise ValueError('Require positive batch and separate cache/output directories')
     state_path = output/'.vehicle-state.json'
-    state = export_state(cache, output, predictor)
+    schema = label_schema or load_label_schema()
+    state = export_state(cache, output, predictor, schema)
     output.mkdir(parents=True, exist_ok=True)
     write_json(state_path, state)
     marker = output/'INCOMPLETE.txt'
     marker.write_text('Vehicle annotation export is incomplete. Rerun the same command to resume.\n', encoding='utf-8')
-    ids = {name: cid for cid, name in enumerate(NAMES)}
+    ids = {name: cid for cid, name in schema['names'].items()}
+    mapping = schema['mapping']
     stats, issues = {}, []
     exported = {split: [] for split in SPLITS}
     image_lists = {split: [] for split in SPLITS}
@@ -96,6 +143,7 @@ def export_views(cache, output, predictor, batch=32):
                 image_dir.mkdir(parents=True, exist_ok=True)
                 label_dir.mkdir(parents=True, exist_ok=True)
                 class_images, class_boxes = Counter(), Counter()
+                excluded_images, excluded_classes = 0, Counter()
 
                 def emit(record, angles):
                     filename, source, boxes, cars, signature = record
@@ -111,6 +159,7 @@ def export_views(cache, output, predictor, batch=32):
                             car_index += 1
                             name = angle_class(angle)
                             writer.writerow([split, filename, ann['id'], f'{angle:.8f}', name])
+                        name = mapping[name]
                         rows.append(f'{ids[name]} ' + ' '.join(format(value, '.12g') for value in box) + '\n')
                         names.add(name)
                         row_counts[name] += 1
@@ -156,6 +205,18 @@ def export_views(cache, output, predictor, batch=32):
                     if not re.fullmatch(r'\d{12}\.jpg', filename):
                         raise ValueError(f'Unexpected COCO filename: {filename}')
                     source = cache/'images'/split/filename
+                    excluded = {available[cid] for _, cid, _ in boxes
+                                if available[cid] != 'car' and mapping[available[cid]] is None}
+                    if excluded:
+                        excluded_images += 1
+                        excluded_classes.update(excluded)
+                        target = image_dir/filename
+                        if target.exists():
+                            if not os.path.samefile(target, source):
+                                raise ValueError(f'Existing output image is not the source hardlink: {target}')
+                            target.unlink()
+                        (label_dir/Path(filename).with_suffix('.txt')).unlink(missing_ok=True)
+                        continue
                     cars = [box for box in boxes if available[box[1]] == 'car']
                     try:
                         if source.stat().st_size <= 0:
@@ -193,7 +254,8 @@ def export_views(cache, output, predictor, batch=32):
                         flush()
                 flush()
                 stats[split] = {'images': len(exported[split]), 'images_by_class': dict(class_images),
-                                'boxes_by_class': dict(class_boxes)}
+                                'boxes_by_class': dict(class_boxes), 'excluded_images': excluded_images,
+                                'excluded_images_by_class': dict(excluded_classes)}
                 del data, images, selected
     finally:
         db.close()
@@ -207,7 +269,7 @@ def export_views(cache, output, predictor, batch=32):
         temporary.write_text(''.join(rows), encoding='utf-8')
         temporary.replace(manifest)
     config = {'path': output.as_posix(), 'train': 'train.txt', 'val': 'val.txt',
-              'nc': len(NAMES), 'names': dict(enumerate(NAMES))}
+              'nc': len(ids), 'names': schema['names']}
     temporary = output/'data.yaml.part'
     temporary.write_text(yaml.safe_dump(config, sort_keys=False), encoding='utf-8')
     temporary.replace(output/'data.yaml')
@@ -216,17 +278,27 @@ def export_views(cache, output, predictor, batch=32):
     download_report = cache/'report.json'
     report['source_download_stats'] = json.loads(download_report.read_text(encoding='utf-8')) if download_report.is_file() else {}
     write_json(output/'report.json', report)
-    write_cooccurrence_report(output, {s: cooccurrence_counts(rows, VEHICLE_CLASSES) for s, rows in exported.items()},
+    animal_classes = {mapping[name] for name in ANIMALS if mapping[name] is not None}
+    write_cooccurrence_report(output, {s: cooccurrence_counts(rows, VEHICLE_CLASSES, animal_classes)
+                                      for s, rows in exported.items()},
                               VEHICLE_CLASSES, '按实际导出的动物、人员和五类车辆统计，每张图在每项中计一次。')
     lines = ['# COCO 动物、人员和车辆数据集', '',
-             f'类别数 {len(NAMES)}，图片总数 {sum(row["images"] for row in stats.values()):,}。', '',
+             f'标签表 {len(ids)} 类，实际有框 {len(set().union(*(row["boxes_by_class"] for row in stats.values())))} 类，'
+             f'图片总数 {sum(row["images"] for row in stats.values()):,}。', '',
              '| 划分 | 图片 |', '| --- | ---: |',
              *(f'| {split} | {row["images"]:,} |' for split, row in stats.items()), '',
              '| ID | 类别 | Train 图片 | Val 图片 | 框合计 |', '| ---: | --- | ---: | ---: | ---: |']
-    for name, cid in ids.items():
+    for cid, name in schema['names'].items():
         counts = [stats[s]['images_by_class'].get(name, 0) for s in SPLITS]
         boxes = sum(stats[s]['boxes_by_class'].get(name, 0) for s in SPLITS)
         lines.append(f'| {cid} | {name} | {counts[0]:,} | {counts[1]:,} | {boxes:,} |')
+    lines += ['', '## 标签映射与排除', '', '| COCO 导出类别 | 最终类别 | ID |', '| --- | --- | ---: |']
+    for name, target in mapping.items():
+        lines.append(f'| {name} | {target if target is not None else "排除含该类有效框的整图"} | '
+                     f'{ids[target] if target is not None else "—"} |')
+    lines += ['', '| 划分 | 整图排除数 | 原始类别对应图片数 |', '| --- | ---: | --- |',
+              *(f'| {split} | {row["excluded_images"]} | {json.dumps(row["excluded_images_by_class"], ensure_ascii=False)} |'
+                for split, row in stats.items())]
     lines += ['', 'car_head 的绝对角度不超过 45°，car_tail 至少 135°，其余为 car_side。',
               'car_angles.csv 保存每个车框的连续角度。truck、bus、人和动物使用官方单体框。',
               f'本次推理 {counters["predicted_car_boxes"]:,} 个车框，复用 {counters["cached_car_boxes"]:,} 个。',
@@ -254,6 +326,7 @@ def main():
     parser.add_argument('--source', choices=('hf-mirror', 'official'), default='hf-mirror')
     parser.add_argument('--annotations-zip', type=Path)
     parser.add_argument('--local-only', action='store_true', help='Use downloaded COCO images and local annotation ZIP')
+    parser.add_argument('--label-config', type=Path, help='YAML with fixed names/IDs, aliases and explicit exclusions')
     args = parser.parse_args()
     try:
         cache, output = args.cache.resolve(), args.output.resolve()
@@ -261,18 +334,20 @@ def main():
             raise ValueError('Cache and final output must be separate directories')
         if args.batch < 1 or args.workers < 1 or args.retries < 0:
             raise ValueError('Batch/workers must be positive and retries nonnegative')
+        schema = load_label_schema(args.label_config)
         if args.download_pose_weights and not args.pose_weights.is_file():
             fetch_cfv_weights(args.pose_weights, args.retries)
         predictor = CFVPredictor(args.pose_weights, args.device, args.batch)
-        export_state(cache, output, predictor)
+        export_state(cache, output, predictor, schema)
         output.parent.mkdir(parents=True, exist_ok=True)
         with FileLock(str(output)+'.lock', timeout=0):
             run(cache, None, args.annotations_zip, args.workers, args.retries,
                 source=args.source, local_only=args.local_only, add_classes=RAW_CLASSES)
-            export_views(cache, output, predictor, args.batch)
+            export_views(cache, output, predictor, args.batch, label_schema=schema)
     except KeyboardInterrupt:
         parser.exit(130, '\nInterrupted. Rerun the same command to resume downloaded images and cached car angles.\n')
-    except (OSError, ValueError, RuntimeError, KeyError, ImportError, sqlite3.DatabaseError, zipfile.BadZipFile) as exc:
+    except (OSError, ValueError, RuntimeError, KeyError, ImportError, sqlite3.DatabaseError, zipfile.BadZipFile,
+            yaml.YAMLError) as exc:
         parser.exit(1, f'Error: {exc}\n')
 
 
