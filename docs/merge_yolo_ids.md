@@ -95,6 +95,20 @@ python merge_yolo_ids.py \
 
 合并后输出 `data.yaml`、`report.json`、`MERGE_REPORT.md`，列出忽略的占位 ID、各划分图片数、每类图片数及框数。完成前保留 INCOMPLETE.txt；出错或中断后使用新输出目录重新执行。源数据不修改。
 
+### 补生成缺失的 Markdown 报告
+
+已有 `report.json` 但缺少 `MERGE_REPORT.md` 时，无需重新合并：
+
+```bash
+python merge_yolo_ids.py --report-only yolo_datasets/你的合并数据集
+```
+
+此命令只读取该目录下的 `report.json`，原子写入 `MERGE_REPORT.md`。不需要源数据仍然存在，不扫描图片或标签，不改动图片、标签、JSON、data.yaml 或 INCOMPLETE.txt。报告恢复不代表重新检查了数据文件；若仍有 INCOMPLETE.txt，不能仅凭这份恢复的报告认定完整合并已完成。
+
+报告先列出总图片数、框数、声明类别数和实际有样本类别数，再列各划分、每类和各来源的统计；占位 ID、编号映射及来源路径放在附录。每类“图片合计”按包含该类的图计数，多类别同图会计入多个类别，不能直接累加成数据集总数。缺少样本的类别仍列出，数目为 0。
+
+正常合并会先完成报告文本构造，再分别原子保存 JSON、YAML 和 Markdown；全部成功后才移除 INCOMPLETE.txt。若 Markdown 写入失败，会明确打印 `--report-only` 补报告命令并保留未完成标记。
+
 ## 检查信号灯 ID 和框数
 
 在训练环境中运行，传入源数据、实际训练用的合并数据和本地可信权重：

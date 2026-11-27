@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 
 import yaml
 from tqdm import tqdm
@@ -175,6 +176,159 @@ def parse_id_map(specs):
             raise ValueError(f'Duplicate source ID {old} in --id-map')
         mapping[old] = new
     return mapping
+
+
+def atomic_text(path, content):
+    """Replace a small metadata file only after its complete content is written."""
+    path = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
+                                         dir=path.parent, prefix=f'.{path.name}.', suffix='.tmp',
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def render_merge_report(report):
+    """Render both in-memory statistics and JSON statistics without reading images."""
+    if not isinstance(report, dict):
+        raise ValueError('Invalid merge report: expected a JSON object')
+
+    def by_id(values, label):
+        if not isinstance(values, dict):
+            raise ValueError(f'Invalid merge report: missing {label}')
+        result = {}
+        for key, value in values.items():
+            if isinstance(key, bool) or not re.fullmatch(r'\d+', str(key)) or int(key) in result:
+                raise ValueError(f'Invalid/duplicate class ID in {label}: {key!r}')
+            result[int(key)] = value
+        return result
+
+    def count(value, label):
+        if type(value) is not int or value < 0:
+            raise ValueError(f'Invalid merge report count: {label}')
+        return value
+
+    names = by_id(report.get('names'), 'names')
+    if not names or any(not isinstance(name, str) or not name.strip() for name in names.values()):
+        raise ValueError('Invalid merge report names')
+    splits = report.get('splits', {})
+    images, boxes, split_counts = {}, {}, {}
+    for split in SPLITS:
+        if not isinstance(splits.get(split), dict):
+            raise ValueError(f'Invalid merge report: missing splits/{split}')
+        split_counts[split] = {key: count(splits[split].get(key), f'{split}/{key}')
+                               for key in ('images', 'negative_images')}
+        if split_counts[split]['negative_images'] > split_counts[split]['images']:
+            raise ValueError(f'Negative images exceed total images in {split}')
+        for target, key in ((images, 'class_image_counts'), (boxes, 'class_box_counts')):
+            values = by_id(report.get(key, {}).get(split), f'{key}/{split}')
+            if values.keys() - names.keys():
+                raise ValueError(f'Unknown class IDs in {key}/{split}')
+            target[split] = Counter({cid: count(value, f'{key}/{split}/{cid}') for cid, value in values.items()})
+        for cid in names:
+            if images[split][cid] > split_counts[split]['images'] or boxes[split][cid] < images[split][cid]:
+                raise ValueError(f'Inconsistent image/box counts for {split}/{cid}')
+
+    def cell(value):
+        return str(value).replace('|', '\\|').replace('\r', ' ').replace('\n', ' ')
+
+    total_images = sum(row['images'] for row in split_counts.values())
+    total_boxes = sum(sum(row.values()) for row in boxes.values())
+    active = sum(any(boxes[split][cid] for split in SPLITS) for cid in names)
+    id_note = '类别 ID 保持原值'
+    if report.get('compact_ids'):
+        id_note = '类别 ID 已按原 ID 升序重排为连续编号'
+    elif report.get('id_offset'):
+        id_note = f'类别 ID 统一偏移 {report["id_offset"]:+d}'
+    elif not report.get('class_ids_preserved', True):
+        id_note = '已应用显式类别 ID 映射'
+    lines = ['# YOLO 合并报告', '',
+             f'共 **{total_images:,} 张图片、{total_boxes:,} 个框**。标签表 **{len(names)} 类**，实际有样本 **{active} 类**。',
+             '', f'{id_note}；保留原 train/val/test 划分及保留框的坐标。',
+             '', '统计依据为合并时保存的 report.json，不重新扫描当前图片或标签。',
+             '', '## 各划分统计', '',
+             '| 划分 | 图片数 | 比例 | 负样本 | 框数 | 跳过的跨划分重复图片 |',
+             '| --- | ---: | ---: | ---: | ---: | ---: |']
+    filtering = report.get('filtering', {})
+    skipped_total = 0
+    for split in SPLITS:
+        skipped = sum(source.get(split, {}).get('excluded_cross_split_duplicates', 0) for source in filtering.values())
+        skipped_total += skipped
+        fraction = 100 * split_counts[split]['images'] / total_images if total_images else 0
+        lines.append(f'| {split} | {split_counts[split]["images"]:,} | {fraction:.2f}% | '
+                     f'{split_counts[split]["negative_images"]:,} | {sum(boxes[split].values()):,} | {skipped:,} |')
+    lines += [f'| 合计 | {total_images:,} | {"100.00" if total_images else "0.00"}% | '
+              f'{sum(row["negative_images"] for row in split_counts.values()):,} | {total_boxes:,} | {skipped_total:,} |',
+              '', '## 类别统计', '',
+              '“图片合计”为包含该类的图片数；多类别同图会分别计入各类，不能将各类图片数相加作为数据集总数。',
+              '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 图片合计 | 框总数 |',
+              '| ---: | --- | ---: | ---: | ---: | ---: | ---: |']
+    for cid, name in sorted(names.items()):
+        counts = [images[split][cid] for split in SPLITS]
+        values = ' | '.join(f'{value:,}' for value in (*counts, sum(counts), sum(boxes[s][cid] for s in SPLITS)))
+        lines.append(f'| {cid} | {cell(name)} | {values} |')
+    empty = [f'{cid}: {name}' for cid, name in sorted(names.items()) if not any(boxes[s][cid] for s in SPLITS)]
+    if empty:
+        lines += ['', '没有样本的类别：' + '、'.join(cell(name) for name in empty) + '。']
+
+    lines += ['', '## 来源统计', '', '| 来源 | train 图片 | val 图片 | test 图片 | 合计 |',
+              '| --- | ---: | ---: | ---: | ---: |']
+    for index, source in enumerate(report.get('sources', []), 1):
+        tag = f'd{index}'
+        filename = str(source).replace('\\', '/').rstrip('/').rsplit('/', 2)
+        label = filename[-2] if len(filename) > 1 else filename[-1]
+        stats = filtering.get(tag)
+        if stats is None:
+            lines.append(f'| {tag}: {cell(label)} | — | — | — | — |')
+        else:
+            counts = [stats.get(split, {}).get('kept_images', 0) for split in SPLITS]
+            lines.append(f'| {tag}: {cell(label)} | ' + ' | '.join(f'{value:,}' for value in (*counts, sum(counts))) + ' |')
+
+    lines += ['', '## 附录：合并规则', '',
+              f'图片保存方式：{cell(report.get("image_mode", "未记录"))}；图片按来源前缀平铺，标签单独写入。',
+              '', '同一文件或硬链接出现在多个划分时，按 test → val → train 保留，跳过低优先级图片和标签。',
+              '', '只检查文件身份，不对独立复制的图片做内容去重或语义审查。',
+              '', '### 显式指定的占位类别', '',
+              '默认不按名称忽略 ID；以下仅为显式指定且未被标签使用的占位项。',
+              '', json.dumps(report.get('ignored_reserved_names', {}), ensure_ascii=False),
+              '', '范围中未声明、无需处理的 ID：' + json.dumps(report.get('absent_reserved_ids', {}), ensure_ascii=False)]
+    padding = report.get('output_padding_ids', [])
+    if padding:
+        lines += ['', f'输出 data.yaml 含 {len(padding)} 个未使用占位 ID，详见 report.json 的 output_padding_ids。']
+    duplicate_names = report.get('same_name_different_ids', {})
+    if duplicate_names:
+        lines += ['', '以下同名类别分属多个 ID，各 ID 分开统计：', '', json.dumps(duplicate_names, ensure_ascii=False)]
+    included = report.get('included_ids', {})
+    has_includes = any(value is not None for value in included.values())
+    if has_includes:
+        lines += ['', '### 类别筛选与编号映射', '',
+                  '指定来源只保留所选类别框，混合类别图片保留；未选类别框不属于本次检测任务。',
+                  '不含所选类别的正样本不输出；是否保留原始负样本：' + str(report.get('keep_original_negatives_when_filtering', False)),
+                  '', '各来源选择（null 为全部）：' + json.dumps(included, ensure_ascii=False)]
+    if has_includes or report.get('compact_ids') or report.get('id_offset') or not report.get('class_ids_preserved', True):
+        mapping = by_id(report.get('id_mapping', {}), 'id_mapping')
+        original_names = by_id(report.get('original_names', {}), 'original_names')
+        lines += ['', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
+        lines += [f'| {cid} | {new} | {cell(original_names.get(cid, "未记录"))} |' for cid, new in sorted(mapping.items())]
+    lines += ['', '### 各来源完整路径', '']
+    lines += [f'- {cell(source)}' for source in report.get('sources', [])]
+    return '\n'.join(lines) + '\n'
+
+
+def regenerate_report(dataset):
+    """Recover Markdown from the existing JSON; never touch dataset payload or status."""
+    dataset = Path(dataset).expanduser().resolve()
+    path = dataset/'report.json'
+    report = json.loads(path.read_text(encoding='utf-8-sig'))
+    target = dataset/'MERGE_REPORT.md'
+    atomic_text(target, render_merge_report(report))
+    return target
 
 
 def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=None,
@@ -347,52 +501,17 @@ def merge(datasets, output, copy_images=False, reserved_ids=None, include_ids=No
               'image_mode': 'copy' if copy_images else 'hardlink',
               'duplicate_check': 'same inode across splits only; no full content hash or visual/semantic audit',
               'cross_split_priority': split_priority}
-    (output/'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
-    id_note = '类别 ID 已按原 ID 升序重排为连续编号' if compact_ids else '类别 ID 保持原值'
-    if id_offset:
-        id_note = f'类别 ID 统一偏移 {id_offset:+d}'
-    if id_map:
-        id_note = '已应用显式类别 ID 映射'
-    lines = ['# YOLO 合并报告', '', f'共 {len(records):,} 张图片，{len(names)} 类。{id_note}；保留框的坐标原文与原 train/val/test 划分保留。',
-             '', f'图片保存方式：{report["image_mode"]}；图片按来源前缀平铺，标签单独写入。',
-             '', '同一文件或硬链接出现在多个划分时，按 test → val → train 的优先级保留，跳过低优先级的图片和标签。',
-             '', '## 显式指定的占位类别', '', '默认不按类别名称忽略任何 ID；以下仅为用户指定且确认未被标签使用的占位项。',
-             '', json.dumps(report['ignored_reserved_names'], ensure_ascii=False),
-             '', '请求范围中未在对应 YAML 声明的 ID（无需处理）：' + json.dumps(absent_reserved, ensure_ascii=False),
-             '', '## 各划分图片数', '', '| 划分 | 图片数 | 负样本 | 跳过的跨划分重复图片 |',
-             '| --- | ---: | ---: | ---: |']
-    for split in SPLITS:
-        skipped = sum(stats[split]['excluded_cross_split_duplicates'] for stats in filtering.values())
-        lines.append(f'| {split} | {split_stats[split]["images"]} | {split_stats[split]["negative_images"]} | {skipped} |')
-    if padding:
-        lines += ['', f'输出 data.yaml 含 {len(padding)} 个未使用的占位 ID，详见 report.json 的 output_padding_ids。']
-    if duplicate_names:
-        lines += ['', '以下类别名称对应多个输出 ID，各 ID 分开统计：',
-                  '', json.dumps(duplicate_names, ensure_ascii=False)]
-    if include_ids:
-        lines += ['', '## 类别筛选与编号映射', '',
-                  '指定来源只保留所选类别的框。混合类别图片保留，但删除未选类别的标签行；它们不属于本次检测任务。',
-                  '不含所选类别的正样本图片不输出；筛选来源的原始负样本仅在 --keep-negatives 时保留。未指定筛选的来源全部保留。',
-                  '', '各来源选择（null 为全部）：'+json.dumps(report['included_ids'],ensure_ascii=False),
-                  '', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
-    elif compact_ids or id_offset or id_map:
-        lines += ['', '## 类别编号映射', '', '| 原 ID | 输出 ID | 名称 |', '| ---: | ---: | --- |']
-    if include_ids or compact_ids or id_offset or id_map:
-        lines += [f'| {cid} | {new} | {original_names[cid].replace(chr(124), chr(92)+chr(124))} |'
-                  for cid,new in id_mapping.items()]
-    if include_ids or compact_ids:
-        lines += ['', '| 来源 / 划分 | 扫描图片 | 保留图片 | 排除无所选类图片 | 排除负样本 | 跳过跨划分重复 | 删除框 |',
-                  '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
-        for source, splits in filtering.items():
-            for split, stats in splits.items():
-                values = ' | '.join(str(stats[k]) for k in ('scanned_images','kept_images',
-                    'excluded_without_selected_class','excluded_negatives',
-                    'excluded_cross_split_duplicates','removed_boxes'))
-                lines.append(f'| {source}/{split} | {values} |')
-    lines += ['', '## 类别统计', '', '| ID | 名称 | train 图片 | val 图片 | test 图片 | 框总数 |', '| ---: | --- | ---: | ---: | ---: | ---: |']
-    lines += [f'| {cid} | {name.replace(chr(124), chr(92)+chr(124))} | {class_images["train"][cid]} | {class_images["val"][cid]} | {class_images["test"][cid]} | {sum(boxes[s][cid] for s in SPLITS)} |' for cid, name in names.items()]
-    (output/'MERGE_REPORT.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
-    (output/'data.yaml').write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding='utf-8')
+    # Render before saving the snapshot, so formatting failures cannot leave a
+    # newly written report.json followed by a predictable rendering exception.
+    markdown = render_merge_report(report)
+    atomic_text(output/'report.json', json.dumps(report, ensure_ascii=False, indent=2)+'\n')
+    atomic_text(output/'data.yaml', yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+    try:
+        atomic_text(output/'MERGE_REPORT.md', markdown)
+    except OSError as exc:
+        raise ValueError('Images, labels and report.json were saved, but writing MERGE_REPORT.md failed. '
+                         f'Fix the write error ({exc}), then run: python merge_yolo_ids.py '
+                         f'--report-only "{output}". INCOMPLETE.txt is retained.') from exc
     marker.unlink()
     return report
 
@@ -435,6 +554,8 @@ def read_merge_config(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--report-only', type=Path, metavar='DATASET',
+                        help='Regenerate MERGE_REPORT.md from an existing report.json; no scans or merge')
     parser.add_argument('--config', type=Path, help='Merge YAML; explicit CLI options override its settings')
     parser.add_argument('--datasets', type=Path, nargs='+', help='Dataset directories with data.yaml, or YAML paths')
     parser.add_argument('--output', type=Path, help='New directory, outside source datasets')
@@ -450,6 +571,14 @@ def main():
     parser.add_argument('--keep-negatives', action=argparse.BooleanOptionalAction, help='Keep original empty-label images from class-filtered sources')
     args = parser.parse_args()
     try:
+        if args.report_only is not None:
+            if any(getattr(args, key) is not None for key in
+                   ('config', 'datasets', 'output', 'copy_images', 'reserved_ids', 'include_ids',
+                    'compact_ids', 'id_offset', 'id_map', 'keep_negatives')):
+                parser.error('--report-only cannot be combined with merge options')
+            target = regenerate_report(args.report_only)
+            print(f'Report regenerated: {target}\nImages, labels, YAML and completion markers unchanged.')
+            return
         if args.config:
             for key, value in read_merge_config(args.config).items():
                 if getattr(args, key) is None:

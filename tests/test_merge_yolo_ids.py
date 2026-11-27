@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
-from merge_yolo_ids import merge, parse_reserved_ids, read_merge_config
+from merge_yolo_ids import merge, parse_reserved_ids, read_merge_config, regenerate_report, render_merge_report
 
 
 def dataset(root, names, rows, split_list=False):
@@ -29,6 +30,89 @@ def dataset(root, names, rows, split_list=False):
 
 
 class MergeIDsTests(unittest.TestCase):
+    def test_report_only_cli_uses_json_without_sources_or_image_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = {
+                'names': {'10':'unused', '2':'dog', '0':'cat'},
+                'splits': {'train': {'images':2, 'negative_images':0},
+                           'val': {'images':1, 'negative_images':1},
+                           'test': {'images':0, 'negative_images':0}},
+                'class_image_counts': {'train': {'0':1, '2':1}, 'val': {}, 'test': {}},
+                'class_box_counts': {'train': {'0':2, '2':1}, 'val': {}, 'test': {}},
+                'sources': ['/unavailable/source/data.yaml'], 'image_mode': 'hardlink',
+            }
+            original = json.dumps(report, ensure_ascii=False, indent=2).encode('utf-8')
+            (root/'report.json').write_bytes(original)
+            (root/'data.yaml').write_text('unmodified YAML\n')
+            (root/'INCOMPLETE.txt').write_text('unmodified completion status\n')
+            before = {name: ((root/name).read_bytes(), (root/name).stat().st_mtime_ns)
+                      for name in ('report.json', 'data.yaml', 'INCOMPLETE.txt')}
+            script = Path(__file__).resolve().parents[1]/'merge_yolo_ids.py'
+            command = [sys.executable, '-X', 'utf8', str(script), '--report-only', str(root)]
+            result = subprocess.run(command, capture_output=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (root/'MERGE_REPORT.md').read_text(encoding='utf-8')
+            self.assertIn('3 张图片、3 个框', text)
+            self.assertIn('实际有样本 **2 类**', text)
+            self.assertIn('| 10 | unused | 0 | 0 | 0 | 0 | 0 |', text)
+            self.assertIn('| 0 | cat | 1 | 0 | 0 | 1 | 2 |', text)
+            self.assertLess(text.index('| 0 | cat'), text.index('| 2 | dog'))
+            self.assertLess(text.index('| 2 | dog'), text.index('| 10 | unused'))
+            for name, previous in before.items():
+                self.assertEqual(((root/name).read_bytes(), (root/name).stat().st_mtime_ns), previous)
+            self.assertFalse((root/'images').exists())
+            self.assertFalse((root/'labels').exists())
+            result = subprocess.run(command+['--output', str(root/'wrong')], capture_output=True, encoding='utf-8')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('cannot be combined', result.stderr)
+
+    def test_missing_markdown_after_write_failure_can_be_recovered_without_remerge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = dataset(root/'source', {0:'cat', 1:'unused'}, '0 0.5 0.5 0.2 0.2\n')
+            output = root/'merged'
+            from merge_yolo_ids import atomic_text
+
+            def fail_markdown(path, content):
+                if Path(path).name == 'MERGE_REPORT.md':
+                    raise OSError('simulated disk full')
+                atomic_text(path, content)
+
+            with patch('merge_yolo_ids.atomic_text', side_effect=fail_markdown), \
+                    self.assertRaisesRegex(ValueError, '--report-only'):
+                self.call_merge([source], output, copy_images=True)
+            self.assertTrue((output/'report.json').is_file())
+            self.assertTrue((output/'data.yaml').is_file())
+            self.assertTrue((output/'INCOMPLETE.txt').is_file())
+            self.assertFalse((output/'MERGE_REPORT.md').exists())
+            before = {str(path.relative_to(output)): (path.read_bytes(), path.stat().st_mtime_ns)
+                      for path in output.rglob('*') if path.is_file()}
+            target = regenerate_report(output)
+            text = target.read_text(encoding='utf-8')
+            self.assertIn('| 1 | unused | 0 | 0 | 0 | 0 | 0 |', text)
+            for name, previous in before.items():
+                path = output/name
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), previous)
+
+            # A failed atomic replacement retains the previous complete report.
+            old_report = target.read_bytes()
+            with patch('merge_yolo_ids.Path.replace', side_effect=PermissionError('simulated write denial')), \
+                    self.assertRaises(PermissionError):
+                regenerate_report(output)
+            self.assertEqual(target.read_bytes(), old_report)
+            self.assertEqual(list(output.glob('.MERGE_REPORT.md.*.tmp')), [])
+
+            payload = json.loads((output/'report.json').read_text(encoding='utf-8'))
+            expected = json.loads(json.dumps(payload))
+            self.assertEqual(render_merge_report(payload), text)
+            self.assertEqual(payload, expected)
+            payload['class_image_counts']['train']['0'] = -1
+            (output/'report.json').write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError, 'Invalid merge report count'):
+                regenerate_report(output)
+            self.assertEqual(target.read_bytes(), old_report)
+
     def test_yaml_cli_resolves_paths_and_applies_class_filters(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
